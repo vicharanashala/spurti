@@ -135,8 +135,11 @@ Modified to SKIP Student delete/insert (students already seeded via seed-student
 - `deltaMode` validator error: schema expects `'absolute' | 'percentage'`. Using `'percent'` (singular) causes validation failure. Fixed in code — only affects legacy transactions created before the fix (May 26 restart).
 - **Percentage SP support:** When a chat SP review is accepted with `% SP` (e.g. +10% SP), `deltaMode` is set to `'percentage'`, `deltaValue` holds the percent (e.g. 10), and `appliedDelta` is computed at accept time as `round(currentBalance * deltaValue / 100)`. This works correctly.
 
-## Current DB State (2026-05-27)
+## Current DB State (2026-05-27 17:30 GMT+5:30)
 - students: 1,791 (1,313 active, 478 excused)
-- sessions: 18 (15 May – 26 May Evening)
-- sptransactions: ~44,896
-- All sessions through May 26 Evening ingested and verified: leaderboard SP matches students.totalSp ✅
+- sessions: 19 (15 May – 27 May Morning)
+- sptransactions: ~47,955 (3,059 from 27 May Morning: 1,315 attendance + 1,315 poll + 429 chat)
+- 37 chat SP reviews created in `chat_s_p_reviews` collection (camera-off penalties, pending approval, for 27 May Morning)
+- All sessions through 27 May Morning verified: leaderboard SP matches students.totalSp ✅ (verified ALLU: 323 SP, calculated from tx = 323 SP = students.totalSp ✓)
+- 27 May Morning ingestion: attendance ✅ poll ✅ chat ✅ (429 students got +5 SP from chat)
+- 37 peer-escalation SP penalty reviews (camera off) created in `chat_s_p_reviews` — pending admin approval
