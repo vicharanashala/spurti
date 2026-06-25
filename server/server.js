@@ -16,6 +16,7 @@ import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import ChatSPReview from './models/ChatSPReview.js';
 import investmentEventRouter from './routes/investmentEvent.js';
+import marketplaceRouter from './routes/marketplace.js';
 import { recalculateStudentSp } from './scripts/lib/ingestion.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -252,6 +253,8 @@ api.post('/confirm', async (req, res) => {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
+  // Set the student cookie so marketplace (and other authenticated endpoints) work
+  setStudentCookie(res, student.email);
   res.json(await studentPayload(student));
 });
 
@@ -562,9 +565,13 @@ function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
 
+// Mount sub-routers on the api Router BEFORE registering it on the app,
+// so /api/marketplace/* and /api/investment-event/* are handled correctly.
+api.use('/marketplace', marketplaceRouter);
+api.use('/investment-event', investmentEventRouter);
+
 app.use('/api', api);
 app.use('/spurti/api', api);
-app.use('/spurti/api/investment-event', investmentEventRouter);
 app.get('/spurti/auth', authHandoff);
 
 if (fs.existsSync(clientDist)) {

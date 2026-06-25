@@ -260,12 +260,13 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['chats','Chats'], ['polls','Polls'], ['leaderboard','Top 50'], ['event','🏛️ Event']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['chats','Chats'], ['polls','Polls'], ['leaderboard','Top 50'], ['event','🏛️ Event'], ['marketplace','🛍️ Marketplace']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'chats' && <Chats chats={profile.chats} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <Leaderboard rows={profile.leaderboard} />}
       {tab === 'event' && <InvestmentEventTab email={profile.student.email} profile={profile} />}
+      {tab === 'marketplace' && <MarketplaceTab email={profile.student.email} currentSp={student.totalSp} />}
     </main>
   );
 }
@@ -277,6 +278,15 @@ function StudentPulse({ profile, badges, nextActions }) {
   const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
   const positiveChats = chats.filter(c => c.overallSentiment === 'positive').length;
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
+  const [activePet, setActivePet] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API}/marketplace/my-pets`)
+      .then(r => r.ok ? r.json() : [])
+      .then(pets => { if (pets.length) setActivePet(pets[pets.length - 1]); })
+      .catch(() => {});
+  }, []);
+
   return (
     <section className="pulse-grid">
       <div className="pulse-card progress-card">
@@ -306,6 +316,23 @@ function StudentPulse({ profile, badges, nextActions }) {
         <span>Badges</span>
         <div className="badge-row">{badges.map(badge => <em key={badge}>{badge}</em>)}</div>
       </div>
+      {activePet ? (
+        <div className="pulse-card pet-companion-card">
+          <span>Companion</span>
+          <div className="pet-companion">
+            <span className="pet-companion-emoji">{activePet.petEmoji}</span>
+            <div>
+              <strong>{activePet.petName}</strong>
+              <p className="pet-companion-sub">Your loyal study buddy 🐾</p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="pulse-card pet-companion-card pet-companion-empty">
+          <span>Companion</span>
+          <p className="muted" style={{fontSize:'13px', marginBottom:0}}>No pet yet — visit the 🛍️ Marketplace tab to adopt one!</p>
+        </div>
+      )}
       <div className="pulse-card wide-pulse">
         <span>SP trend</span>
         <Sparkline points={trend} />
@@ -1265,6 +1292,163 @@ function InvestmentAdminPanel({ headers }) {
               <button className="primary" onClick={createTeam} disabled={!newTeam.name.trim()}>Create Team</button>
             </div>
           </section>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ═══════════════════════════════════════════
+// SP MARKETPLACE — PET ADOPTION
+// ═══════════════════════════════════════════
+
+const PET_CATALOGUE = [
+  { id: 'chick',   emoji: '🐣', name: 'Baby Chick', character: 'Pip',     description: 'A tiny, curious chick who peeps with excitement at every new lesson.', personality: 'Curious & Cheerful',      spCost: 75  },
+  { id: 'frog',    emoji: '🐸', name: 'Frog',       character: 'Ribbit',  description: 'A chill frog who sits on lily pads and leaps into action when it counts.', personality: 'Cool & Reliable',        spCost: 120 },
+  { id: 'panda',   emoji: '🐼', name: 'Panda',      character: 'Bamboo',  description: 'A gentle giant who munches bamboo and quietly masters every subject.', personality: 'Calm & Wise',            spCost: 170 },
+  { id: 'fox',     emoji: '🦊', name: 'Fox',        character: 'Ember',   description: 'A sharp-witted fox with a fiery spirit and an eye for clever solutions.', personality: 'Sharp & Witty',          spCost: 220 },
+  { id: 'wolf',    emoji: '🐺', name: 'Wolf',       character: 'Storm',   description: 'A lone wolf who howls at milestones and leads the pack in consistency.', personality: 'Bold & Determined',      spCost: 280 },
+  { id: 'lion',    emoji: '🦁', name: 'Lion',       character: 'Roar',    description: 'The king of learners — fierce focus, unstoppable momentum.', personality: 'Fierce & Focused',       spCost: 340 },
+  { id: 'unicorn', emoji: '🦄', name: 'Unicorn',    character: 'Sparkle', description: 'A magical unicorn who sprinkles creativity and wonder on every task.', personality: 'Creative & Magical',     spCost: 420 },
+  { id: 'dragon',  emoji: '🐉', name: 'Dragon',     character: 'Blaze',   description: 'The rarest companion — a dragon earned only by the most dedicated learners.', personality: 'Legendary & Unstoppable', spCost: 500 },
+];
+
+function MarketplaceTab({ email, currentSp }) {
+  const [myPets, setMyPets]     = useState([]);
+  const [balance, setBalance]   = useState(currentSp);
+  const [loading, setLoading]   = useState(true);
+  const [redeeming, setRedeeming] = useState(null); // petId currently being redeemed
+  const [toast, setToast]       = useState(null);   // { type: 'success'|'error', message }
+  const [showHistory, setShowHistory] = useState(false);
+
+  const showToast = (type, message) => {
+    setToast({ type, message });
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  const loadMyPets = async () => {
+    try {
+      const res = await fetch(`${API}/marketplace/my-pets`);
+      if (res.ok) setMyPets(await res.json());
+    } catch { /* silent */ }
+  };
+
+  useEffect(() => {
+    loadMyPets().finally(() => setLoading(false));
+  }, []);
+
+  const adopt = async (pet) => {
+    if (redeeming) return;
+    setRedeeming(pet.id);
+    try {
+      const res = await fetch(`${API}/marketplace/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ petId: pet.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showToast('error', data.error || 'Redemption failed.'); return; }
+      setBalance(data.newBalance);
+      await loadMyPets();
+      showToast('success', `${pet.emoji} ${pet.name} adopted! −${pet.spCost} SP. New balance: ${data.newBalance} SP.`);
+    } catch {
+      showToast('error', 'Network error. Please try again.');
+    } finally {
+      setRedeeming(null);
+    }
+  };
+
+  const ownedIds = new Set(myPets.map(p => p.petId));
+  const activePet = myPets.length ? myPets[myPets.length - 1] : null;
+
+  if (loading) return <section className="panel empty">Loading marketplace...</section>;
+
+  return (
+    <section className="panel marketplace-panel">
+      {toast && (
+        <div className={`mkt-toast mkt-toast-${toast.type}`}>{toast.message}</div>
+      )}
+
+      <div className="marketplace-header">
+        <div>
+          <h2 style={{marginBottom: 4}}>🛍️ Pet Marketplace</h2>
+          <p className="muted" style={{margin:0, fontSize:14}}>Spend your Spurti Points to adopt a virtual companion. It will appear on your dashboard!</p>
+        </div>
+        <div className="mkt-balance-chip">
+          <span>Your SP</span>
+          <strong>{balance}</strong>
+        </div>
+      </div>
+
+      {activePet && (
+        <div className="mkt-active-pet">
+          <span className="mkt-active-label">Active Companion</span>
+          <div className="mkt-active-inner">
+            <span className="mkt-active-emoji">{activePet.petEmoji}</span>
+            <div>
+              <strong>{activePet.petName}</strong>
+              <p>Adopted on {new Date(activePet.createdAt).toLocaleDateString()}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="pet-grid">
+        {PET_CATALOGUE.map(pet => {
+          const owned = ownedIds.has(pet.id);
+          const canAfford = balance >= pet.spCost;
+          const busy = redeeming === pet.id;
+          return (
+            <article key={pet.id} className={`pet-card${owned ? ' pet-card-owned' : ''}${!canAfford && !owned ? ' pet-card-locked' : ''}`}>
+              <div className="pet-emoji-wrap">
+                <span className="pet-emoji">{pet.emoji}</span>
+                {owned && <span className="pet-owned-badge">✓ Adopted</span>}
+              </div>
+              <div className="pet-info">
+                <strong className="pet-name">{pet.name}</strong>
+                <em className="pet-character">{pet.character}</em>
+                <p className="pet-desc">{pet.description}</p>
+                <span className="pet-personality">{pet.personality}</span>
+              </div>
+              <div className="pet-footer">
+                <span className="pet-cost">{pet.spCost} SP</span>
+                {owned ? (
+                  <span className="pet-adopted-tag">Adopted ✓</span>
+                ) : (
+                  <button
+                    id={`adopt-${pet.id}`}
+                    className="primary pet-adopt-btn"
+                    disabled={!canAfford || busy}
+                    onClick={() => adopt(pet)}
+                  >
+                    {busy ? 'Adopting…' : canAfford ? `Adopt for ${pet.spCost} SP` : `Need ${pet.spCost - balance} more SP`}
+                  </button>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      {myPets.length > 0 && (
+        <div className="mkt-history-section">
+          <button className="secondary" style={{marginBottom: '12px'}} onClick={() => setShowHistory(h => !h)}>
+            {showHistory ? 'Hide' : 'Show'} Adoption History ({myPets.length})
+          </button>
+          {showHistory && (
+            <div className="mkt-history-list">
+              {[...myPets].reverse().map(p => (
+                <div key={p._id} className="mkt-history-row">
+                  <span className="mkt-history-emoji">{p.petEmoji}</span>
+                  <div>
+                    <strong>{p.petName}</strong>
+                    <span>{new Date(p.createdAt).toLocaleString()}</span>
+                  </div>
+                  <span className="debit">−{p.spCost} SP</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </section>

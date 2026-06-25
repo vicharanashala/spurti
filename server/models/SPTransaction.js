@@ -6,7 +6,7 @@ const spTransactionSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['initial', 'attendance', 'chat', 'poll', 'manual', 'chat_manual_award'],
+    enum: ['initial', 'attendance', 'chat', 'poll', 'manual', 'chat_manual_award', 'marketplace'],
     index: true
   },
   sessionLabel: { type: String, default: '', index: true },
