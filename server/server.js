@@ -15,7 +15,6 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import ChatSPReview from './models/ChatSPReview.js';
-import investmentEventRouter from './routes/investmentEvent.js';
 import { recalculateStudentSp } from './scripts/lib/ingestion.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -564,7 +563,6 @@ function last24Hours(now) {
 
 app.use('/api', api);
 app.use('/spurti/api', api);
-app.use('/spurti/api/investment-event', investmentEventRouter);
 app.get('/spurti/auth', authHandoff);
 
 if (fs.existsSync(clientDist)) {
