@@ -16,6 +16,7 @@ import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import ChatSPReview from './models/ChatSPReview.js';
 import { recalculateStudentSp } from './scripts/lib/ingestion.js';
+import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -142,6 +143,18 @@ async function studentPayload(student) {
   const top50Cutoff = allStudents[49]?.totalSp || null;
   const currentIndex = allStudents.findIndex(s => s.email === email);
   const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
+  // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
+  const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
+  const myGroup = leaderboardGroup(student.internshipStartDate);
+  const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
+  const mapRow = (row, index) => ({
+    rank: index + 1,
+    name: row.name,
+    maskedEmail: maskEmail(row.email),
+    totalSp: row.totalSp,
+    level: levelFor(Math.max(Number(row.highestSpEver) || 0, Number(row.totalSp) || 0)),
+    isCurrentStudent: row.email === email
+  });
   return {
     student: {
       _id: String(student._id),
@@ -155,7 +168,13 @@ async function studentPayload(student) {
       excusedReason: student.excusedReason,
       totalSp: student.totalSp,
       rank: rankInfo?.rank || null,
-      cohortSize: rankInfo?.cohortSize || null
+      cohortSize: rankInfo?.cohortSize || null,
+      highestSpEver,
+      level: levelFor(highestSpEver),
+      trophyLeague: leagueBand(student.totalSp),
+      legendBadgeUnlocked: legendBadge(highestSpEver),
+      leaderboardGroup: myGroup,
+      leaderboardGroupLabel: groupLabel(myGroup)
     },
     transactions,
     chats,
@@ -168,13 +187,8 @@ async function studentPayload(student) {
       pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - student.totalSp + 1),
       pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
     },
-    leaderboard: leaderboard.map((row, index) => ({
-      rank: index + 1,
-      name: row.name,
-      maskedEmail: maskEmail(row.email),
-      totalSp: row.totalSp,
-      isCurrentStudent: row.email === email
-    }))
+    leaderboard: leaderboard.map(mapRow),
+    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
   };
 }
 
@@ -254,9 +268,19 @@ api.post('/confirm', async (req, res) => {
   res.json(await studentPayload(student));
 });
 
-api.get('/leaderboard', async (_req, res) => {
-  const students = await Student.find({ status: { $ne: 'excused' } }).sort({ totalSp: -1, name: 1 }).limit(50).lean();
-  res.json(students.map((s, i) => ({ rank: i + 1, name: s.name, maskedEmail: maskEmail(s.email), totalSp: s.totalSp })));
+api.get('/leaderboard', async (req, res) => {
+  const type = String(req.query.leaderboardType || 'overall');
+  const filter = { status: { $ne: 'excused' } };
+  if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
+  const students = await Student.find(filter).sort({ totalSp: -1, name: 1 }).limit(50).lean();
+  res.json(students.map((s, i) => ({
+    rank: i + 1,
+    name: s.name,
+    maskedEmail: maskEmail(s.email),
+    totalSp: s.totalSp,
+    level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
+    trophyLeague: leagueBand(s.totalSp)
+  })));
 });
 
 api.post('/ping', async (req, res) => {

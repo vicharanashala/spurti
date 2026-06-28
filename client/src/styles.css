@@ -187,6 +187,40 @@ input {
   padding: 20px;
   margin-bottom: 18px;
 }
+/* Spurti Levels & Trophy Leagues */
+.level-status {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 16px;
+  margin-bottom: 18px;
+}
+.level-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.level-tile {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #fafdff;
+}
+.level-tile > span { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.level-tile > strong { display: block; font-size: 24px; margin: 4px 0 2px; color: var(--primary); }
+.level-tile > strong.group { font-size: 15px; }
+.level-tile > em { display: block; color: var(--muted); font-style: normal; font-size: 12px; }
+.level-tile.league { color: #fff; border: none; }
+.level-tile.league > span, .level-tile.league > strong, .level-tile.league > em { color: #fff; }
+.level-tile.league.tier-bronze   { background: linear-gradient(135deg, #a97142, #cd7f32); }
+.level-tile.league.tier-silver   { background: linear-gradient(135deg, #9aa3ab, #c0c0c0); }
+.level-tile.league.tier-gold     { background: linear-gradient(135deg, #d4a017, #ffd700); }
+.level-tile.league.tier-platinum { background: linear-gradient(135deg, #4aa3a3, #7fdbda); }
+.level-tile.league.tier-diamond  { background: linear-gradient(135deg, #3b82c4, #5fc8f0); }
+.level-tile.league.tier-legend   { background: linear-gradient(135deg, #6d28d9, #c026d3); }
+.level-note { color: var(--muted); font-size: 13px; margin-top: 12px; line-height: 1.5; }
+@media (max-width: 720px) { .level-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .pulse-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

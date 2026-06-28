@@ -259,13 +259,74 @@ function StudentView({ profile, onBack }) {
         </div>
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
+      <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['chats','Chats'], ['polls','Polls'], ['leaderboard','Top 50']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['chats','Chats'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'chats' && <Chats chats={profile.chats} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
-      {tab === 'leaderboard' && <Leaderboard rows={profile.leaderboard} />}
+      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
+  );
+}
+
+function LevelStatus({ student }) {
+  const tier = String(student.trophyLeague || 'Bronze').split(' ')[0].toLowerCase();
+  return (
+    <section className="level-status">
+      <div className="level-tiles">
+        <div className="level-tile">
+          <span>Level</span>
+          <strong>{student.level}</strong>
+          <em>lifetime achievement</em>
+        </div>
+        <div className={`level-tile league tier-${tier}`}>
+          <span>Trophy League</span>
+          <strong>{student.trophyLeague}</strong>
+          <em>current performance</em>
+        </div>
+        <div className="level-tile">
+          <span>Legend Badge</span>
+          <strong>{student.legendBadgeUnlocked ? '🏅 Unlocked' : '🔒 Locked'}</strong>
+          <em>reach 1500 SP once</em>
+        </div>
+        <div className="level-tile">
+          <span>Onboarding Group</span>
+          <strong className="group">{student.leaderboardGroupLabel || '—'}</strong>
+          <em>biweekly cohort</em>
+        </div>
+      </div>
+      <p className="level-note">
+        Level shows your highest achievement and never decreases. Trophy League shows your current performance and can move up or down with your current Spurti Points.
+        {student.legendBadgeUnlocked ? ' You have unlocked the Legend Badge by reaching 1500 Spurti Points at least once.' : ''}
+      </p>
+    </section>
+  );
+}
+
+function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
+  const [type, setType] = useState('overall');
+  const rows = type === 'overall' ? overall : group;
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Leaderboard</h2>
+        <select value={type} onChange={e => setType(e.target.value)}>
+          <option value="overall">Overall Leaderboard</option>
+          <option value="my_onboarding_group">My Onboarding Group</option>
+        </select>
+      </div>
+      {type === 'my_onboarding_group' && groupLabel &&
+        <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
+      <table className="table">
+        <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
+        <tbody>{rows.map(row => (
+          <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
+            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </section>
   );
 }
 
