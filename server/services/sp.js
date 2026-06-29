@@ -62,7 +62,7 @@ export function withSp(studentDoc) {
 
   // Poll SP from transaction log
   const pollTxns = (raw._txns || []).filter(t => t.category === 'poll');
-  const pollSp = pollTxns.reduce((sum, t) => sum + Number(t.delta || 0), 0);
+  const pollSp = pollTxns.reduce((sum, t) => sum + Number(t.appliedDelta || 0), 0);
 
   const activitySp = 0;
 
@@ -101,7 +101,7 @@ export function withSp(studentDoc) {
  */
 export async function withSpFromTxns(studentDoc) {
   const raw = typeof studentDoc.toObject === 'function' ? studentDoc.toObject() : studentDoc;
-  const txns = await SPTransaction.find({ email: raw.email.toLowerCase() }).sort({ sessionDatetime: 1 }).lean();
+  const txns = await SPTransaction.find({ email: raw.email.toLowerCase() }).sort({ dateTime: 1, createdAt: 1 }).lean();
   return withSp({ ...raw, _txns: txns });
 }
 

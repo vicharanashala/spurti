@@ -48,6 +48,14 @@ function surveyActive() {
 const app = express();
 const api = express.Router();
 const liveViewers = new Map();
+const LIVE_VIEWER_TTL_MS = 120_000; // 2 minutes
+
+function cleanStaleViewers() {
+  const now = Date.now();
+  for (const [email, data] of liveViewers.entries()) {
+    if (now - data.lastSeen > LIVE_VIEWER_TTL_MS) liveViewers.delete(email);
+  }
+}
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -295,7 +303,8 @@ api.post('/ping', async (req, res) => {
     if (err?.name !== 'ValidationError') console.error('ping log failed:', err?.message);
   }
   if (page === 'record' || page.startsWith('admin')) {
-    liveViewers.set(normalized, { name, page, lastSeen: new Date() });
+    cleanStaleViewers();
+    liveViewers.set(normalized, { name, page, lastSeen: Date.now() });
   }
   res.json({ ok: true });
 });
