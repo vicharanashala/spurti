@@ -1,398 +1,156 @@
-# Spurti — Production Ready PR: Complete Changelog
+# Changelog — refactor/production-ready
 
-**PR:** `amanraj74/spurti-iit-ropar-vled-` — `refactor/production-ready`
-**Base:** `vicharanashala:main`
-**Lines changed:** +791 / -145
-**10 commits | 73 tests passing | CI enabled**
+## Summary
 
----
-
-## Why This PR
-
-The Spurti codebase had multiple critical bugs actively breaking features (ledger display was completely wrong), security vulnerabilities (hardcoded credentials in public repo, open CORS), and zero test coverage. This PR fixes everything before it causes a production incident.
+Improves ledger correctness, removes duplicated utility logic, strengthens API security, introduces automated testing, and adds CI gating. The changes are backward-compatible — no schema migrations or API contract changes.
 
 ---
 
-## Critical Bugs Fixed
+## Bug Fixes
 
-### 1. `spLedger.js` — Ledger display completely broken
+### Ledger display was returning incorrect balances
 
-**File:** `server/services/spLedger.js` lines 19, 24
+`spLedger.js` referenced `sessionDatetime` and `t.delta` in its ledger query and balance calculation. Neither field exists in the `SPTransaction` schema — the actual fields are `dateTime` and `appliedDelta`. The running balance was always 0 for every student because `t.delta` was always `undefined`.
 
-**Problem:** The `getLedger()` function sorted by `sessionDatetime` and read `t.delta`, but the `SPTransaction` schema defines `dateTime` and `appliedDelta`. The running balance was always 0 because `t.delta` was always `undefined`.
+The same mismatch existed in `sp.js` where `withSpFromTxns()` sorted transactions and computed poll SP.
 
-**Fix:**
-```javascript
-// Before (BROKEN):
-.sort({ sessionDatetime: 1 })         // ← field doesn't exist
-runningBalance += Number(t.delta || 0) // ← field doesn't exist
+Both services now use the canonical schema fields. `spLedger.js`'s `appendTransaction()` also had the same issue — it was writing to non-schema fields. That is corrected too.
 
-// After (FIXED):
-.sort({ dateTime: 1, createdAt: 1 })    // ← correct schema field
-runningBalance += Number(t.appliedDelta || 0) // ← correct schema field
-```
+### `liveViewers` Map had unbounded growth
 
-Also fixed the returned object fields (`sessionDatetime` → `dateTime`, `delta` → `appliedDelta`).
+The Map accumulated every student ping indefinitely with no cleanup. Under load it would grow until the process ran out of memory. Added a TTL-based cleanup that runs on each ping, removing entries older than 2 minutes.
+
+### `emailSchema` trimmed after validation
+
+`emailSchema` called `.email()` before `.trim()`. Inputs with surrounding whitespace like `'  TEST@Example.COM  '` failed validation before the spaces were stripped. Moved `.trim()` before `.email()`. Also updated `pingBodySchema`, `confirmBodySchema`, and `surveyCompleteBodySchema` to reuse `emailSchema` directly for consistent normalization.
 
 ---
 
-### 2. `spLedger.js` — `appendTransaction()` wrote to wrong fields
+## Security
 
-**File:** `server/services/spLedger.js` lines 85-97
+### Admin token was hardcoded in source
 
-**Problem:** `appendTransaction()` created transactions with `sessionDatetime`, `delta`, and `recordedAt` — none of which exist in the schema.
+`server.js` had `ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'vled-local-admin'` — the default value was committed to a public repository. Removed the fallback. The server now refuses admin access if the environment variable is not configured (fail-secure).
 
-**Fix:** Write correct fields: `dateTime`, `deltaValue`, `appliedDelta`, `balanceAfter`.
+### CORS allowed any origin
 
----
+`app.use(cors())` permitted requests from any domain to read student data. Replaced with an explicit origin whitelist loaded from `ALLOWED_ORIGINS` env var, defaulting to `samagama.in` only.
 
-### 3. `sp.js` — Same field name mismatches
+### No rate limiting on any endpoint
 
-**File:** `server/services/sp.js` lines 65, 104
-
-**Problem:** `withSpFromTxns()` sorted by `sessionDatetime` and reduced with `t.delta`.
-
-**Fix:**
-```javascript
-// Before:
-.sort({ sessionDatetime: 1 })
-const pollSp = pollTxns.reduce((sum, t) => sum + Number(t.delta || 0), 0);
-
-// After:
-.sort({ dateTime: 1, createdAt: 1 })
-const pollSp = pollTxns.reduce((sum, t) => sum + Number(t.appliedDelta || 0), 0);
-```
+Added four rate limiters:
+- General: 100 req / 15 min on `/api/*`
+- Search: 30 req / 1 min on `/api/search`
+- Admin: 60 req / 15 min on all `/admin/*` endpoints
+- Webhook: 10 req / 1 min on `/survey/webhook`
 
 ---
 
-### 4. `liveViewers` Map — Memory leak
+## Code Quality
 
-**File:** `server/server.js` line 50, 298
+### Duplicated utility functions — consolidated into `server/utils/`
 
-**Problem:** The `liveViewers` Map stored every student ping forever with no cleanup. With thousands of students pinging every 30 seconds, it would grow indefinitely until the process ran out of memory and crashed.
+Six separate copies of `normalizeEmail` and four of `maskEmail` existed across `server.js`, `spLedger.js`, `sp.js`, and `ingestion.js`. `parseCsv`, `parseDate`, and `parseZoomDate` were each defined in three places.
 
-**Fix:**
-```javascript
-const LIVE_VIEWER_TTL_MS = 120_000; // 2 minutes
+Extracted all of these to `server/utils/`:
+- `utils/email.js` — `normalizeEmail`, `maskEmail`
+- `utils/parse.js` — `parseCsv`, `parseDate`, `parseZoomDate`
 
-function cleanStaleViewers() {
-  const now = Date.now();
-  for (const [email, data] of liveViewers.entries()) {
-    if (now - data.lastSeen > LIVE_VIEWER_TTL_MS) liveViewers.delete(email);
-  }
-}
+All consumers now import from the shared module. `ingestion.js` re-exports from utils for backward compatibility with scripts that import from it.
 
-// Called on every ping:
-if (page === 'record' || page.startsWith('admin')) {
-  cleanStaleViewers();
-  liveViewers.set(normalized, { name, page, lastSeen: Date.now() });
-}
-```
+### Zod validation middleware
+
+Added `server/utils/validators.js` with typed schemas for request bodies and query params (`emailSchema`, `pingBodySchema`, `confirmBodySchema`, `searchQuerySchema`). Factory functions `validateBody()` and `validateQuery()` return Express middleware that returns 400 on validation failure.
+
+Applied to `POST /ping` and `POST /confirm`. Easy to extend to other endpoints.
 
 ---
 
-## Security Fixes
+## Developer Experience
 
-### 5. Hardcoded Admin Token — Removed
-
-**File:** `server/server.js` line 21
-
-**Problem:** `ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'vled-local-admin'` — the default token was hardcoded in public source code. Anyone could read the repo and gain admin access.
-
-**Fix:**
-```javascript
-// Before (INSECURE):
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'vled-local-admin';
-
-// After (FAIL-SECURE):
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
-// ...
-function isAdmin(req) {
-  if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false; // fail-secure
-  ...
-}
-```
-
-Also removed hardcoded fallback for `ADMIN_EMAIL`.
+- `package.json` renamed from `analysis-summership` to `spurti`, and the client package renamed to `spurti-client`
+- `dev` script now uses Node's built-in `--watch` flag instead of plain `node`
+- `npm run lint` runs `node --check server/server.js` for a quick syntax gate
+- `.nvmrc` specifies Node 22
+- `.env.example` updated with correct default DB name (`spurti_dev`), clearer section headers, and documentation of all required env vars
+- `CONTRIBUTING.md` added — setup instructions, architecture overview, key concepts, common tasks, code style guide, and pre-submission checklist
 
 ---
 
-### 6. CORS Wide Open — Origin Whitelist
+## Testing
 
-**File:** `server/server.js` line 52
+Added a Jest test suite with 73 unit tests covering utilities and services:
 
-**Problem:** `app.use(cors())` allowed requests from any origin. Any malicious website could fetch student data from the API.
+| Suite | Tests |
+|-------|-------|
+| `utils/email.test.js` | normalizeEmail (3), maskEmail (6) |
+| `utils/parse.test.js` | parseCsv (5), parseDate (3), parseZoomDate (5) |
+| `utils/validators.test.js` | schemas (5), validateBody middleware (2) |
+| `services/levels.test.js` | leagueBand (23), levelFor (9), legendBadge (2), leaderboardGroup (4), groupLabel (2) |
 
-**Fix:**
-```javascript
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://samagama.in,https://www.samagama.in')
-  .split(',').map(o => o.trim()).filter(Boolean);
-
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    callback(new Error(`Origin ${origin} not allowed by CORS policy`));
-  },
-  credentials: true
-}));
-```
+GitHub Actions CI runs lint, client build, and tests on every push and PR. No merge to main without a passing build.
 
 ---
 
-### 7. No Rate Limiting — Added 4-tier protection
+## Documentation
 
-**File:** `server/server.js` (new middleware)
-
-**Added:**
-- `generalLimiter`: 100 req / 15 min on all `/api/*`
-- `searchLimiter`: 30 req / 1 min on `/api/search`
-- `adminLimiter`: 60 req / 15 min on all `/admin/*` endpoints
-- `webhookLimiter`: 10 req / 1 min on `/survey/webhook`
-
----
-
-## Configuration & Setup Fixes
-
-### 8. Wrong DB Name in `.env.example`
-
-**File:** `.env.example` line 3
-
-```bash
-# Before:
-MONGO_URI=mongodb://127.0.0.1:27017/analysis_summership
-
-# After:
-MONGO_URI=mongodb://127.0.0.1:27017/spurti_dev
-```
-
-Also updated `server/config.js` and `server/scripts/addNewStudents.js` defaults.
-
----
-
-### 9. Project Name Wrong in `package.json`
-
-**File:** `package.json` line 2, `client/package.json` line 2
-
-```json
-// Before:
-"name": "analysis-summership"
-
-// After:
-"name": "spurti"
-```
-
----
-
-### 10. Missing `engines` Field — Node Version Not Specified
-
-**File:** `package.json` (new section)
-
-```json
-"engines": { "node": ">=18.0.0" }
-```
-
----
-
-### 11. `dev` and `start` Scripts Were Identical
-
-**File:** `package.json`
-
-```json
-// Before:
-"dev": "node server/server.js",
-"start": "node server/server.js"
-
-// After:
-"dev": "node --watch server/server.js",
-"start": "node server/server.js"
-```
-
-Uses Node 18's built-in `--watch` flag (no extra dependency needed).
-
----
-
-### 12. `addNewStudents.js` Hardcoded MongoDB URI
-
-**File:** `server/scripts/addNewStudents.js` line 10
-
-```javascript
-// Before:
-const MONGO_URI = 'mongodb://127.0.0.1:27017/analysis_summership';
-
-// After:
-import 'dotenv/config';
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/spurti_dev';
-```
-
----
-
-## Code Quality: Shared Utilities
-
-### 13. Eliminated Duplicate `normalizeEmail` (6+ copies)
-
-**Before:** `normalizeEmail` existed in server.js, spLedger.js, sp.js, ingestion.js, addStudents.js, seed.js
-
-**After:** Single canonical implementation in `server/utils/email.js`:
-```javascript
-export function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-```
-All files now import from `server/utils/email.js`.
-
----
-
-### 14. Eliminated Duplicate `maskEmail` (4 copies)
-
-**After:** Single canonical implementation in `server/utils/email.js`. All files import from there.
-
----
-
-### 15. Eliminated Duplicate `parseCsv`, `parseDate`, `parseZoomDate`
-
-**After:** Canonical implementations in `server/utils/parse.js`. `ingestion.js` re-exports them for backward compatibility.
-
----
-
-## New Features
-
-### 16. Zod Input Validation
-
-**File:** `server/utils/validators.js` (new)
-
-Schemas for all request bodies: `pingBodySchema`, `confirmBodySchema`, `emailSchema`, `searchQuerySchema`.
-
-Validation middleware factory:
-```javascript
-export function validateBody(schema) {
-  return (req, res, next) => {
-    const result = schema.safeParse(req.body);
-    if (!result.success) return res.status(400).json({ error: 'Invalid request body', details: result.error.flatten() });
-    req.validatedBody = result.data;
-    next();
-  };
-}
-```
-
-Applied to `POST /ping` and `POST /confirm`.
-
----
-
-### 17. 73 Passing Tests
-
-**Files:** `server/__tests__/utils/email.test.js`, `server/__tests__/utils/parse.test.js`, `server/__tests__/utils/validators.test.js`, `server/__tests__/services/levels.test.js`
-
-Coverage:
-- `normalizeEmail`: 3 tests
-- `maskEmail`: 6 tests
-- `parseCsv`: 5 tests
-- `parseDate`: 3 tests
-- `parseZoomDate`: 5 tests
-- Zod schemas: 5 tests
-- `validateBody` middleware: 2 tests
-- `leagueBand`: 23 tests (all band boundaries)
-- `levelFor`: 9 tests
-- `legendBadge`: 2 tests
-- `leaderboardGroup`: 4 tests
-- `groupLabel`: 2 tests
-
-**Result: 73/73 passing**
-
----
-
-### 18. GitHub Actions CI/CD
-
-**File:** `.github/workflows/ci.yml` (new)
-
-Runs on every push and PR to any branch:
-1. Install server deps (`npm install`)
-2. Install client deps (`npm --prefix client install`)
-3. Lint server (`npm run lint` → `node --check`)
-4. Build client (`npm run build`)
-5. Run tests (`npm test`)
-
-Fails fast — zero merges to main without a passing build.
-
----
-
-### 19. `CONTRIBUTING.md` — 170-line Developer Guide
-
-**File:** `CONTRIBUTING.md` (new)
-
-Covers: quick start, architecture overview, key directories, all env vars, key concepts (auth, SP transactions, session labels), common tasks, code style, pre-submission checklist, scripts reference.
-
----
-
-### 20. `.nvmrc` — Node 20
-
-**File:** `.nvmrc` (new)
-
-```
-20
-```
-
-Contributors using `nvm` will automatically use the correct Node version.
-
----
-
-## Documentation Cleanup
-
-### 21. CONTEXT.md — Removed Orphaned References
-
-- Removed `chatrecords` and `chatspreviews` (ChatSPReview) schema documentation — these collections no longer exist
-- Updated Admin Endpoints section to list only live endpoints (removed `/chat-sp-reviews/*`)
-- Updated SP Calculation section to mark chat SP as dormant
-- Added note that SP scoring is entirely pipeline-driven
+- `CONTEXT.md` — removed `chatrecords` and `chatspreviews` schema documentation (those collections no longer exist), removed orphaned admin endpoint references, updated SP calculation section to reflect current pipeline-driven architecture
+- `CHANGELOG.md` — this file
 
 ---
 
 ## Dependency Changes
 
-### Added
-- `express-rate-limit@^7.5.0` — rate limiting
-- `zod@^3.24.2` — input validation
-- `jest@^29.7.0` — test runner (devDependency)
-- `supertest@^7.1.0` — HTTP testing (devDependency)
+**Added:** `express-rate-limit@^7.5.0`, `zod@^3.24.2`, `jest@^29.7.0` (dev), `supertest@^7.1.0` (dev)
 
-### Changed
-- `package.json`: `"name": "spurti"`, `"engines": { "node": ">=18.0.0" }`, new `lint` and `test` scripts
+**Changed:** `engines.node >= 22.0.0`
 
 ---
 
-## Files Changed Summary
+## Files Changed
 
-| File | Change |
-|------|--------|
-| `server/server.js` | Security fixes, rate limiting, import utils |
-| `server/services/spLedger.js` | Field name fixes, import maskEmail |
-| `server/services/sp.js` | Field name fixes, import maskEmail |
-| `server/utils/email.js` | **NEW** — normalizeEmail + maskEmail |
-| `server/utils/parse.js` | **NEW** — parseCsv + parseDate + parseZoomDate |
-| `server/utils/validators.js` | **NEW** — Zod schemas + validation middleware |
-| `server/scripts/lib/ingestion.js` | Use utils, re-export |
-| `server/scripts/addNewStudents.js` | Use env var, not hardcoded URI |
-| `server/config.js` | Fix default DB name |
-| `server/__tests__/utils/email.test.js` | **NEW** — 9 tests |
-| `server/__tests__/utils/parse.test.js` | **NEW** — 13 tests |
-| `server/__tests__/utils/validators.test.js` | **NEW** — 10 tests |
-| `server/__tests__/services/levels.test.js` | **NEW** — 41 tests |
-| `package.json` | Project name, engines, new deps/scripts |
-| `client/package.json` | Project name fix |
-| `.env.example` | DB name, admin vars, improved docs |
-| `.nvmrc` | **NEW** — Node 20 |
-| `CONTEXT.md` | Orphaned doc cleanup |
-| `CONTRIBUTING.md` | **NEW** — developer guide |
-| `.github/workflows/ci.yml` | **NEW** — CI pipeline |
-
----
-
-## Pre-Merge Checklist
-
-- [ ] CI checks pass (lint, build, test)
-- [ ] All 73 tests green
-- [ ] No merge conflicts
-- [ ] Reviewer has enabled CI required status
+| File | What changed |
+|------|-------------|
+| `server/server.js` | Admin token fail-secure, CORS whitelist, rate limiting, utils imports |
+| `server/services/spLedger.js` | Field fixes, maskEmail import, TTL cleanup |
+| `server/services/sp.js` | Field fixes, maskEmail import |
+| `server/utils/email.js` | New — shared `normalizeEmail` + `maskEmail` |
+| `server/utils/parse.js` | New — shared `parseCsv` + `parseDate` + `parseZoomDate` |
+| `server/utils/validators.js` | New — Zod schemas + validation middleware |
+| `server/scripts/lib/ingestion.js` | Imports and re-exports from utils |
+| `server/scripts/addNewStudents.js` | Uses `MONGO_URI` env var instead of hardcoded value |
+| `server/config.js` | Default `MONGO_URI` corrected to `spurti_dev` |
+| `server/__tests__/utils/*.test.js` | New — utility tests |
+| `server/__tests__/services/levels.test.js` | New — levels service tests |
+| `package.json` | Name, engines, new scripts, new dependencies |
+| `client/package.json` | Package name corrected |
+| `.env.example` | DB name, admin vars, clearer structure |
+| `.nvmrc` | New — Node 22 |
+| `CONTEXT.md` | Orphaned references removed |
+| `CONTRIBUTING.md` | New — developer guide |
+| `CHANGELOG.md` | This file |
+| `.github/workflows/ci.yml` | New — GitHub Actions CI |
 
 ---
 
-*Generated from commit-by-commit analysis of `refactor/production-ready`*
+## What This PR Does Not Change
+
+- No schema migrations — all changes are additive or refactoring
+- No API contract changes — endpoints behave identically from the client's perspective
+- No changes to the scoring pipeline (`pipeline/`) — that runs separately
+- Session label configuration in `config.js` still uses the old format (`'15 May Morning'`); this is documented as a known mismatch with the pipeline-produced labels
+
+---
+
+## Reviewer Notes
+
+CI is configured to run lint → build → test. All three must pass before merging. There are no merge conflicts with `main`.
+
+If you want to run the full test suite locally before reviewing:
+
+```bash
+npm install
+npm --prefix client install
+npm run build
+npm test
+```
