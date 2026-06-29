@@ -16,20 +16,20 @@ export async function getLedger(email) {
   if (!student) return null;
 
   const transactions = await SPTransaction.find({ email: email.toLowerCase() })
-    .sort({ sessionDatetime: 1 })
+    .sort({ dateTime: 1, createdAt: 1 })
     .lean();
 
   let runningBalance = 0;
   const ledger = transactions.map(t => {
-    runningBalance += Number(t.delta || 0);
+    runningBalance += Number(t.appliedDelta || 0);
     return {
       category: t.category,
       sessionLabel: t.sessionLabel,
-      sessionDatetime: t.sessionDatetime,
-      delta: t.delta,
+      dateTime: t.dateTime,
+      appliedDelta: t.appliedDelta,
       reason: t.reason,
       balanceAfter: runningBalance,
-      recordedAt: t.recordedAt
+      recordedAt: t.createdAt
     };
   });
 
@@ -89,10 +89,11 @@ export async function appendTransaction(email, category, sessionLabel, sessionDa
     email: email.toLowerCase(),
     category,
     sessionLabel,
-    sessionDatetime: sessionDt,
-    delta,
+    dateTime: sessionDt,
+    deltaValue: delta,
+    appliedDelta: delta,
     reason,
-    recordedAt: new Date(),
+    balanceAfter: 0,
     ingestedFrom
   }]);
 
