@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -7,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..', '..');
 const dataDir = path.join(rootDir, 'data');
 
-const MONGO_URI = 'mongodb://127.0.0.1:27017/analysis_summership';
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/spurti_dev';
 
 const ROSTER_NEW = path.join(dataDir, 'students-start-on-or-before-2026-05-21.csv');
 const ROSTER_OLD = path.join(dataDir, 'students-start-on-or-before-2026-05-18-revised.csv');
