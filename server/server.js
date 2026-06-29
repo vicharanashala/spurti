@@ -17,8 +17,8 @@ import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
-const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || 'dled@iitrpr.ac.in');
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'vled-local-admin';
+const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || '');
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 // Survey triangulation pop-up. All driven by env so the form link / mode can
 // change without a client rebuild (the client reads these via /api/config).
@@ -57,7 +57,55 @@ function cleanStaleViewers() {
   }
 }
 
-app.use(cors());
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://samagama.in,https://www.samagama.in')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    callback(new Error(`Origin ${origin} not allowed by CORS policy`));
+  },
+  credentials: true
+}));
+
+import rateLimit from 'express-rate-limit';
+
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' }
+});
+
+const searchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Search rate limit exceeded.' }
+});
+
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Admin endpoint rate limit exceeded.' }
+});
+
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Webhook rate limit exceeded.' }
+});
+
+app.use('/api', generalLimiter);
+app.use('/spurti/api', generalLimiter);
 app.use(express.json({ limit: '2mb' }));
 
 function normalizeEmail(value) {
@@ -206,6 +254,7 @@ async function studentPayload(student) {
 }
 
 function isAdmin(req) {
+  if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false;
   const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
   const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
   return emailOk && tokenOk;
@@ -238,7 +287,7 @@ api.get('/me', async (req, res) => {
   res.json({ authenticated: true, profile: await studentPayload(student) });
 });
 
-api.get('/search', async (req, res) => {
+api.get('/search', searchLimiter, async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ exact: false, matches: [] });
@@ -349,7 +398,7 @@ api.get('/survey/status', async (req, res) => {
 
 // Authoritative confirmation: the Google Form's Apps Script onFormSubmit
 // trigger POSTs { email, secret } here. Secret-authenticated, not session.
-api.post('/survey/webhook', async (req, res) => {
+api.post('/survey/webhook', webhookLimiter, async (req, res) => {
   if (!SURVEY.webhookSecret || String(req.body?.secret || '') !== SURVEY.webhookSecret) {
     return res.status(403).json({ ok: false, error: 'forbidden' });
   }
@@ -358,7 +407,7 @@ api.post('/survey/webhook', async (req, res) => {
   res.json({ ok: true, email: student.email });
 });
 
-api.get('/admin/stats', adminGuard, async (_req, res) => {
+api.get('/admin/stats', adminLimiter, adminGuard, async (_req, res) => {
   const [yetToOnboard, excusedStudents, sessions, txns, activeStudents] = await Promise.all([
     Student.countDocuments({ status: 'yet to onboard' }),
     Student.countDocuments({ status: 'excused' }),
@@ -368,7 +417,7 @@ api.get('/admin/stats', adminGuard, async (_req, res) => {
   ]);
   res.json({ yetToOnboard, excusedStudents, activeStudents, sessions, transactions: txns });
 });
-api.get('/admin/students-by-status', adminGuard, async (req, res) => {
+api.get('/admin/students-by-status', adminLimiter, adminGuard, async (req, res) => {
   const status = String(req.query.status || 'yet to onboard');
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 200)));
   const students = await Student.find({ status }).sort({ name: 1 }).limit(limit).lean();
@@ -382,7 +431,7 @@ api.get('/admin/students-by-status', adminGuard, async (req, res) => {
 });
 
 
-api.get('/admin/leaderboard', adminGuard, async (req, res) => {
+api.get('/admin/leaderboard', adminLimiter, adminGuard, async (req, res) => {
   const limit = Math.min(500, Math.max(1, Number(req.query.limit || 50)));
   const students = await Student.find({ status: 'active' }).sort({ totalSp: -1, name: 1 }).limit(limit).lean();
   res.json(students.map((s, i) => ({
@@ -394,7 +443,7 @@ api.get('/admin/leaderboard', adminGuard, async (req, res) => {
   })));
 });
 
-api.get('/admin/attendance', adminGuard, async (_req, res) => {
+api.get('/admin/attendance', adminLimiter, adminGuard, async (_req, res) => {
   const [sessions, students, records] = await Promise.all([
     Session.find().sort({ endDateTime: 1 }).lean(),
     Student.find({ status: 'active' }).sort({ name: 1 }).lean(),
@@ -422,13 +471,13 @@ api.get('/admin/attendance', adminGuard, async (_req, res) => {
   });
 });
 
-api.get('/admin/student/:id', adminGuard, async (req, res) => {
+api.get('/admin/student/:id', adminLimiter, adminGuard, async (req, res) => {
   const student = await Student.findById(req.params.id).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await studentPayload(student));
 });
 
-api.get('/admin/active', adminGuard, (_req, res) => {
+api.get('/admin/active', adminLimiter, adminGuard, (_req, res) => {
   const now = new Date();
   const cutoff = now.getTime() - 60_000;
   const viewers = [];
@@ -446,7 +495,7 @@ api.get('/admin/active', adminGuard, (_req, res) => {
   res.json(viewers);
 });
 
-api.get('/admin/analytics', adminGuard, async (_req, res) => {
+api.get('/admin/analytics', adminLimiter, adminGuard, async (_req, res) => {
   const now = new Date();
   const lastHour = new Date(now.getTime() - 60 * 60 * 1000);
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
