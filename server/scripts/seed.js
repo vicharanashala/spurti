@@ -32,7 +32,6 @@ async function run() {
       alternateEmail: normalizeEmail(row.alternateEmail || row.email),
       sessions: sessionObject(row.sessions),
       activities: row.activities || [],
-      chats: row.chats || [],
       activityItems: row.activityItems || '',
       activityMatched: row.activityMatched || ''
     }));

@@ -7,11 +7,9 @@ import { MONGO_URI } from '../config.js';
 import Student from '../models/Student.js';
 import Session from '../models/Session.js';
 import AttendanceRecord from '../models/AttendanceRecord.js';
-import ChatRecord from '../models/ChatRecord.js';
 import PollRecord from '../models/PollRecord.js';
 import SPTransaction from '../models/SPTransaction.js';
 import SessionEvent from '../models/SessionEvent.js';
-import ChatSPReview from '../models/ChatSPReview.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..', '..');
@@ -20,34 +18,23 @@ const uploadsDir = path.join(dataDir, 'uploads');
 const rosterPath = path.join(dataDir, 'students-start-on-or-before-2026-05-25.csv');
 
 const SESSIONS = [
-  session('15 May Morning', '2026-05-15', 'morning', '2026-05-15T08:27:30', '2026-05-15T12:37:30', 250, '2026-05-15/15_may_attendance_M.csv', '2026-05-15/15-may-morning-chat.txt', '2026-05-15/15 May - orientation poll report - morning.csv'),
-  session('15 May Evening', '2026-05-15', 'evening', '2026-05-15T13:29:45', '2026-05-15T17:14:45', 225, '2026-05-15/15_may_attendance_E.csv', '2026-05-15/15-may-evening-chat.txt', '2026-05-15/15 May - orientation poll report - evening.csv'),
-  session('16 May Morning', '2026-05-16', 'morning', '2026-05-16T07:55:32', '2026-05-16T12:16:32', 261, '2026-05-16/16_may_attendance_M.csv', '2026-05-16/16_may_Chat_M.txt', '2026-05-16/16 May - orientation poll report - morning.csv'),
-  session('16 May Evening', '2026-05-16', 'evening', '2026-05-16T13:59:51', '2026-05-16T17:50:51', 231, '2026-05-16/16_may_attendance_E.csv', '2026-05-16/16_May_Chat_E.txt', '2026-05-16/16 May - orientation poll report - evening.csv'),
-  session('17 May Evening', '2026-05-17', 'evening', '2026-05-17T20:42:56', '2026-05-17T22:33:56', 111, '2026-05-17/participants_98521543113_2026_05_17.csv', '2026-05-17/chat.txt', '2026-05-17/poll_98521543113_2026_05_17.csv'),
-  session('18 May Morning', '2026-05-18', 'morning', '2026-05-18T09:03:14', '2026-05-18T11:00:14', 117, '2026-05-18/18_May_Attendance.csv', '2026-05-18/chat_18_05_2026.txt', '2026-05-18/poll_91446611702_2026_05_18.csv'),
-  session('19 May Morning', '2026-05-19', 'morning', '2026-05-19T09:00:17', '2026-05-19T10:35:17', 95, '2026-05-19/19-05-2026 Attendance.csv', '2026-05-19/chat_19_05_2026.txt', '2026-05-19/poll_91571551447_2026_05_19.csv'),
-  session('20 May Morning', '2026-05-20', 'morning', '2026-05-20T09:04:23', '2026-05-20T11:04:39', 121, '2026-05-20/20_May_2026_attendance.csv', '2026-05-20/chat_20_May_2026.txt', '2026-05-20/poll_93235054469_2026_05_20.csv'),
-  session('21 May Morning', '2026-05-21', 'morning', '2026-05-21T09:00:00', '2026-05-21T11:00:00', 120, '2026-05-21/21_MAY_ATTENDANCE.csv', '2026-05-21/21_May_Chat.txt', null),
-  session('21 May Followup', '2026-05-21', 'followup', '2026-05-21T11:00:00', '2026-05-21T12:00:00', 60, '2026-05-21/21_MAY_ATTENDANCE2.csv', '2026-05-21/21_May_Chat1.txt', null),
-  session('22 May Morning', '2026-05-22', 'morning', '2026-05-22T09:00:00', '2026-05-22T13:00:00', 240, '2026-05-22/22_may_attendance_morning.csv', null, '2026-05-22/Poll_22_May_Morning.csv'),
-  session('22 May Afternoon', '2026-05-22', 'afternoon', '2026-05-22T14:00:00', '2026-05-22T16:20:00', 140, '2026-05-22/22_may_attendance_afternoon.csv', null, '2026-05-22/Poll_22_May_Afternoon.csv'),
-  session('22 May Evening', '2026-05-22', 'evening', '2026-05-22T16:30:00', '2026-05-22T18:36:50', 127, '2026-05-22/22_may_attendance_evening.csv', null, '2026-05-22/Poll_22_May_Evening.csv')
+  session('15 May Morning', '2026-05-15', 'morning', '2026-05-15T08:27:30', '2026-05-15T12:37:30', 250, '2026-05-15/15_may_attendance_M.csv', '2026-05-15/15 May - orientation poll report - morning.csv'),
+  session('15 May Evening', '2026-05-15', 'evening', '2026-05-15T13:29:45', '2026-05-15T17:14:45', 225, '2026-05-15/15_may_attendance_E.csv', '2026-05-15/15 May - orientation poll report - evening.csv'),
+  session('16 May Morning', '2026-05-16', 'morning', '2026-05-16T07:55:32', '2026-05-16T12:16:32', 261, '2026-05-16/16_may_attendance_M.csv', '2026-05-16/16 May - orientation poll report - morning.csv'),
+  session('16 May Evening', '2026-05-16', 'evening', '2026-05-16T13:59:51', '2026-05-16T17:50:51', 231, '2026-05-16/16_may_attendance_E.csv', '2026-05-16/16 May - orientation poll report - evening.csv'),
+  session('17 May Evening', '2026-05-17', 'evening', '2026-05-17T20:42:56', '2026-05-17T22:33:56', 111, '2026-05-17/participants_98521543113_2026_05_17.csv', '2026-05-17/poll_98521543113_2026_05_17.csv'),
+  session('18 May Morning', '2026-05-18', 'morning', '2026-05-18T09:03:14', '2026-05-18T11:00:14', 117, '2026-05-18/18_May_Attendance.csv', '2026-05-18/poll_91446611702_2026_05_18.csv'),
+  session('19 May Morning', '2026-05-19', 'morning', '2026-05-19T09:00:17', '2026-05-19T10:35:17', 95, '2026-05-19/19-05-2026 Attendance.csv', '2026-05-19/poll_91571551447_2026_05_19.csv'),
+  session('20 May Morning', '2026-05-20', 'morning', '2026-05-20T09:04:23', '2026-05-20T11:04:39', 121, '2026-05-20/20_May_2026_attendance.csv', '2026-05-20/poll_93235054469_2026_05_20.csv'),
+  session('21 May Morning', '2026-05-21', 'morning', '2026-05-21T09:00:00', '2026-05-21T11:00:00', 120, '2026-05-21/21_MAY_ATTENDANCE.csv', null),
+  session('21 May Followup', '2026-05-21', 'followup', '2026-05-21T11:00:00', '2026-05-21T12:00:00', 60, '2026-05-21/21_MAY_ATTENDANCE2.csv', null),
+  session('22 May Morning', '2026-05-22', 'morning', '2026-05-22T09:00:00', '2026-05-22T13:00:00', 240, '2026-05-22/22_may_attendance_morning.csv', '2026-05-22/Poll_22_May_Morning.csv'),
+  session('22 May Afternoon', '2026-05-22', 'afternoon', '2026-05-22T14:00:00', '2026-05-22T16:20:00', 140, '2026-05-22/22_may_attendance_afternoon.csv', '2026-05-22/Poll_22_May_Afternoon.csv'),
+  session('22 May Evening', '2026-05-22', 'evening', '2026-05-22T16:30:00', '2026-05-22T18:36:50', 127, '2026-05-22/22_may_attendance_evening.csv', '2026-05-22/Poll_22_May_Evening.csv')
 ];
 
-const POSITIVE_WORDS = new Set([
-  'good','great','excellent','amazing','helpful','learned','learning','interesting','clear','understood',
-  'thanks','thank','love','liked','motivated','excited','happy','better','improve','valuable','useful',
-  'curious','confidence','collaborate','teamwork','practical','meaningful','support','positive'
-]);
-const NEGATIVE_WORDS = new Set([
-  'bad','poor','confused','confusing','issue','problem','not','no','failed','fail','unable','difficult',
-  'boring','late','missed','wrong','error','negative','deduct','deducted','stuck','fear','hesitated'
-]);
-const FILLER = new Set(['hi','hii','hello','hey','yes','no','ok','okay','done','gm','good morning','good morning mam','good morning maam','good morning sir','good morning everyone','thank you','thanks']);
-
-function session(label, date, type, startDateTime, endDateTime, totalMinutes, attendanceFile, chatFile, pollFile) {
-  return { label, date, type, startDateTime, endDateTime, totalMinutes, attendanceFile, chatFile, pollFile };
+function session(label, date, type, startDateTime, endDateTime, totalMinutes, attendanceFile, pollFile) {
+  return { label, date, type, startDateTime, endDateTime, totalMinutes, attendanceFile, pollFile };
 }
 
 function normalizeEmail(value) {
@@ -137,45 +124,6 @@ function parseAttendance(filePath, fallbackMinutes) {
   return { totalMinutes, endDateTime, rows: result };
 }
 
-function parseChat(filePath) {
-  if (!filePath || !fs.existsSync(filePath)) return [];
-  const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
-  const entries = [];
-  let current = null;
-  const patterns = [
-    /^(\d{2}:\d{2}:\d{2})\s+From\s+(.+?)\s+to\s+.*?:\s*(.*)$/i,
-    /^(\d{2}:\d{2}:\d{2})\t\s*From\s+(.+?)\s+:\s*(.*)$/i,
-    /^(\d{2}:\d{2}:\d{2})\t(.+?)\s*:\s*(.*)$/i
-  ];
-  for (const line of lines) {
-    const match = patterns.map(p => line.match(p)).find(Boolean);
-    if (match) {
-      if (current) entries.push(current);
-      current = { time: match[1], name: match[2].trim(), message: match[3].trim() };
-    } else if (current && line.trim()) {
-      current.message += `\n${line.trim()}`;
-    }
-  }
-  if (current) entries.push(current);
-  return entries;
-}
-
-function scoreMessage(message) {
-  const normalized = String(message || '').toLowerCase().replace(/\s+/g, ' ').trim();
-  if (!normalized || FILLER.has(normalized) || normalized.startsWith('replying to') || normalized.startsWith('reacted to')) {
-    return { score: 0, sentiment: 'neutral' };
-  }
-  const words = normalized.match(/[a-z]+/g) || [];
-  let score = 0;
-  for (const word of words) {
-    if (POSITIVE_WORDS.has(word)) score += 1;
-    if (NEGATIVE_WORDS.has(word)) score -= 1;
-  }
-  if (score > 0) return { score, sentiment: 'positive' };
-  if (score < 0) return { score, sentiment: 'negative' };
-  return { score: normalized.length >= 12 ? 1 : 0, sentiment: normalized.length >= 12 ? 'positive' : 'neutral' };
-}
-
 function parsePoll(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return { totalQuestions: 0, byEmail: new Map() };
   const rows = parseCsv(fs.readFileSync(filePath, 'utf8'));
@@ -250,11 +198,9 @@ async function run() {
     // Student.deleteMany({}), // SKIPPED - students already seeded
     Session.deleteMany({}),
     AttendanceRecord.deleteMany({}),
-    ChatRecord.deleteMany({}),
     PollRecord.deleteMany({}),
     SPTransaction.deleteMany({}),
-    SessionEvent.deleteMany({}),
-    ChatSPReview.deleteMany({})
+    SessionEvent.deleteMany({})
   ]);
 
   const roster = parseRoster();
@@ -289,18 +235,6 @@ async function run() {
       endDateTime,
       totalMinutes
     });
-
-    const chatPath = sessionConfig.chatFile ? path.join(uploadsDir, sessionConfig.chatFile) : null;
-    const chatGroups = new Map();
-    for (const entry of parseChat(chatPath)) {
-      const matches = byName.get(normalizeName(entry.name)) || [];
-      if (matches.length !== 1) continue;
-      const student = matches[0];
-      if (!sessionApplies(student, endDateTime)) continue;
-      const scored = scoreMessage(entry.message);
-      if (!chatGroups.has(student.email)) chatGroups.set(student.email, []);
-      chatGroups.get(student.email).push({ time: entry.time, message: entry.message, ...scored });
-    }
 
     const pollPath = sessionConfig.pollFile ? path.join(uploadsDir, sessionConfig.pollFile) : null;
     const parsedPoll = parsePoll(pollPath);
@@ -345,28 +279,6 @@ async function run() {
           transactionId: pollTx._id
         });
       }
-
-      const messages = chatGroups.get(student.email) || [];
-      if (messages.length > 0) {
-        const positiveCount = messages.filter(m => m.sentiment === 'positive').length;
-        const negativeCount = messages.filter(m => m.sentiment === 'negative').length;
-        const neutralCount = messages.filter(m => m.sentiment === 'neutral').length;
-        const overallSentiment = positiveCount >= negativeCount ? 'positive' : 'negative';
-        const chatDelta = overallSentiment === 'positive' ? 5 : -5;
-        const chatReason = `${sessionConfig.label}: chat sentiment was ${overallSentiment} (${positiveCount} positive, ${negativeCount} negative, ${neutralCount} neutral), ${chatDelta > 0 ? 'credited' : 'debited'} ${chatDelta} SP.`;
-        const chatTx = await addTransaction(student, 'chat', sessionConfig.label, chatDelta, chatReason, endDateTime, balances);
-        await ChatRecord.create({
-          email: student.email,
-          studentId: student._id,
-          sessionLabel: sessionConfig.label,
-          messages,
-          positiveCount,
-          negativeCount,
-          neutralCount,
-          overallSentiment,
-          transactionId: chatTx._id
-        });
-      }
     }
   }
 
@@ -378,7 +290,6 @@ async function run() {
   console.log(`Sessions: ${await Session.countDocuments()}`);
   console.log(`Attendance records: ${await AttendanceRecord.countDocuments()}`);
   console.log(`Poll records: ${await PollRecord.countDocuments()}`);
-  console.log(`Chat records: ${await ChatRecord.countDocuments()}`);
   console.log(`SP transactions: ${await SPTransaction.countDocuments()}`);
 
   await mongoose.disconnect();

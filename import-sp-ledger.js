@@ -59,7 +59,6 @@ async function run() {
     let category = 'manual';
     if (reason.includes('attendance') || reason.includes('attended')) category = 'attendance';
     else if (reason.includes('poll')) category = 'poll';
-    else if (reason.includes('chat') || reason.includes('sentiment')) category = 'chat';
     else if (reason.includes('Initial')) category = 'initial';
     
     if (category === 'initial') continue;

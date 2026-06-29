@@ -60,10 +60,8 @@ export function withSp(studentDoc) {
 
   const attendanceSp = filteredLedger.reduce((sum, item) => sum + item.sp, 0);
 
-  // Chat and poll SP from transaction log
-  const chatTxns = (raw._txns || []).filter(t => t.category === 'chat');
+  // Poll SP from transaction log
   const pollTxns = (raw._txns || []).filter(t => t.category === 'poll');
-  const chatSp = chatTxns.reduce((sum, t) => sum + Number(t.delta || 0), 0);
   const pollSp = pollTxns.reduce((sum, t) => sum + Number(t.delta || 0), 0);
 
   const activitySp = 0;
@@ -79,7 +77,6 @@ export function withSp(studentDoc) {
     sessionsAttended,
     hasAttendance,
     activities: raw.activities || [],
-    chats: raw.chats || [],
     polls: raw.polls || [],
     activityItems: raw.activityItems || '',
     activityMatched: raw.activityMatched || '',
@@ -87,11 +84,9 @@ export function withSp(studentDoc) {
       initial: 100,
       attendance: attendanceSp,
       activity: activitySp,
-      chat: chatSp,
       poll: pollSp,
       total: totalSp,
       sessionLedger: filteredLedger,
-      chatLedger: raw.chats || [],
       pollLedger: raw.polls || [],
       activityReason: (raw.activities || []).length > 0
         ? (raw.activityMatched ? 'Game/activity participated and item matched' : 'Game/activity participated')

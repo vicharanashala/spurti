@@ -166,25 +166,6 @@ async function migrate() {
       });
     }
 
-    // Chat transactions
-    for (const chat of (s.chats || [])) {
-      const sessionDt = sessionEndTimes[chat.session];
-      if (!sessionDt || sessionDt < onboardingDt) continue;
-      if (!chat.sp) continue;
-      const reason = `+${chat.sp} SP for sending ${chat.validMessages} valid message(s) in the ${chat.session} session`;
-      balance += chat.sp;
-      allTxns.push({
-        email: s.email,
-        category: 'chat',
-        sessionLabel: chat.session,
-        sessionDatetime: sessionDt,
-        delta: chat.sp,
-        reason,
-        recordedAt: new Date(),
-        ingestedFrom: `migration:${chat.session}`
-      });
-    }
-
     // Poll transactions
     for (const poll of (s.polls || [])) {
       const sessionDt = sessionEndTimes[poll.session];

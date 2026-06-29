@@ -8,7 +8,6 @@ const sessionSchema = new mongoose.Schema({
   totalMinutes: { type: Number, required: true },
   type: { type: String, default: '' },
   attendanceFile: { type: String, default: '' },
-  chatFile: { type: String, default: '' },
   pollFile: { type: String, default: '' }
 }, { timestamps: true });
 

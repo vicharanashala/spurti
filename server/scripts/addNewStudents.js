@@ -120,9 +120,8 @@ async function run() {
   let totalSP = 0;
   for (const s of newStudents) {
     const attSP = (s.attendanceLedger || []).reduce((a, r) => a + (r.sp || 0), 0);
-    const chatSP = (s.chats || []).reduce((a, r) => a + (r.sp || 0), 0);
     const pollSP = (s.polls || []).reduce((a, r) => a + (r.sp || 0), 0);
-    const sp = 100 + attSP + chatSP + pollSP;
+    const sp = 100 + attSP + pollSP;
     await Student.updateOne({ _id: s._id }, { $set: { sp } });
     totalSP += sp;
   }
