@@ -1,5 +1,5 @@
 {
-  "name": "analysis-summership",
+  "name": "spurti",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -9,10 +9,12 @@
     "add-students": "node server/scripts/addStudents.js",
     "sync-students": "node server/scripts/syncStudents.js",
     "ingest-session": "node server/scripts/ingestSession.js",
+    "split-22-may": "node server/scripts/split22MaySessions.js",
     "setup": "npm install && npm --prefix client install && npm run rebuild && npm run build",
     "build": "npm --prefix client run build",
     "start": "node server/server.js",
-    "dev": "node server/server.js"
+    "dev": "node --watch server/server.js",
+    "lint": "node --check server/server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
