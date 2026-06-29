@@ -14,6 +14,14 @@ import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import { normalizeEmail, maskEmail } from './utils/email.js';
+import {
+  searchQuerySchema,
+  pingBodySchema,
+  confirmBodySchema,
+  leaderboardTypeSchema,
+  validateQuery,
+  validateBody
+} from './utils/validators.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -300,11 +308,10 @@ api.get('/search', searchLimiter, async (req, res) => {
   res.json({ exact: false, matches: matches.map(publicStudent) });
 });
 
-api.post('/confirm', async (req, res) => {
+api.post('/confirm', validateBody(confirmBodySchema), async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
-  const { studentId, email } = req.body || {};
+  const { studentId, email } = req.validatedBody;
   const typed = normalizeEmail(email);
-  const student = await Student.findById(studentId).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   if (typed !== normalizeEmail(student.email) && typed !== normalizeEmail(student.alternateEmail)) {
     return res.status(403).json({ error: 'Email did not match this record' });
@@ -328,13 +335,9 @@ api.get('/leaderboard', async (req, res) => {
   })));
 });
 
-api.post('/ping', async (req, res) => {
-  const { email, name, page } = req.body || {};
+api.post('/ping', validateBody(pingBodySchema), async (req, res) => {
+  const { email, name, page } = req.validatedBody;
   const normalized = normalizeEmail(email);
-  if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
-  // Telemetry is best-effort: an unknown page value (e.g. a new admin sub-page
-  // not yet in the enum) must never crash the request or leak an unhandled
-  // rejection. Drop the write and carry on.
   try {
     await SessionEvent.create({ email: normalized, name, event: 'page_view', page });
   } catch (err) {
