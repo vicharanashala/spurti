@@ -7,6 +7,7 @@
 import { SESSION_LABELS, SESSION_DURATIONS, SESSION_DATETIME_MAP, SESSION_THRESHOLDS_MINUTES, SESSION_THRESHOLDS_PCT } from '../config.js';
 import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
+import { maskEmail } from '../utils/email.js';
 
 export function withSp(studentDoc) {
   const raw = typeof studentDoc.toObject === 'function' ? studentDoc.toObject() : studentDoc;
@@ -136,10 +137,6 @@ export function summary(students) {
 
 // ─── Helpers (unchanged) ───────────────────────────────────────────────
 
-export function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
 export function isEmailLike(q) {
   return q.includes('@');
 }
@@ -160,13 +157,4 @@ function hasActivity(raw) {
 
 function hasMatchedActivity(raw) {
   return Array.isArray(raw.activities) && raw.activities.some(a => a.matched);
-}
-
-function maskEmail(email) {
-  const value = String(email || '').trim();
-  const [name, domain] = value.split('@');
-  if (!name || !domain) return 'hidden email';
-  const visibleStart = name.slice(0, Math.min(2, name.length));
-  const visibleEnd = name.length > 4 ? name.slice(-2) : '';
-  return `${visibleStart}${'*'.repeat(Math.max(3, name.length - visibleStart.length - visibleEnd.length))}${visibleEnd}@${domain}`;
 }
