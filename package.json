@@ -14,7 +14,8 @@
     "build": "npm --prefix client run build",
     "start": "node server/server.js",
     "dev": "node --watch server/server.js",
-    "lint": "node --check server/server.js"
+    "lint": "node --check server/server.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --passWithNoTests"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -26,5 +27,15 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.1.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/__tests__/**/*.test.js"],
+    "collectCoverageFrom": ["server/**/*.js", "!server/scripts/**"],
+    "verbose": true
   }
 }
