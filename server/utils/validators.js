@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const emailSchema = z.string().email().max(320).transform(v => v.trim().toLowerCase());
+export const emailSchema = z.string().trim().email().max(320).transform(v => v.toLowerCase());
 
 export const searchQuerySchema = z.string().min(2).max(100).trim();
 
@@ -11,18 +11,18 @@ export const leaderboardTypeSchema = z.enum(['overall', 'my_onboarding_group']);
 export const pageSchema = z.string().min(1).max(60);
 
 export const pingBodySchema = z.object({
-  email: z.string().email().max(320),
+  email: emailSchema,
   name: z.string().min(1).max(200),
   page: pageSchema
 });
 
 export const confirmBodySchema = z.object({
   studentId: z.string().min(1).max(24),
-  email: z.string().email().max(320)
+  email: emailSchema
 });
 
 export const surveyCompleteBodySchema = z.object({
-  email: z.string().email().max(320).optional()
+  email: emailSchema.optional()
 });
 
 export const statusQuerySchema = z.enum(['active', 'excused', 'yet to onboard']);
