@@ -42,11 +42,6 @@ export function legendBadge(highestSpEver) {
   return (Number(highestSpEver) || 0) >= 1500;
 }
 
-// Tier family (Bronze/Silver/Gold/Platinum/Diamond/Legend) — used for UI colour.
-export function leagueTier(league) {
-  return String(league || '').split(' ')[0] || 'Bronze';
-}
-
 // Biweekly onboarding group from a date: day 1-15 -> first half, 16-end -> second half.
 // Returns e.g. "2026-06-01_to_2026-06-15". Uses UTC date parts (onboarding dates
 // in this system are stored at 09:00 IST = 03:30Z, so the UTC day matches intent).
@@ -66,20 +61,4 @@ export function leaderboardGroup(onboardingDate) {
 // "2026-06-01_to_2026-06-15" -> "2026-06-01 to 2026-06-15" (for display).
 export function groupLabel(group) {
   return String(group || '').replace('_to_', ' to ');
-}
-
-/**
- * Derive all level/league fields for a student.
- * highestSpEver never drops below the running max; current SP drives the league.
- */
-export function deriveLevels({ totalSp = 0, highestSpEver, internshipStartDate } = {}) {
-  const high = Math.max(Number(totalSp) || 0, Number(highestSpEver) || 0);
-  return {
-    currentSp: Number(totalSp) || 0,
-    highestSpEver: high,
-    level: levelFor(high),
-    trophyLeague: leagueBand(totalSp),
-    legendBadgeUnlocked: legendBadge(high),
-    leaderboardGroup: leaderboardGroup(internshipStartDate),
-  };
 }
