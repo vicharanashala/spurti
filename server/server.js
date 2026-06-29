@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { normalizeEmail, maskEmail } from './utils/email.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -151,18 +152,6 @@ const webhookLimiter = rateLimit({
 app.use('/api', generalLimiter);
 app.use('/spurti/api', generalLimiter);
 app.use(express.json({ limit: '2mb' }));
-
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function maskEmail(email) {
-  const [name, domain] = String(email || '').split('@');
-  if (!name || !domain) return 'hidden email';
-  const start = name.slice(0, Math.min(2, name.length));
-  const end = name.length > 4 ? name.slice(-2) : '';
-  return `${start}${'*'.repeat(Math.max(3, name.length - start.length - end.length))}${end}@${domain}`;
-}
 
 function publicStudent(student) {
   return {
