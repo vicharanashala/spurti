@@ -20,5 +20,6 @@ const spTransactionSchema = new mongoose.Schema({
 
 spTransactionSchema.index({ email: 1, dateTime: 1, createdAt: 1 });
 spTransactionSchema.index({ sessionLabel: 1, category: 1 });
+spTransactionSchema.index({ category: 1, appliedDelta: 1, email: 1 });
 
 export default mongoose.model('SPTransaction', spTransactionSchema);

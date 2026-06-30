@@ -28,5 +28,6 @@ const studentSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });
+studentSchema.index({ status: 1, totalSp: 1 });
 
 export default mongoose.model('Student', studentSchema);
