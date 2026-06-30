@@ -516,28 +516,130 @@ api.get('/admin/analytics', adminLimiter, adminGuard, async (_req, res) => {
   const now = new Date();
   const lastHour = new Date(now.getTime() - 60 * 60 * 1000);
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
   const last7Days = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  const [allStudents, sessions, attendance, transactions, events] = await Promise.all([
-    Student.find().lean(),
+  const [
+    statusCountsRaw,
+    activeStudentsRaw,
+    sessions,
+    attendanceTx,
+    transactionTx,
+    topDropsRaw,
+    todayEvents
+  ] = await Promise.all([
+    Student.aggregate([
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]),
+    Student.find({ status: 'active' })
+      .sort({ totalSp: -1 })
+      .lean()
+      .then(students => ({
+        count: students.length,
+        emails: students.map(s => s.email),
+        spValues: students.map(s => Number(s.totalSp || 0)).sort((a, b) => a - b)
+      })),
     Session.find().sort({ endDateTime: 1 }).lean(),
-    AttendanceRecord.find().lean(),
-    SPTransaction.find().lean(),
-    SessionEvent.find({ timestamp: { $gte: last30Days } }).lean()
+    AttendanceRecord.aggregate([
+      {
+        $lookup: {
+          from: 'students',
+          localField: 'email',
+          foreignField: 'email',
+          as: 'student'
+        }
+      },
+      { $match: { 'student.status': 'active' } },
+      { $replaceRoot: { newRoot: '$$ROOT' } }
+    ]),
+    SPTransaction.aggregate([
+      {
+        $lookup: {
+          from: 'students',
+          localField: 'email',
+          foreignField: 'email',
+          as: 'student'
+        }
+      },
+      { $match: { 'student.status': 'active' } }
+    ]),
+    SPTransaction.aggregate([
+      {
+        $match: {
+          category: { $in: ['attendance', 'poll'] },
+          appliedDelta: { $lt: 0 }
+        }
+      },
+      {
+        $lookup: {
+          from: 'students',
+          localField: 'email',
+          foreignField: 'email',
+          as: 'student'
+        }
+      },
+      { $match: { 'student.status': 'active' } },
+      {
+        $group: {
+          _id: '$email',
+          debitCount: { $sum: 1 },
+          debitSp: { $sum: { $abs: '$appliedDelta' } }
+        }
+      },
+      { $sort: { debitSp: -1 } },
+      { $limit: 10 },
+      {
+        $lookup: {
+          from: 'students',
+          localField: '_id',
+          foreignField: 'email',
+          as: 'student'
+        }
+      },
+      { $unwind: '$student' },
+      {
+        $project: {
+          _id: 0,
+          email: '$_id',
+          name: '$student.name',
+          debitCount: 1,
+          debitSp: 1
+        }
+      }
+    ]),
+    SessionEvent.find(
+      { timestamp: { $gte: todayStart, $lt: todayEnd } },
+      { email: 1, timestamp: 1 }
+    ).lean()
   ]);
-  const statusCounts = { active: 0, 'yet to onboard': 0, excused: 0 };
-  for (const s of allStudents) { if (s.status in statusCounts) statusCounts[s.status]++; }
-  const activeStudents = allStudents.filter(s => s.status === 'active');
-  const activeEmails = new Set(activeStudents.map(student => student.email));
-  const activeAttendance = attendance.filter(row => activeEmails.has(row.email));
-  const activeTransactions = transactions.filter(row => activeEmails.has(row.email));
-  const activeEvents = events.filter(row => activeEmails.has(row.email));
 
-  const uniqueSince = (date) => new Set(activeEvents.filter(e => e.timestamp >= date).map(e => e.email)).size;
-  const bucket = (date, mode) => {
-    const d = new Date(date);
-    if (mode === 'hour') return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:00`;
+  const statusCounts = { active: 0, 'yet to onboard': 0, excused: 0 };
+  for (const r of statusCountsRaw) {
+    if (r._id in statusCounts) statusCounts[r._id] = r.count;
+  }
+
+  const { count: activeCount, emails: activeEmails, spValues } = activeStudentsRaw;
+  const activeEmailSet = new Set(activeEmails);
+
+  const totalAttendeesToday = todayEvents.length;
+  const uniqueAttendeesToday = new Set(todayEvents.map(e => e.email)).size;
+  const inactiveToday = activeCount - uniqueAttendeesToday;
+
+  const uniqueSince = (date) => {
+    const emails = new Set(
+      todayEvents
+        .filter(e => e.timestamp >= date)
+        .map(e => e.email)
+    );
+    return emails.size;
+  };
+
+  const bucket = (ts, mode) => {
+    const d = new Date(ts);
+    if (mode === 'hour') {
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:00`;
+    }
     if (mode === 'week') {
       const first = new Date(d.getFullYear(), 0, 1);
       const week = Math.ceil((((d - first) / 86400000) + first.getDay() + 1) / 7);
@@ -545,20 +647,25 @@ api.get('/admin/analytics', adminLimiter, adminGuard, async (_req, res) => {
     }
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
   };
+
+  const hourEvents = todayEvents.filter(e => e.timestamp >= last24Hours(now));
   const series = (mode, from) => {
     const map = new Map();
-    for (const ev of activeEvents.filter(e => e.timestamp >= from)) {
+    for (const ev of hourEvents.filter(e => e.timestamp >= from)) {
       const key = bucket(ev.timestamp, mode);
       if (!map.has(key)) map.set(key, { label: key, events: 0, emails: new Set() });
       const row = map.get(key);
       row.events += 1;
       row.emails.add(ev.email);
     }
-    return [...map.values()].sort((a, b) => a.label.localeCompare(b.label)).map(r => ({ label: r.label, events: r.events, uniqueUsers: r.emails.size }));
+    return [...map.values()].sort((a, b) => a.label.localeCompare(b.label))
+      .map(r => ({ label: r.label, events: r.events, uniqueUsers: r.emails.size }));
   };
 
-  const activeNow = [...liveViewers.values()].filter(v => now.getTime() - v.lastSeen.getTime() <= 60_000).length;
-  const spValues = activeStudents.map(s => Number(s.totalSp || 0)).sort((a, b) => a - b);
+  const activeNow = [...liveViewers.values()].filter(
+    v => now.getTime() - v.lastSeen.getTime() <= 60_000
+  ).length;
+
   const avgSp = spValues.length ? Math.round(spValues.reduce((a, b) => a + b, 0) / spValues.length) : 0;
   const medianSp = spValues.length ? spValues[Math.floor(spValues.length / 2)] : 0;
   const spBands = {
@@ -569,7 +676,7 @@ api.get('/admin/analytics', adminLimiter, adminGuard, async (_req, res) => {
   };
 
   const attendanceBySession = sessions.map(session => {
-    const rows = activeAttendance.filter(a => a.sessionLabel === session.label);
+    const rows = attendanceTx.filter(a => a.sessionLabel === session.label);
     const qualified = rows.filter(r => r.qualified).length;
     const totalMinutes = rows.reduce((sum, r) => sum + Number(r.attendedMinutes || 0), 0);
     return {
@@ -584,7 +691,7 @@ api.get('/admin/analytics', adminLimiter, adminGuard, async (_req, res) => {
   });
 
   const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
-    const rows = activeTransactions.filter(t => t.category === category);
+    const rows = transactionTx.filter(t => t.category === category);
     return {
       category,
       count: rows.length,
@@ -593,16 +700,14 @@ api.get('/admin/analytics', adminLimiter, adminGuard, async (_req, res) => {
       debits: rows.filter(t => t.appliedDelta < 0).length
     };
   });
-  const attendanceDebits = activeTransactions.filter(t => t.category === 'attendance' && t.appliedDelta < 0);
-  const pollDebits = activeTransactions.filter(t => t.category === 'poll' && t.appliedDelta < 0);
-  const inactiveToday = activeStudents.length - new Set(activeEvents.filter(e => e.timestamp >= todayStart).map(e => e.email)).size;
-  const lowSp = activeStudents.filter(s => Number(s.totalSp || 0) < 100).length;
-  const topDrops = Object.values(attendanceDebits.concat(pollDebits).reduce((acc, txn) => {
-    if (!acc[txn.email]) acc[txn.email] = { email: txn.email, debitCount: 0, debitSp: 0 };
-    acc[txn.email].debitCount += 1;
-    acc[txn.email].debitSp += Math.abs(Number(txn.appliedDelta || 0));
-    return acc;
-  }, {})).sort((a, b) => b.debitSp - a.debitSp).slice(0, 10);
+
+  const attendanceDebits = transactionTx.filter(
+    t => t.category === 'attendance' && t.appliedDelta < 0
+  );
+  const pollDebits = transactionTx.filter(
+    t => t.category === 'poll' && t.appliedDelta < 0
+  );
+  const lowSp = spValues.filter(v => v < 100).length;
 
   res.json({
     live: { activeNow },
@@ -617,10 +722,12 @@ api.get('/admin/analytics', adminLimiter, adminGuard, async (_req, res) => {
     },
     attendance: {
       sessions: attendanceBySession,
-      overallQualifiedPct: activeAttendance.length ? Math.round((activeAttendance.filter(a => a.qualified).length / activeAttendance.length) * 100) : 0
+      overallQualifiedPct: attendanceTx.length
+        ? Math.round((attendanceTx.filter(a => a.qualified).length / attendanceTx.length) * 100)
+        : 0
     },
     sp: {
-      students: activeStudents.length,
+      students: activeCount,
       statusCounts,
       average: avgSp,
       median: medianSp,
@@ -634,7 +741,7 @@ api.get('/admin/analytics', adminLimiter, adminGuard, async (_req, res) => {
       inactiveToday,
       attendanceDebits: attendanceDebits.length,
       pollDebits: pollDebits.length,
-      topDrops
+      topDrops: topDropsRaw
     }
   });
 });
