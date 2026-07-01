@@ -1039,6 +1039,7 @@ function CreateServiceModal({ onClose, categories, onCreated }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [priceLoading, setPriceLoading] = useState(false);
+  const [verificationWindowHours, setVerificationWindowHours] = useState(24);
 
   const estimatePrice = async () => {
     if (!category || !duration) return;
@@ -1065,7 +1066,7 @@ function CreateServiceModal({ onClose, categories, onCreated }) {
       const res = await fetch(`${API}/marketplace/services`, {
         method: 'POST',
         headers: { ...devHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, description, category, difficulty, estimatedDuration: duration, urgency, estimatedPrice: estimatedPrice?.estimated })
+        body: JSON.stringify({ title, description, category, difficulty, estimatedDuration: duration, urgency, estimatedPrice: estimatedPrice?.estimated, verificationWindowHours })
       });
       if (!res.ok) {
         const data = await res.json();
@@ -1121,6 +1122,16 @@ function CreateServiceModal({ onClose, categories, onCreated }) {
               <option value="urgent">Urgent (+50%)</option>
             </select>
           </div>
+          <div className="form-group">
+            <label>Verification Window (hours)</label>
+            <select value={verificationWindowHours} onChange={e => setVerificationWindowHours(Number(e.target.value))}>
+              <option value={12}>12 hours</option>
+              <option value={24}>24 hours</option>
+              <option value={48}>48 hours</option>
+              <option value={72}>72 hours</option>
+            </select>
+            <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>Payment auto-releases after this period post-delivery</p>
+          </div>
         </div>
         {estimatedPrice && (
           <div className="price-estimate">
@@ -1159,7 +1170,9 @@ function ServiceDetailModal({ service, student, onClose, onUpdate }) {
     String(assignedProvider?.applicantId?._id || '') === String(student?._id || '');
   const hasAcceptedApplication = assignedProvider?.applicantId?._id && assignedProvider?.status === 'accepted' && String(assignedProvider.applicantId._id) === String(student?._id);
   const canApply = !isOwner && !isProvider && !hasAcceptedApplication && serviceData.status === 'open';
-  const canComplete = (isOwner || isProvider) && (serviceData.status === 'assigned' || serviceData.status === 'in_progress');
+  const canLockPayment = isOwner && serviceData.status === 'in_negotiation' && serviceData.paymentStatus !== 'locked';
+  const canMarkDelivered = isProvider && (serviceData.status === 'in_negotiation' || serviceData.status === 'in_progress');
+  const canApproveRelease = isOwner && serviceData.status === 'delivered' && serviceData.paymentStatus === 'locked';
   const isParticipant = isOwner || isProvider || hasAcceptedApplication;
 
   useEffect(() => { loadServiceData(); }, [service._id]);
@@ -1279,7 +1292,24 @@ function ServiceDetailModal({ service, student, onClose, onUpdate }) {
     }
   };
 
-  const statusColors = { open: '#10b981', assigned: '#f59e0b', in_progress: '#3b82f6', completed: '#6366f1', cancelled: '#6b7280', disputed: '#ef4444' };
+  const statusColors = { open: '#10b981', in_negotiation: '#f59e0b', assigned: '#f59e0b', in_progress: '#3b82f6', delivered: '#8b5cf6', completed: '#6366f1', cancelled: '#6b7280', disputed: '#ef4444' };
+  const paymentStatusColors = { unlocked: '#6b7280', locked: '#f59e0b', released: '#10b981', refunded: '#ef4444', expired: '#ef4444' };
+
+  const handleLockPayment = async () => {
+    setSubmitting(true);
+    const res = await fetch(`${API}/marketplace/services/${service._id}/lock-payment`, {
+      method: 'POST',
+      headers: { ...devHeaders(), 'Content-Type': 'application/json' }
+    });
+    const data = await res.json();
+    setSubmitting(false);
+    if (res.ok) {
+      setAppMsg(data.message);
+      loadServiceData();
+    } else {
+      setAppMsg(data.error || 'Failed to lock payment');
+    }
+  };
 
   return (
     <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -1310,8 +1340,12 @@ function ServiceDetailModal({ service, student, onClose, onUpdate }) {
               {(serviceData.providerId?.name || assignedProvider?.applicantId?.name) && (
                 <span className="meta-tag provider">Provider: {serviceData.providerId?.name || assignedProvider?.applicantId?.name}</span>
               )}
-              {(serviceData.escrowAmount > 0 || escrowStatus?.amount > 0) && (
-                <span className="meta-tag escrow">{(serviceData.escrowAmount || escrowStatus?.amount)} SP in escrow</span>
+              {serviceData.paymentStatus && serviceData.paymentStatus !== 'unlocked' && (
+                <span className="meta-tag" style={{ color: paymentStatusColors[serviceData.paymentStatus] }}>
+                  {serviceData.paymentStatus === 'locked' && serviceData.releaseAt
+                    ? `Payment locked — releases ${new Date(serviceData.releaseAt).toLocaleString()}`
+                    : `Payment: ${serviceData.paymentStatus}`}
+                </span>
               )}
             </div>
 
@@ -1333,13 +1367,56 @@ function ServiceDetailModal({ service, student, onClose, onUpdate }) {
                   </div>
                 )}
 
-                {canComplete && (
-                  <div className="action-card">
-                    <h4>Complete this request</h4>
-                    <p>{isProvider ? 'Mark as in progress when you start working.' : 'Approve and release payment to the provider.'}</p>
-                    <button className="primary full-width" onClick={markComplete} disabled={submitting}>
-                      {submitting ? 'Processing...' : isProvider ? 'Mark In Progress' : 'Approve & Release Payment'}
+                {serviceData.status === 'in_negotiation' && isOwner && !canLockPayment && serviceData.paymentStatus === 'locked' && (
+                  <div className="action-card" style={{ borderColor: '#f59e0b' }}>
+                    <h4>Payment Locked</h4>
+                    <p>SP has been deducted and is in escrow. Once the provider delivers and the verification window passes, payment releases automatically.</p>
+                  </div>
+                )}
+
+                {serviceData.status === 'in_negotiation' && isOwner && serviceData.paymentStatus !== 'locked' && (
+                  <div className="action-card" style={{ borderColor: '#ef4444' }}>
+                    <h4>Action Required: Lock Payment</h4>
+                    <p>Your SP ({serviceData.estimatedPrice}) will be held in escrow and released to the provider after the verification window. This protects both parties.</p>
+                    <button className="primary full-width" onClick={handleLockPayment} disabled={submitting}>
+                      {submitting ? 'Locking...' : `Lock ${serviceData.estimatedPrice} SP`}
                     </button>
+                  </div>
+                )}
+
+                {serviceData.status === 'in_negotiation' && isProvider && (
+                  <div className="action-card" style={{ borderColor: '#3b82f6' }}>
+                    <h4>Waiting for buyer to lock payment</h4>
+                    <p>The buyer must lock the SP before you can start work. You can discuss in the thread below.</p>
+                  </div>
+                )}
+
+                {canMarkDelivered && (
+                  <div className="action-card" style={{ borderColor: '#8b5cf6' }}>
+                    <h4>{serviceData.status === 'in_negotiation' ? 'Start Work' : 'Mark as Delivered'}</h4>
+                    <p>{serviceData.status === 'in_negotiation'
+                      ? 'Click to begin working. When done, mark as delivered to start the verification window.'
+                      : 'Click when you have completed the work. Payment will auto-release after the verification window.'}</p>
+                    <button className="primary full-width" onClick={markComplete} disabled={submitting}>
+                      {submitting ? 'Processing...' : serviceData.status === 'in_negotiation' ? 'Start Working' : 'Mark Delivered'}
+                    </button>
+                  </div>
+                )}
+
+                {serviceData.status === 'delivered' && serviceData.paymentStatus === 'locked' && (
+                  <div className="action-card" style={{ borderColor: '#8b5cf6' }}>
+                    <h4>Work Delivered — Verification Active</h4>
+                    <p>Provider marked as delivered. Payment will auto-release after the verification window ({serviceData.verificationWindowHours || 24}h). You can also approve early.</p>
+                    <button className="primary full-width" onClick={markComplete} disabled={submitting}>
+                      {submitting ? 'Releasing...' : 'Approve & Release Now'}
+                    </button>
+                  </div>
+                )}
+
+                {serviceData.status === 'completed' && (
+                  <div className="action-card" style={{ borderColor: '#10b981' }}>
+                    <h4>Completed</h4>
+                    <p>Payment has been released to the provider.</p>
                   </div>
                 )}
 
@@ -1390,10 +1467,10 @@ function ServiceDetailModal({ service, student, onClose, onUpdate }) {
                   </div>
                 )}
 
-                {(serviceData.status === 'assigned' || serviceData.status === 'in_progress') && !isOwner && (
+                {(serviceData.status === 'delivered' && serviceData.paymentStatus !== 'locked' && !isOwner) && (
                   <div className="action-card">
-                    <h4>Work in progress</h4>
-                    <p>This request has been assigned to {serviceData.providerId?.name || 'a helper'}. Payment will be released upon completion.</p>
+                    <h4>Work delivered — awaiting payment lock</h4>
+                    <p>Waiting for buyer to lock payment.</p>
                   </div>
                 )}
               </div>

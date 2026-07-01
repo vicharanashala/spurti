@@ -14,7 +14,7 @@ const serviceSchema = new mongoose.Schema({
   deadline: { type: Date, default: null },
   status: {
     type: String,
-    enum: ['open', 'assigned', 'in_progress', 'completed', 'cancelled', 'disputed'],
+    enum: ['open', 'in_negotiation', 'assigned', 'in_progress', 'delivered', 'completed', 'cancelled', 'disputed'],
     default: 'open',
     index: true
   },
@@ -41,6 +41,15 @@ const serviceSchema = new mongoose.Schema({
   applicationCount: { type: Number, default: 0 },
   isAiRecommended: { type: Boolean, default: false },
   recommendedProviderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', default: null },
+  verificationWindowHours: { type: Number, default: 24 },
+  paymentStatus: {
+    type: String,
+    enum: ['unlocked', 'locked', 'released', 'refunded', 'expired'],
+    default: 'unlocked'
+  },
+  lockedAt: { type: Date, default: null },
+  releaseAt: { type: Date, default: null },
+  confirmedAt: { type: Date, default: null },
   messages: [{
     senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', default: null },
     senderEmail: { type: String, default: '' },

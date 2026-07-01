@@ -10,7 +10,7 @@ import MarketplaceTransaction from '../models/MarketplaceTransaction.js';
 import Student from '../models/Student.js';
 import { estimatePrice, getDynamicPrice } from '../services/pricingEngine.js';
 import { findRecommendedHelpers, analyzeApplication, getTopHelpers } from '../services/matchingEngine.js';
-import { holdInEscrow, releaseEscrow, refundEscrow, getEscrowStatus } from '../services/escrowService.js';
+import { holdInEscrow, lockPayment, releaseEscrow, refundEscrow, getEscrowStatus, processVerificationWindows } from '../services/escrowService.js';
 import { getReputationProfile, getOrCreateReputation, updateReputationAfterTransaction, updateSkillRating } from '../services/reputationService.js';
 import { getSamagamaUser } from '../services/authService.js';
 
@@ -72,7 +72,7 @@ function requireAdmin(req, res, next) {
 
 router.post('/services', populateStudentFromRequest, async (req, res) => {
   try {
-    const { title, description, category, subcategory, difficulty, estimatedDuration, deadline, priceType, estimatedPrice, priceRangeMin, priceRangeMax, urgency, tags } = req.body;
+    const { title, description, category, subcategory, difficulty, estimatedDuration, deadline, priceType, estimatedPrice, priceRangeMin, priceRangeMax, urgency, tags, verificationWindowHours } = req.body;
 
     if (!title || !description || !category || !estimatedDuration) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -98,7 +98,8 @@ router.post('/services', populateStudentFromRequest, async (req, res) => {
       urgency: urgency || 'normal',
       tags: tags || [],
       buyerId: student._id,
-      buyerEmail: student.email.toLowerCase()
+      buyerEmail: student.email.toLowerCase(),
+      verificationWindowHours: verificationWindowHours || 24
     });
 
     res.status(201).json({ success: true, service });
@@ -317,48 +318,63 @@ router.post('/services/:id/accept', populateStudentFromRequest, async (req, res)
       { $set: { status: 'rejected' } }
     );
 
-    await ServiceApplication.updateOne(
-      { _id: applicationId },
-      { $set: { status: 'accepted', respondedAt: new Date() } }
-    );
-
-    const updateResult = await Service.updateOne(
+    await Service.updateOne(
       { _id: service._id },
       {
         $set: {
           providerId: application.applicantId,
           providerEmail: application.applicantEmail.toLowerCase(),
           providerAcceptedAt: new Date(),
-          status: 'assigned',
+          status: 'in_negotiation',
           estimatedPrice: application.proposedPrice
         }
       }
     );
 
-    if (!updateResult.modifiedCount) {
-      return res.status(500).json({ error: 'Failed to assign provider' });
-    }
-
-    let escrowResult;
-    try {
-      escrowResult = await holdInEscrow({
-        serviceId: service._id,
-        buyerId: service.buyerId,
-        buyerEmail: service.buyerEmail,
-        amount: application.proposedPrice,
-        providerEmail: application.applicantEmail
-      });
-    } catch (escrowError) {
-      await Service.updateOne(
-        { _id: service._id },
-        { $set: { status: 'open', providerId: null, providerEmail: null } }
-      );
-      return res.status(400).json({ error: escrowError.message || 'Escrow failed. Provider unassigned.' });
-    }
-
     await getOrCreateReputation(application.applicantId, application.applicantEmail);
 
-    res.json({ success: true, escrow: escrowResult });
+    res.json({ success: true, message: 'Application accepted. Buyer must lock payment before work begins.' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/services/:id/lock-payment', populateStudentFromRequest, async (req, res) => {
+  try {
+    const service = await Service.findById(req.params.id);
+    if (!service) return res.status(404).json({ error: 'Service not found' });
+
+    if (String(service.buyerId?._id || service.buyerId) !== String(req.student._id)) {
+      return res.status(403).json({ error: 'Only the buyer can lock payment' });
+    }
+
+    if (service.status !== 'in_negotiation') {
+      return res.status(400).json({ error: 'Service must be in negotiation status to lock payment' });
+    }
+
+    if (service.paymentStatus === 'locked') {
+      return res.status(400).json({ error: 'Payment already locked' });
+    }
+
+    const verificationWindowHours = service.verificationWindowHours || 24;
+
+    const lockResult = await lockPayment({
+      serviceId: service._id,
+      buyerId: service.buyerId,
+      buyerEmail: service.buyerEmail,
+      amount: service.estimatedPrice,
+      providerEmail: service.providerEmail,
+      verificationWindowHours
+    });
+
+    res.json({
+      success: true,
+      message: `Payment locked! SP will release to provider after ${verificationWindowHours}h verification window (expires: ${lockResult.releaseAt.toLocaleString()})`,
+      lockedAt: lockResult.lockedAt,
+      releaseAt: lockResult.releaseAt,
+      heldAmount: lockResult.heldAmount,
+      yourBalanceAfter: lockResult.newBalance
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -376,29 +392,44 @@ router.post('/services/:id/complete', populateStudentFromRequest, async (req, re
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    if (service.status !== 'assigned' && service.status !== 'in_progress') {
-      return res.status(400).json({ error: 'Service cannot be marked complete' });
-    }
-
     if (isProvider) {
-      await Service.updateOne({ _id: service._id }, { $set: { status: 'in_progress' } });
-      return res.json({ success: true, message: 'Service marked as in progress' });
+      if (service.status === 'in_negotiation' || service.status === 'assigned') {
+        await Service.updateOne({ _id: service._id }, { $set: { status: 'in_progress' } });
+        return res.json({ success: true, message: 'Work started. Mark as delivered when complete.' });
+      }
+      if (service.status === 'in_progress') {
+        await Service.updateOne({ _id: service._id }, { $set: { status: 'delivered' } });
+        return res.json({
+          success: true,
+          message: service.paymentStatus === 'locked'
+            ? 'Work delivered! Payment will auto-release after the verification window.'
+            : 'Work delivered. Waiting for buyer to lock payment first.'
+        });
+      }
+      return res.status(400).json({ error: 'Cannot mark complete in current status' });
     }
 
-    await releaseEscrow({
-      serviceId: service._id,
-      providerId: service.providerId,
-      providerEmail: service.providerEmail
-    });
-
-    await updateReputationAfterTransaction({
-      serviceId: service._id,
-      buyerId: service.buyerId,
-      providerId: service.providerId,
-      isSuccessful: true
-    });
-
-    res.json({ success: true, message: 'Service completed and payment released' });
+    if (isBuyer) {
+      if (service.status === 'in_progress') {
+        return res.status(400).json({ error: 'Work not yet delivered. Wait for provider to mark delivered.' });
+      }
+      if (service.paymentStatus === 'locked' && service.status === 'delivered') {
+        const result = await releaseEscrow({
+          serviceId: service._id,
+          providerId: service.providerId,
+          providerEmail: service.providerEmail
+        });
+        await Service.updateOne({ _id: service._id }, { $set: { paymentStatus: 'released', confirmedAt: new Date() } });
+        await updateReputationAfterTransaction({
+          serviceId: service._id,
+          buyerId: service.buyerId,
+          providerId: service.providerId,
+          isSuccessful: true
+        });
+        return res.json({ success: true, message: 'Payment released to provider!' });
+      }
+      return res.status(400).json({ error: 'Payment not yet locked or work not delivered' });
+    }
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -773,7 +804,7 @@ router.get('/services/:id/messages', populateStudentFromRequest, async (req, res
     const isProvider = String(service.providerId?._id || service.providerId) === String(req.student._id);
     const hasAcceptedApp = await ServiceApplication.findOne({
       serviceId: service._id,
-      applicantId: req.student._id,
+      applicantEmail: req.student.email.toLowerCase(),
       status: 'accepted'
     });
     const isParticipant = isBuyer || isProvider || !!hasAcceptedApp;
@@ -798,7 +829,7 @@ router.post('/services/:id/messages', populateStudentFromRequest, async (req, re
     const isProvider = String(service.providerId?._id || service.providerId) === String(req.student._id);
     const hasAcceptedApp = await ServiceApplication.findOne({
       serviceId: service._id,
-      applicantId: req.student._id,
+      applicantEmail: req.student.email.toLowerCase(),
       status: 'accepted'
     });
     const isParticipant = isBuyer || isProvider || !!hasAcceptedApp;
