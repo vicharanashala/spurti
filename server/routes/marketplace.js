@@ -769,9 +769,14 @@ router.get('/services/:id/messages', populateStudentFromRequest, async (req, res
     const service = await Service.findById(req.params.id);
     if (!service) return res.status(404).json({ error: 'Service not found' });
 
-    const isParticipant =
-      String(service.buyerId?._id || service.buyerId) === String(req.student._id) ||
-      String(service.providerId?._id || service.providerId) === String(req.student._id);
+    const isBuyer = String(service.buyerId?._id || service.buyerId) === String(req.student._id);
+    const isProvider = String(service.providerId?._id || service.providerId) === String(req.student._id);
+    const hasAcceptedApp = await ServiceApplication.findOne({
+      serviceId: service._id,
+      applicantId: req.student._id,
+      status: 'accepted'
+    });
+    const isParticipant = isBuyer || isProvider || !!hasAcceptedApp;
 
     if (!isParticipant) return res.status(403).json({ error: 'Not authorized' });
 
@@ -789,9 +794,14 @@ router.post('/services/:id/messages', populateStudentFromRequest, async (req, re
     const service = await Service.findById(req.params.id);
     if (!service) return res.status(404).json({ error: 'Service not found' });
 
-    const isParticipant =
-      String(service.buyerId?._id || service.buyerId) === String(req.student._id) ||
-      String(service.providerId?._id || service.providerId) === String(req.student._id);
+    const isBuyer = String(service.buyerId?._id || service.buyerId) === String(req.student._id);
+    const isProvider = String(service.providerId?._id || service.providerId) === String(req.student._id);
+    const hasAcceptedApp = await ServiceApplication.findOne({
+      serviceId: service._id,
+      applicantId: req.student._id,
+      status: 'accepted'
+    });
+    const isParticipant = isBuyer || isProvider || !!hasAcceptedApp;
 
     if (!isParticipant) return res.status(403).json({ error: 'Not authorized' });
 

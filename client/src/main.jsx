@@ -1149,27 +1149,33 @@ function ServiceDetailModal({ service, student, onClose, onUpdate }) {
   const [replyText, setReplyText] = useState('');
   const [messages, setMessages] = useState([]);
   const [postingMsg, setPostingMsg] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [applications, setApplications] = useState([]);
 
-  const isOwner = String(serviceData.buyerId?._id) === String(student?._id) || serviceData.buyerEmail === student?.email;
+  const isOwner = String(serviceData.buyerId?._id || serviceData.buyerId || '') === String(student?._id || '') || serviceData.buyerEmail === student?.email;
   const isProvider =
     String(serviceData.providerId?._id || serviceData.providerId || '') === String(student?._id || '') ||
     String(serviceData.providerEmail || '') === String(student?.email || '') ||
     String(assignedProvider?.applicantId?._id || '') === String(student?._id || '');
-  const canApply = !isOwner && !isProvider && serviceData.status === 'open';
+  const hasAcceptedApplication = assignedProvider?.applicantId?._id && assignedProvider?.status === 'accepted' && String(assignedProvider.applicantId._id) === String(student?._id);
+  const canApply = !isOwner && !isProvider && !hasAcceptedApplication && serviceData.status === 'open';
   const canComplete = (isOwner || isProvider) && (serviceData.status === 'assigned' || serviceData.status === 'in_progress');
-  const isParticipant = isOwner || isProvider;
+  const isParticipant = isOwner || isProvider || hasAcceptedApplication;
 
   useEffect(() => { loadServiceData(); }, [service._id]);
 
   const loadServiceData = async () => {
     try {
       const res = await fetch(`${API}/marketplace/services/${service._id}`, { headers: devHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        setServiceData(data.service);
-        setAssignedProvider(data.assignedProvider || null);
-        setEscrowStatus(data.escrowStatus || null);
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.service) throw new Error('No service data returned');
+      setServiceData(data.service);
+      setAssignedProvider(data.assignedProvider || null);
+      setEscrowStatus(data.escrowStatus || null);
+      setLoadError('');
+    } catch (err) {
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -1288,6 +1294,8 @@ function ServiceDetailModal({ service, student, onClose, onUpdate }) {
 
         {loading ? (
           <p className="muted">Loading...</p>
+        ) : loadError ? (
+          <p className="error">Failed to load: {loadError}</p>
         ) : (
           <>
             <p className="service-desc-full">{serviceData.description}</p>

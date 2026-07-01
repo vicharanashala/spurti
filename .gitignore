@@ -37,3 +37,6 @@ Thumbs.db
 
 # Local dev seed scripts
 server/scripts/seedMarketplaceStudents.js
+
+# Product documentation — contains internal design notes
+product.md
