@@ -1000,8 +1000,8 @@ function MarketplaceView({ student }) {
         )
       )}
 
-      {showCreate && <CreateServiceModal onClose={() => setShowCreate(false)} categories={categories} devEmail={devEmail} onCreated={() => { setShowCreate(false); loadServices(); loadMyServices(); }} />}
-      {selectedService && <ServiceDetailModal service={selectedService} student={student} devEmail={devEmail} onClose={() => setSelectedService(null)} onUpdate={loadServices} />}
+      {showCreate && <CreateServiceModal onClose={() => setShowCreate(false)} categories={categories} onCreated={() => { setShowCreate(false); loadServices(); loadMyServices(); }} />}
+      {selectedService && <ServiceDetailModal service={selectedService} student={student} onClose={() => setSelectedService(null)} onUpdate={loadServices} />}
     </section>
   );
 }
@@ -1139,7 +1139,7 @@ function CreateServiceModal({ onClose, categories, onCreated }) {
   );
 }
 
-function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
+function ServiceDetailModal({ service, student, onClose, onUpdate }) {
   const [serviceData, setServiceData] = useState(service);
   const [assignedProvider, setAssignedProvider] = useState(null);
   const [escrowStatus, setEscrowStatus] = useState(null);
