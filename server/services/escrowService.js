@@ -96,14 +96,14 @@ export async function lockPayment({ serviceId, buyerId, buyerEmail, amount, prov
   };
 }
 
-export async function releaseEscrow({ serviceId, providerId, providerEmail }) {
+export async function releaseEscrow({ serviceId, providerId, providerEmail, amount: partialAmount }) {
   const service = await Service.findOne({ _id: serviceId });
   if (!service) throw new Error('Service not found');
   if (service.status !== 'assigned' && service.status !== 'in_progress' && service.status !== 'delivered') {
     throw new Error('Service is not in a releasable state');
   }
 
-  const amount = service.escrowAmount;
+  const amount = partialAmount ?? service.escrowAmount;
   const buyerEmail = service.buyerEmail;
 
   const provider = await Student.findOne({ _id: providerId });

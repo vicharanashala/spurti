@@ -8,9 +8,9 @@ import Reputation from '../models/Reputation.js';
 import SkillProfile from '../models/SkillProfile.js';
 import MarketplaceTransaction from '../models/MarketplaceTransaction.js';
 import Student from '../models/Student.js';
-import { estimatePrice, getDynamicPrice } from '../services/pricingEngine.js';
+import { estimatePrice } from '../services/pricingEngine.js';
 import { findRecommendedHelpers, analyzeApplication, getTopHelpers } from '../services/matchingEngine.js';
-import { holdInEscrow, lockPayment, releaseEscrow, refundEscrow, getEscrowStatus, processVerificationWindows } from '../services/escrowService.js';
+import { lockPayment, releaseEscrow, refundEscrow, getEscrowStatus } from '../services/escrowService.js';
 import { getReputationProfile, getOrCreateReputation, updateReputationAfterTransaction, updateSkillRating } from '../services/reputationService.js';
 import { getSamagamaUser } from '../services/authService.js';
 
@@ -318,6 +318,8 @@ router.post('/services/:id/accept', populateStudentFromRequest, async (req, res)
       { $set: { status: 'rejected' } }
     );
 
+    await ServiceApplication.findByIdAndUpdate(applicationId, { $set: { status: 'accepted' } });
+
     await Service.updateOne(
       { _id: service._id },
       {
@@ -525,6 +527,7 @@ router.post('/reviews', populateStudentFromRequest, async (req, res) => {
     const reviewer = await Student.findOne({ email: req.student.email });
     const revieweeId = isBuyer ? service.providerId : service.buyerId;
     const reviewee = await Student.findById(revieweeId);
+    if (!reviewee) return res.status(404).json({ error: 'Reviewee not found' });
 
     const existing = await Review.findOne({ serviceId, reviewerId: reviewer._id });
     if (existing) return res.status(400).json({ error: 'Already reviewed this service' });
@@ -638,14 +641,15 @@ router.post('/disputes/:id/resolve', requireAdmin, async (req, res) => {
           serviceId: dispute.serviceId,
           buyerId: service.buyerId,
           buyerEmail: service.buyerEmail,
-          reason: `Dispute resolved (partial refund): ${reason}`
+          reason: `Dispute resolved (partial refund of ${refundPercentage}%): ${reason}`
         });
       }
       if (providerShare > 0) {
         await releaseEscrow({
           serviceId: dispute.serviceId,
           providerId: service.providerId,
-          providerEmail: service.providerEmail
+          providerEmail: service.providerEmail,
+          amount: providerShare
         });
       }
     }
