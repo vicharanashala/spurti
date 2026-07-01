@@ -2,17 +2,22 @@ import React, { useEffect, useMemo, useRef, useState, createContext, useContext 
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
-const API = `${APP_BASE}/api`;
-
 const DevContext = createContext(null);
 
 export function useDevEmail() {
   return useContext(DevContext);
 }
 
-function devHeaders(devEmail) {
-  return devEmail ? { 'x-dev-email': devEmail } : {};
+const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
+const API = `${APP_BASE}/api`;
+
+function devHeaders() {
+  const email = localStorage.getItem('dev_email');
+  return email ? { 'x-dev-email': email } : {};
+}
+
+function getDevEmail() {
+  return localStorage.getItem('dev_email');
 }
 
 function App() {
@@ -25,7 +30,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [devEmail, setDevEmail] = useState(() => localStorage.getItem('dev_email') || null);
 
-  const pingHeaders = useMemo(() => ({ ...devHeaders(devEmail), 'Content-Type': 'application/json' }), [devEmail]);
+  const pingHeaders = useMemo(() => ({ ...devHeaders(), 'Content-Type': 'application/json' }), []);
 
   useEffect(() => {
     if (!profile?.student) return;
@@ -54,7 +59,7 @@ function App() {
         setConfig(nextConfig);
 
         if (view !== 'admin-login') {
-          const meRes = await fetch(`${API}/me`, { headers: devHeaders(devEmail) });
+          const meRes = await fetch(`${API}/me`, { headers: devHeaders() });
           if (meRes.ok) {
             const data = await meRes.json();
             if (data.authenticated && data.profile && active) {
@@ -288,8 +293,7 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack, onDevEmailChange }) {
-  const devEmail = useDevEmail();
+function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -310,7 +314,7 @@ function StudentView({ profile, onBack, onDevEmailChange }) {
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
-      {tab === 'marketplace' && <MarketplaceView student={student} devEmail={devEmail} />}
+      {tab === 'marketplace' && <MarketplaceView student={student} />}
     </main>
   );
 }
@@ -877,7 +881,7 @@ function SurveyModal({ survey, student, onDone }) {
 
 createRoot(document.getElementById('root')).render(<App />);
 
-function MarketplaceView({ student, devEmail }) {
+function MarketplaceView({ student }) {
   const [subTab, setSubTab] = useState('browse');
   const [services, setServices] = useState([]);
   const [myServices, setMyServices] = useState([]);
@@ -888,7 +892,7 @@ function MarketplaceView({ student, devEmail }) {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedService, setSelectedService] = useState(null);
 
-  const mpHeaders = useMemo(() => devHeaders(devEmail), [devEmail]);
+  const mpHeaders = useMemo(() => devHeaders(), []);
 
   useEffect(() => {
     loadCategories();
@@ -1024,7 +1028,7 @@ function ServiceCard({ service, application, onClick, isOwner }) {
   );
 }
 
-function CreateServiceModal({ onClose, categories, devEmail, onCreated }) {
+function CreateServiceModal({ onClose, categories, onCreated }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('');
@@ -1041,7 +1045,7 @@ function CreateServiceModal({ onClose, categories, devEmail, onCreated }) {
     setPriceLoading(true);
     const res = await fetch(`${API}/marketplace/estimate-price`, {
       method: 'POST',
-      headers: { ...devHeaders(devEmail), 'Content-Type': 'application/json' },
+      headers: { ...devHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ category, difficulty, estimatedDuration: duration, urgency })
     });
     if (res.ok) {
@@ -1060,7 +1064,7 @@ function CreateServiceModal({ onClose, categories, devEmail, onCreated }) {
     try {
       const res = await fetch(`${API}/marketplace/services`, {
         method: 'POST',
-        headers: { ...devHeaders(devEmail), 'Content-Type': 'application/json' },
+        headers: { ...devHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, description, category, difficulty, estimatedDuration: duration, urgency, estimatedPrice: estimatedPrice?.estimated })
       });
       if (!res.ok) {
@@ -1155,7 +1159,7 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
 
   const loadServiceData = async () => {
     try {
-      const res = await fetch(`${API}/marketplace/services/${service._id}`, { headers: devHeaders(devEmail) });
+      const res = await fetch(`${API}/marketplace/services/${service._id}`, { headers: devHeaders() });
       if (res.ok) {
         const data = await res.json();
         setServiceData(data.service);
@@ -1167,7 +1171,7 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
 
   const loadApplications = async () => {
     if (!isOwner) return;
-    const res = await fetch(`${API}/marketplace/services/${service._id}/applications`, { headers: devHeaders(devEmail) });
+    const res = await fetch(`${API}/marketplace/services/${service._id}/applications`, { headers: devHeaders() });
     if (res.ok) {
       const data = await res.json();
       setApplications(data.applications || []);
@@ -1187,7 +1191,7 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
   }, [isParticipant, serviceData.status]);
 
   const loadMessages = async () => {
-    const res = await fetch(`${API}/marketplace/services/${service._id}/messages`, { headers: devHeaders(devEmail) });
+    const res = await fetch(`${API}/marketplace/services/${service._id}/messages`, { headers: devHeaders() });
     if (res.ok) {
       const data = await res.json();
       setMessages(data.messages || []);
@@ -1198,7 +1202,7 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
     setSubmitting(true);
     const res = await fetch(`${API}/marketplace/services/${service._id}/apply`, {
       method: 'POST',
-      headers: { ...devHeaders(devEmail), 'Content-Type': 'application/json' },
+      headers: { ...devHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({})
     });
     const data = await res.json();
@@ -1215,7 +1219,7 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
     setSubmitting(true);
     const res = await fetch(`${API}/marketplace/services/${service._id}/accept`, {
       method: 'POST',
-      headers: { ...devHeaders(devEmail), 'Content-Type': 'application/json' },
+      headers: { ...devHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ applicationId: app._id })
     });
     if (res.ok) {
@@ -1233,7 +1237,7 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
     setSubmitting(true);
     const res = await fetch(`${API}/marketplace/services/${service._id}/complete`, {
       method: 'POST',
-      headers: devHeaders(devEmail)
+      headers: devHeaders()
     });
     if (res.ok) {
       onUpdate?.();
@@ -1251,7 +1255,7 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
     try {
       const res = await fetch(`${API}/marketplace/services/${service._id}/messages`, {
         method: 'POST',
-        headers: { ...devHeaders(devEmail), 'Content-Type': 'application/json' },
+        headers: { ...devHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: replyText.trim() })
       });
       if (res.ok) {
