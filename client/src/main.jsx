@@ -1,9 +1,19 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, createContext, useContext } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
+
+const DevContext = createContext(null);
+
+export function useDevEmail() {
+  return useContext(DevContext);
+}
+
+function devHeaders(devEmail) {
+  return devEmail ? { 'x-dev-email': devEmail } : {};
+}
 
 function App() {
   const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('admin') === '1' ? 'admin-login' : 'landing');
@@ -13,12 +23,15 @@ function App() {
   const [adminAuth, setAdminAuth] = useState(null);
   const [config, setConfig] = useState({ allowStudentSearch: true });
   const [loading, setLoading] = useState(true);
+  const [devEmail, setDevEmail] = useState(() => localStorage.getItem('dev_email') || null);
+
+  const pingHeaders = useMemo(() => ({ ...devHeaders(devEmail), 'Content-Type': 'application/json' }), [devEmail]);
 
   useEffect(() => {
     if (!profile?.student) return;
     const send = () => fetch(`${API}/ping`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: pingHeaders,
       body: JSON.stringify({
         email: profile.student.email,
         name: profile.student.name,
@@ -29,7 +42,7 @@ function App() {
     send();
     const id = setInterval(send, 30000);
     return () => clearInterval(id);
-  }, [profile]);
+  }, [profile, pingHeaders]);
 
   useEffect(() => {
     let active = true;
@@ -41,7 +54,7 @@ function App() {
         setConfig(nextConfig);
 
         if (view !== 'admin-login') {
-          const meRes = await fetch(`${API}/me`);
+          const meRes = await fetch(`${API}/me`, { headers: devHeaders(devEmail) });
           if (meRes.ok) {
             const data = await meRes.json();
             if (data.authenticated && data.profile && active) {
@@ -61,21 +74,33 @@ function App() {
     }
     bootstrap();
     return () => { active = false; };
-  }, []);
+  }, [devEmail]);
+
+  const handleStudentLogin = (data) => {
+    if (data?.excused) {
+      setExcused(data);
+      setProfile(null);
+      setView('excused');
+      return;
+    }
+    setProfile(data);
+    setExcused(null);
+    setView('student');
+  };
 
   if (loading) {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
   }
   if (view === 'student' && profile) {
     return (
-      <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+      <DevContext.Provider value={devEmail}>
+        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} onDevEmailChange={setDevEmail} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
           onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, surveyCompleted: true } }))}
         />
-      </>
+      </DevContext.Provider>
     );
   }
   if (view === 'excused' && excused) {
@@ -87,20 +112,10 @@ function App() {
   if (view === 'admin' && admin && adminAuth) {
     return <AdminView admin={admin} auth={adminAuth} onBack={() => setView('landing')} />;
   }
-  return <Landing config={config} onStudent={(data) => {
-    if (data?.excused) {
-      setExcused(data);
-      setProfile(null);
-      setView('excused');
-      return;
-    }
-    setProfile(data);
-    setExcused(null);
-    setView('student');
-  }} />;
+  return <Landing config={config} onStudent={handleStudentLogin} devEmail={devEmail} onDevEmailChange={(email) => { setDevEmail(email); localStorage.setItem('dev_email', email || ''); }} />;
 }
 
-function Landing({ config, onStudent }) {
+function Landing({ config, onStudent, devEmail, onDevEmailChange }) {
   const [searchOpen, setSearchOpen] = useState(false);
 
   return (
@@ -115,19 +130,39 @@ function Landing({ config, onStudent }) {
             <Info title="How to get points" text="Attend eligible sessions and answer polls to keep your engagement visible." />
             <Info title="Motive" text="To make consistency visible and help the cohort build disciplined learning habits." />
           </div>
-          {config.allowStudentSearch ? (
-            <button className="primary" onClick={() => setSearchOpen(true)}>Find your Spurti points</button>
-          ) : (
-            <div className="auth-card inline-auth">
-              <h2>Please login from Samagama to view your Spurti Points.</h2>
-              <p className="muted">Open Spurti from your Samagama dashboard using the SP details button.</p>
-              <a className="primary link-button" href="/">Go to Samagama Login</a>
-            </div>
-          )}
+          <DevLogin devEmail={devEmail} onDevEmailChange={onDevEmailChange} onStudent={onStudent} />
+          {config.allowStudentSearch && !devEmail && <button className="primary" onClick={() => setSearchOpen(true)}>Find your Spurti points</button>}
         </div>
       </section>
       {config.allowStudentSearch && searchOpen && <SearchModal onClose={() => setSearchOpen(false)} onStudent={onStudent} />}
     </main>
+  );
+}
+
+function DevLogin({ devEmail, onDevEmailChange, onStudent }) {
+  const [email, setEmail] = useState(devEmail || '');
+
+  const login = async () => {
+    if (!email.trim()) return;
+    onDevEmailChange(email.trim());
+    const res = await fetch(`${API}/me`, { headers: devHeaders(email.trim()) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.authenticated && data.profile) {
+        onStudent(data.profile);
+      }
+    }
+  };
+
+  return (
+    <div className="dev-login">
+      <p className="eyebrow" style={{ color: '#f59e0b' }}>Dev Mode</p>
+      <div className="search-row">
+        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Enter your IIT Ropar email" />
+        <button className="secondary" onClick={login}>Login</button>
+      </div>
+      {devEmail && <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>Logged in as {devEmail}</p>}
+    </div>
   );
 }
 
@@ -253,7 +288,8 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onBack, onDevEmailChange }) {
+  const devEmail = useDevEmail();
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -270,10 +306,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['marketplace','Marketplace']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'marketplace' && <MarketplaceView student={student} devEmail={devEmail} />}
     </main>
   );
 }
@@ -839,3 +876,400 @@ function SurveyModal({ survey, student, onDone }) {
 
 
 createRoot(document.getElementById('root')).render(<App />);
+
+function MarketplaceView({ student, devEmail }) {
+  const [subTab, setSubTab] = useState('browse');
+  const [services, setServices] = useState([]);
+  const [myServices, setMyServices] = useState([]);
+  const [myApplications, setMyApplications] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState({ category: '', difficulty: '', status: 'open' });
+  const [showCreate, setShowCreate] = useState(false);
+  const [selectedService, setSelectedService] = useState(null);
+
+  const mpHeaders = useMemo(() => devHeaders(devEmail), [devEmail]);
+
+  useEffect(() => {
+    loadCategories();
+    loadServices();
+  }, [filters]);
+
+  useEffect(() => {
+    if (student?.email) {
+      loadMyServices();
+      loadMyApplications();
+    }
+  }, [student]);
+
+  const loadCategories = async () => {
+    const res = await fetch(`${API}/marketplace/categories`);
+    if (res.ok) {
+      const data = await res.json();
+      setCategories(data.categories || []);
+    }
+  };
+
+  const loadServices = async () => {
+    setLoading(true);
+    const params = new URLSearchParams({ status: filters.status || 'open', limit: 20 });
+    if (filters.category) params.set('category', filters.category);
+    if (filters.difficulty) params.set('difficulty', filters.difficulty);
+    const res = await fetch(`${API}/marketplace/services?${params}`, { headers: mpHeaders });
+    if (res.ok) {
+      const data = await res.json();
+      setServices(data.services || []);
+    }
+    setLoading(false);
+  };
+
+  const loadMyServices = async () => {
+    const res = await fetch(`${API}/marketplace/my-services`, { headers: mpHeaders });
+    if (res.ok) {
+      const data = await res.json();
+      setMyServices(data.services || []);
+    }
+  };
+
+  const loadMyApplications = async () => {
+    const res = await fetch(`${API}/marketplace/my-applications`, { headers: mpHeaders });
+    if (res.ok) {
+      const data = await res.json();
+      setMyApplications(data.applications || []);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Spruti Marketplace</h2>
+        <button className="primary" onClick={() => setShowCreate(true)}>+ Create Request</button>
+      </div>
+      <div className="tab-bar">
+        <button className={subTab === 'browse' ? 'active' : ''} onClick={() => setSubTab('browse')}>Browse Services</button>
+        <button className={subTab === 'my' ? 'active' : ''} onClick={() => setSubTab('my')}>My Requests ({myServices.length})</button>
+        <button className={subTab === 'applications' ? 'active' : ''} onClick={() => setSubTab('applications')}>My Applications ({myApplications.length})</button>
+      </div>
+
+      {subTab === 'browse' && (
+        <>
+          <div className="filter-row">
+            <select value={filters.category} onChange={e => setFilters(f => ({ ...f, category: e.target.value }))}>
+              <option value="">All Categories</option>
+              {categories.map(c => <option key={c._id} value={c.name}>{c.icon} {c.name}</option>)}
+            </select>
+            <select value={filters.difficulty} onChange={e => setFilters(f => ({ ...f, difficulty: e.target.value }))}>
+              <option value="">All Levels</option>
+              <option value="easy">Easy</option>
+              <option value="medium">Medium</option>
+              <option value="hard">Hard</option>
+              <option value="expert">Expert</option>
+            </select>
+          </div>
+          {loading ? <p className="muted">Loading services...</p> : services.length === 0 ? <p className="empty">No services found. Be the first to post!</p> : (
+            <div className="service-grid">
+              {services.map(service => (
+                <ServiceCard key={service._id} service={service} onClick={() => setSelectedService(service)} />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {subTab === 'my' && (
+        myServices.length === 0 ? <p className="empty">You haven&apos;t created any service requests yet.</p> : (
+          <div className="service-grid">
+            {myServices.map(service => (
+              <ServiceCard key={service._id} service={service} onClick={() => setSelectedService(service)} isOwner />
+            ))}
+          </div>
+        )
+      )}
+
+      {subTab === 'applications' && (
+        myApplications.length === 0 ? <p className="empty">You haven&apos;t applied to any services yet.</p> : (
+          <div className="service-grid">
+            {myApplications.map(app => app.serviceId ? (
+              <ServiceCard key={app._id} service={app.serviceId} application={app} onClick={() => setSelectedService(app.serviceId)} />
+            ) : null)}
+          </div>
+        )
+      )}
+
+      {showCreate && <CreateServiceModal onClose={() => setShowCreate(false)} categories={categories} devEmail={devEmail} onCreated={() => { setShowCreate(false); loadServices(); loadMyServices(); }} />}
+      {selectedService && <ServiceDetailModal service={selectedService} student={student} devEmail={devEmail} onClose={() => setSelectedService(null)} onUpdate={loadServices} />}
+    </section>
+  );
+}
+
+function ServiceCard({ service, application, onClick, isOwner }) {
+  const statusColors = { open: '#10b981', assigned: '#f59e0b', in_progress: '#3b82f6', completed: '#6366f1', cancelled: '#6b7280', disputed: '#ef4444' };
+  const diffColors = { easy: '#10b981', medium: '#f59e0b', hard: '#ef4444', expert: '#8b5cf6' };
+  return (
+    <article className="card service-card" onClick={onClick} style={{ cursor: 'pointer' }}>
+      <div className="card-head">
+        <span className="service-category">{service.category}</span>
+        <span className="service-status" style={{ color: statusColors[service.status] || '#6b7280' }}>{service.status}</span>
+      </div>
+      <h3>{service.title}</h3>
+      <p className="service-desc">{service.description?.slice(0, 80)}{service.description?.length > 80 ? '...' : ''}</p>
+      <div className="service-meta">
+        <span className="diff-badge" style={{ backgroundColor: diffColors[service.difficulty] }}>{service.difficulty}</span>
+        <span className="service-price">{service.estimatedPrice} SP</span>
+        <span className="service-duration">{service.estimatedDuration} min</span>
+      </div>
+      {application && <p className="application-status">Status: {application.status}</p>}
+      {isOwner && <p className="owner-label">Your request</p>}
+    </article>
+  );
+}
+
+function CreateServiceModal({ onClose, categories, devEmail, onCreated }) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [category, setCategory] = useState('');
+  const [difficulty, setDifficulty] = useState('medium');
+  const [duration, setDuration] = useState(30);
+  const [urgency, setUrgency] = useState('normal');
+  const [estimatedPrice, setEstimatedPrice] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [priceLoading, setPriceLoading] = useState(false);
+
+  const estimatePrice = async () => {
+    if (!category || !duration) return;
+    setPriceLoading(true);
+    const res = await fetch(`${API}/marketplace/estimate-price`, {
+      method: 'POST',
+      headers: { ...devHeaders(devEmail), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category, difficulty, estimatedDuration: duration, urgency })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setEstimatedPrice(data);
+    }
+    setPriceLoading(false);
+  };
+
+  useEffect(() => { estimatePrice(); }, [category, difficulty, duration, urgency]);
+
+  const submit = async () => {
+    if (!title || !description || !category) return setError('Please fill all required fields.');
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${API}/marketplace/services`, {
+        method: 'POST',
+        headers: { ...devHeaders(devEmail), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, description, category, difficulty, estimatedDuration: duration, urgency, estimatedPrice: estimatedPrice?.estimated })
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to create service');
+      }
+      onCreated();
+    } catch (err) {
+      setError(err.message);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <section className="modal wide">
+        <div className="modal-head">
+          <h2>Create Service Request</h2>
+          <button className="icon" onClick={onClose}>x</button>
+        </div>
+        <div className="form-grid">
+          <div className="form-group full">
+            <label>Title *</label>
+            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g., Need help debugging my React app" />
+          </div>
+          <div className="form-group full">
+            <label>Description *</label>
+            <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Describe what you need help with in detail..." rows={4} />
+          </div>
+          <div className="form-group">
+            <label>Category *</label>
+            <select value={category} onChange={e => setCategory(e.target.value)}>
+              <option value="">Select category</option>
+              {categories.map(c => <option key={c._id} value={c.name}>{c.icon} {c.name}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label>Difficulty</label>
+            <select value={difficulty} onChange={e => setDifficulty(e.target.value)}>
+              <option value="easy">Easy</option>
+              <option value="medium">Medium</option>
+              <option value="hard">Hard</option>
+              <option value="expert">Expert</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label>Estimated Duration (minutes)</label>
+            <input type="number" value={duration} onChange={e => setDuration(Number(e.target.value))} min={5} max={300} />
+          </div>
+          <div className="form-group">
+            <label>Urgency</label>
+            <select value={urgency} onChange={e => setUrgency(e.target.value)}>
+              <option value="normal">Normal</option>
+              <option value="urgent">Urgent (+50%)</option>
+            </select>
+          </div>
+        </div>
+        {estimatedPrice && (
+          <div className="price-estimate">
+            <p>Estimated Price: <strong>{estimatedPrice.estimated} SP</strong></p>
+            <p className="muted">Range: {estimatedPrice.range?.min} - {estimatedPrice.range?.max} SP</p>
+            <p className="muted">Confidence: {Math.round(estimatedPrice.confidence * 100)}%</p>
+          </div>
+        )}
+        {error && <p className="error">{error}</p>}
+        <div className="modal-actions">
+          <button className="secondary" onClick={onClose}>Cancel</button>
+          <button className="primary" onClick={submit} disabled={loading}>{loading ? 'Creating...' : 'Create Request'}</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
+  const [applications, setApplications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [appMsg, setAppMsg] = useState('');
+  const isOwner = String(service.buyerId?._id) === String(student?._id) || service.buyerEmail === student?.email;
+  const isProvider = String(service.providerId?._id) === String(student?._id) || service.providerEmail === student?.email;
+  const canApply = !isOwner && service.status === 'open';
+  const canComplete = (isBuyer || isProvider) && (service.status === 'assigned' || service.status === 'in_progress');
+
+  useEffect(() => { loadApplications(); }, []);
+
+  const loadApplications = async () => {
+    if (!isOwner) { setLoading(false); return; }
+    const res = await fetch(`${API}/marketplace/services/${service._id}/applications`, { headers: devHeaders(devEmail) });
+    if (res.ok) {
+      const data = await res.json();
+      setApplications(data.applications || []);
+    }
+    setLoading(false);
+  };
+
+  const apply = async () => {
+    setSubmitting(true);
+    const res = await fetch(`${API}/marketplace/services/${service._id}/apply`, {
+      method: 'POST',
+      headers: { ...devHeaders(devEmail), 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    setSubmitting(false);
+    if (res.ok) {
+      setAppMsg('Application submitted! AI analysis: ' + data.aiAnalysis?.recommendation);
+    } else {
+      setAppMsg(data.error || 'Failed to apply');
+    }
+  };
+
+  const acceptApplication = async (appId) => {
+    setSubmitting(true);
+    const res = await fetch(`${API}/marketplace/services/${service._id}/accept`, {
+      method: 'POST',
+      headers: { ...devHeaders(devEmail), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ applicationId: appId })
+    });
+    if (res.ok) {
+      onUpdate?.();
+      onClose();
+    } else {
+      const data = await res.json();
+      setAppMsg(data.error || 'Failed to accept');
+    }
+    setSubmitting(false);
+  };
+
+  const markComplete = async () => {
+    setSubmitting(true);
+    const res = await fetch(`${API}/marketplace/services/${service._id}/complete`, { method: 'POST', headers: devHeaders(devEmail) });
+    if (res.ok) {
+      onUpdate?.();
+      onClose();
+    } else {
+      const data = await res.json();
+      setAppMsg(data.error || 'Failed to complete');
+    }
+    setSubmitting(false);
+  };
+
+  const statusColors = { open: '#10b981', assigned: '#f59e0b', in_progress: '#3b82f6', completed: '#6366f1', cancelled: '#6b7280', disputed: '#ef4444' };
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <section className="modal wide">
+        <div className="modal-head">
+          <div>
+            <span style={{ color: statusColors[service.status] }}>{service.status}</span>
+            <h2>{service.title}</h2>
+          </div>
+          <button className="icon" onClick={onClose}>x</button>
+        </div>
+        <p className="service-desc-full">{service.description}</p>
+        <div className="service-detail-grid">
+          <div><strong>Category:</strong> {service.category}</div>
+          <div><strong>Difficulty:</strong> {service.difficulty}</div>
+          <div><strong>Duration:</strong> {service.estimatedDuration} min</div>
+          <div><strong>Price:</strong> {service.estimatedPrice} SP</div>
+          {service.providerId?.name && <div><strong>Provider:</strong> {service.providerId.name}</div>}
+          {service.escrowAmount > 0 && <div><strong>Escrow:</strong> {service.escrowAmount} SP held</div>}
+        </div>
+
+        {canApply && (
+          <div className="action-section">
+            {appMsg && <p className={appMsg.includes('submitted') ? 'success' : 'error'}>{appMsg}</p>}
+            <button className="primary" onClick={apply} disabled={submitting}>{submitting ? 'Applying...' : 'Apply to Help'}</button>
+          </div>
+        )}
+
+        {canComplete && (
+          <div className="action-section">
+            <button className="primary" onClick={markComplete} disabled={submitting}>{submitting ? 'Processing...' : isProvider ? 'Mark In Progress' : 'Approve & Release Payment'}</button>
+          </div>
+        )}
+
+        {isOwner && !loading && applications.length > 0 && (
+          <div className="applications-section">
+            <h3>Applications ({applications.length})</h3>
+            {applications.map(app => (
+              <div key={app._id} className="application-card">
+                <div className="app-header">
+                  <strong>{app.applicantId?.name || app.applicantEmail}</strong>
+                  <span>Match Score: {Math.round(app.matchScore)}%</span>
+                </div>
+                {app.aiAnalysis?.strengths?.length > 0 && (
+                  <p className="ai-strengths">Strengths: {app.aiAnalysis.strengths.join(', ')}</p>
+                )}
+                {app.aiAnalysis?.concerns?.length > 0 && (
+                  <p className="ai-concerns">Concerns: {app.aiAnalysis.concerns.join(', ')}</p>
+                )}
+                <p>{app.coverMessage || 'No cover message'}</p>
+                <div className="app-footer">
+                  <span>Proposed: {app.proposedPrice} SP, {app.proposedDuration} min</span>
+                  {app.status === 'pending' && (
+                    <button className="secondary small" onClick={() => acceptApplication(app._id)} disabled={submitting}>Accept</button>
+                  )}
+                  {app.status === 'accepted' && <span style={{ color: '#10b981' }}>Accepted</span>}
+                  {app.status === 'rejected' && <span style={{ color: '#6b7280' }}>Rejected</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {isOwner && !loading && applications.length === 0 && service.status === 'open' && (
+          <p className="muted">No applications yet.</p>
+        )}
+      </section>
+    </div>
+  );
+}

@@ -514,3 +514,129 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* === Marketplace Styles === */
+.tab-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.tab-bar button {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 7px;
+  padding: 8px 14px;
+  font-weight: 850;
+  font-size: 13px;
+}
+.tab-bar button.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.filter-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.filter-row select { min-height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.service-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.service-card { transition: box-shadow 0.15s; }
+.service-card:hover { box-shadow: 0 4px 16px rgba(23,32,51,0.1); }
+.service-card h3 { margin: 8px 0 6px; font-size: 16px; }
+.service-category { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 900; }
+.service-status { font-size: 12px; font-weight: 850; text-transform: capitalize; }
+.service-desc { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0 0 10px; }
+.service-meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+.diff-badge {
+  color: #fff;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: capitalize;
+}
+.service-price { font-weight: 900; color: var(--primary); font-size: 15px; }
+.service-duration { color: var(--muted); font-size: 12px; }
+.application-status { font-size: 12px; font-weight: 850; margin-top: 8px; color: var(--primary); }
+.owner-label { font-size: 12px; font-weight: 850; margin-top: 8px; color: var(--amber); }
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group.full { grid-column: span 2; }
+.form-group label { font-size: 12px; font-weight: 900; color: var(--muted); text-transform: uppercase; }
+.form-group input, .form-group select, .form-group textarea {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: 14px;
+  background: #fff;
+}
+.form-group textarea { resize: vertical; }
+.price-estimate {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+.price-estimate p { margin: 4px 0; }
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.service-desc-full { color: #334155; line-height: 1.6; margin-bottom: 16px; }
+.service-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+.service-detail-grid div { font-size: 14px; }
+.action-section { margin: 16px 0; display: flex; flex-direction: column; gap: 8px; }
+.applications-section { margin-top: 16px; }
+.applications-section h3 { margin-bottom: 12px; font-size: 16px; }
+.application-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.ai-strengths { color: var(--green); font-size: 13px; margin: 4px 0; }
+.ai-concerns { color: var(--amber); font-size: 13px; margin: 4px 0; }
+.app-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+button.small { min-height: 34px; padding: 0 12px; font-size: 13px; }
+p.success { color: var(--green); font-weight: 700; }
+textarea { width: 100%; border: 1px solid var(--line); border-radius: 7px; padding: 10px 12px; font-size: 14px; resize: vertical; font-family: inherit; }

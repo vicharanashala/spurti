@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import marketplaceRouter from './routes/marketplace.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -122,6 +123,9 @@ async function getSamagamaUser(chatengineToken) {
 }
 
 async function studentEmailFromRequest(req) {
+  if (process.env.SPURTI_DEV_BYPASS === 'true' && req.headers['x-dev-email']) {
+    return normalizeEmail(req.headers['x-dev-email']);
+  }
   const cookies = parseCookies(req.headers.cookie || '');
   const data = await getSamagamaUser(cookies.chatengine_token);
   // Samagama's /api/auth/me nests the user as { user: { email, ... } };
@@ -595,6 +599,8 @@ function last24Hours(now) {
 
 app.use('/api', api);
 app.use('/spurti/api', api);
+app.use('/api/marketplace', marketplaceRouter);
+app.use('/spurti/api/marketplace', marketplaceRouter);
 
 if (fs.existsSync(clientDist)) {
   app.use('/spurti', express.static(clientDist));
