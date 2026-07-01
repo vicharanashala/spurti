@@ -1007,7 +1007,7 @@ function ServiceCard({ service, application, onClick, isOwner }) {
   const diffColors = { easy: '#10b981', medium: '#f59e0b', hard: '#ef4444', expert: '#8b5cf6' };
   return (
     <article className="card service-card" onClick={onClick} style={{ cursor: 'pointer' }}>
-      <div className="card-head">
+      <div className="card-head static">
         <span className="service-category">{service.category}</span>
         <span className="service-status" style={{ color: statusColors[service.status] || '#6b7280' }}>{service.status}</span>
       </div>
@@ -1136,25 +1136,62 @@ function CreateServiceModal({ onClose, categories, devEmail, onCreated }) {
 }
 
 function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
+  const [serviceData, setServiceData] = useState(service);
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [appMsg, setAppMsg] = useState('');
-  const isOwner = String(service.buyerId?._id) === String(student?._id) || service.buyerEmail === student?.email;
-  const isProvider = String(service.providerId?._id) === String(student?._id) || service.providerEmail === student?.email;
-  const canApply = !isOwner && service.status === 'open';
-  const canComplete = (isBuyer || isProvider) && (service.status === 'assigned' || service.status === 'in_progress');
+  const [replyText, setReplyText] = useState('');
+  const [messages, setMessages] = useState([]);
+  const [postingMsg, setPostingMsg] = useState(false);
 
-  useEffect(() => { loadApplications(); }, []);
+  const isOwner = String(serviceData.buyerId?._id) === String(student?._id) || serviceData.buyerEmail === student?.email;
+  const isProvider = String(serviceData.providerId?._id) === String(student?._id) || serviceData.providerEmail === student?.email;
+  const canApply = !isOwner && !isProvider && serviceData.status === 'open';
+  const canComplete = (isOwner || isProvider) && (serviceData.status === 'assigned' || serviceData.status === 'in_progress');
+  const isParticipant = isOwner || isProvider;
+
+  useEffect(() => { loadServiceData(); }, [service._id]);
+
+  const loadServiceData = async () => {
+    try {
+      const res = await fetch(`${API}/marketplace/services/${service._id}`, { headers: devHeaders(devEmail) });
+      if (res.ok) {
+        const data = await res.json();
+        setServiceData(data.service);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const loadApplications = async () => {
-    if (!isOwner) { setLoading(false); return; }
+    if (!isOwner) return;
     const res = await fetch(`${API}/marketplace/services/${service._id}/applications`, { headers: devHeaders(devEmail) });
     if (res.ok) {
       const data = await res.json();
       setApplications(data.applications || []);
     }
-    setLoading(false);
+  };
+
+  useEffect(() => {
+    if (!loading && isOwner) loadApplications();
+  }, [loading, isOwner]);
+
+  useEffect(() => {
+    if (isParticipant && serviceData.status === 'open') {
+      loadMessages();
+      const interval = setInterval(loadMessages, 15000);
+      return () => clearInterval(interval);
+    }
+  }, [isParticipant, serviceData.status]);
+
+  const loadMessages = async () => {
+    const res = await fetch(`${API}/marketplace/services/${service._id}/messages`, { headers: devHeaders(devEmail) });
+    if (res.ok) {
+      const data = await res.json();
+      setMessages(data.messages || []);
+    }
   };
 
   const apply = async () => {
@@ -1168,21 +1205,23 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
     setSubmitting(false);
     if (res.ok) {
       setAppMsg('Application submitted! AI analysis: ' + data.aiAnalysis?.recommendation);
+      loadMessages();
     } else {
       setAppMsg(data.error || 'Failed to apply');
     }
   };
 
-  const acceptApplication = async (appId) => {
+  const acceptApplication = async (app) => {
     setSubmitting(true);
     const res = await fetch(`${API}/marketplace/services/${service._id}/accept`, {
       method: 'POST',
       headers: { ...devHeaders(devEmail), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ applicationId: appId })
+      body: JSON.stringify({ applicationId: app._id })
     });
     if (res.ok) {
-      onUpdate?.();
-      onClose();
+      await loadServiceData();
+      await loadApplications();
+      setAppMsg('Accepted ' + (app.applicantId?.name || app.applicantEmail) + '! SP locked in escrow.');
     } else {
       const data = await res.json();
       setAppMsg(data.error || 'Failed to accept');
@@ -1192,7 +1231,10 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
 
   const markComplete = async () => {
     setSubmitting(true);
-    const res = await fetch(`${API}/marketplace/services/${service._id}/complete`, { method: 'POST', headers: devHeaders(devEmail) });
+    const res = await fetch(`${API}/marketplace/services/${service._id}/complete`, {
+      method: 'POST',
+      headers: devHeaders(devEmail)
+    });
     if (res.ok) {
       onUpdate?.();
       onClose();
@@ -1203,71 +1245,175 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
     setSubmitting(false);
   };
 
+  const postMessage = async () => {
+    if (!replyText.trim()) return;
+    setPostingMsg(true);
+    try {
+      const res = await fetch(`${API}/marketplace/services/${service._id}/messages`, {
+        method: 'POST',
+        headers: { ...devHeaders(devEmail), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: replyText.trim() })
+      });
+      if (res.ok) {
+        setReplyText('');
+        loadMessages();
+      }
+    } finally {
+      setPostingMsg(false);
+    }
+  };
+
   const statusColors = { open: '#10b981', assigned: '#f59e0b', in_progress: '#3b82f6', completed: '#6366f1', cancelled: '#6b7280', disputed: '#ef4444' };
 
   return (
     <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <section className="modal wide">
+      <section className="modal wide service-detail-modal">
         <div className="modal-head">
           <div>
-            <span style={{ color: statusColors[service.status] }}>{service.status}</span>
-            <h2>{service.title}</h2>
+            <span style={{ color: statusColors[serviceData.status], fontWeight: 900, fontSize: 12, textTransform: 'uppercase' }}>{serviceData.status}</span>
+            <h2>{serviceData.title}</h2>
           </div>
           <button className="icon" onClick={onClose}>x</button>
         </div>
-        <p className="service-desc-full">{service.description}</p>
-        <div className="service-detail-grid">
-          <div><strong>Category:</strong> {service.category}</div>
-          <div><strong>Difficulty:</strong> {service.difficulty}</div>
-          <div><strong>Duration:</strong> {service.estimatedDuration} min</div>
-          <div><strong>Price:</strong> {service.estimatedPrice} SP</div>
-          {service.providerId?.name && <div><strong>Provider:</strong> {service.providerId.name}</div>}
-          {service.escrowAmount > 0 && <div><strong>Escrow:</strong> {service.escrowAmount} SP held</div>}
-        </div>
 
-        {canApply && (
-          <div className="action-section">
-            {appMsg && <p className={appMsg.includes('submitted') ? 'success' : 'error'}>{appMsg}</p>}
-            <button className="primary" onClick={apply} disabled={submitting}>{submitting ? 'Applying...' : 'Apply to Help'}</button>
-          </div>
-        )}
+        {loading ? (
+          <p className="muted">Loading...</p>
+        ) : (
+          <>
+            <p className="service-desc-full">{serviceData.description}</p>
 
-        {canComplete && (
-          <div className="action-section">
-            <button className="primary" onClick={markComplete} disabled={submitting}>{submitting ? 'Processing...' : isProvider ? 'Mark In Progress' : 'Approve & Release Payment'}</button>
-          </div>
-        )}
+            <div className="service-detail-meta">
+              <span className="meta-tag">{serviceData.category}</span>
+              <span className="meta-tag diff">{serviceData.difficulty}</span>
+              <span className="meta-tag">{serviceData.estimatedDuration} min</span>
+              <span className="meta-tag price">{serviceData.estimatedPrice} SP</span>
+              {serviceData.urgency === 'urgent' && <span className="meta-tag urgent">Urgent</span>}
+              {serviceData.buyerId?.name && <span className="meta-tag">By: {serviceData.buyerId.name}</span>}
+              {serviceData.providerId?.name && <span className="meta-tag provider">Provider: {serviceData.providerId.name}</span>}
+              {serviceData.escrowAmount > 0 && <span className="meta-tag escrow">{serviceData.escrowAmount} SP in escrow</span>}
+            </div>
 
-        {isOwner && !loading && applications.length > 0 && (
-          <div className="applications-section">
-            <h3>Applications ({applications.length})</h3>
-            {applications.map(app => (
-              <div key={app._id} className="application-card">
-                <div className="app-header">
-                  <strong>{app.applicantId?.name || app.applicantEmail}</strong>
-                  <span>Match Score: {Math.round(app.matchScore)}%</span>
-                </div>
-                {app.aiAnalysis?.strengths?.length > 0 && (
-                  <p className="ai-strengths">Strengths: {app.aiAnalysis.strengths.join(', ')}</p>
+            {appMsg && (
+              <p className={appMsg.includes('submitted') || appMsg.includes('Accepted') ? 'success' : 'error'} style={{ padding: '10px 14px', borderRadius: 7, background: appMsg.includes('submitted') || appMsg.includes('Accepted') ? '#f0fdf4' : '#fef2f2', marginBottom: 12 }}>
+                {appMsg}
+              </p>
+            )}
+
+            <div className="service-detail-body">
+              <div className="service-left">
+                {canApply && (
+                  <div className="action-card">
+                    <h4>Want to help?</h4>
+                    <p>Apply to help this student. Your SP will be held in escrow until the work is done.</p>
+                    <button className="primary full-width" onClick={apply} disabled={submitting}>
+                      {submitting ? 'Applying...' : 'Apply to Help'}
+                    </button>
+                  </div>
                 )}
-                {app.aiAnalysis?.concerns?.length > 0 && (
-                  <p className="ai-concerns">Concerns: {app.aiAnalysis.concerns.join(', ')}</p>
+
+                {canComplete && (
+                  <div className="action-card">
+                    <h4>Complete this request</h4>
+                    <p>{isProvider ? 'Mark as in progress when you start working.' : 'Approve and release payment to the provider.'}</p>
+                    <button className="primary full-width" onClick={markComplete} disabled={submitting}>
+                      {submitting ? 'Processing...' : isProvider ? 'Mark In Progress' : 'Approve & Release Payment'}
+                    </button>
+                  </div>
                 )}
-                <p>{app.coverMessage || 'No cover message'}</p>
-                <div className="app-footer">
-                  <span>Proposed: {app.proposedPrice} SP, {app.proposedDuration} min</span>
-                  {app.status === 'pending' && (
-                    <button className="secondary small" onClick={() => acceptApplication(app._id)} disabled={submitting}>Accept</button>
-                  )}
-                  {app.status === 'accepted' && <span style={{ color: '#10b981' }}>Accepted</span>}
-                  {app.status === 'rejected' && <span style={{ color: '#6b7280' }}>Rejected</span>}
-                </div>
+
+                {serviceData.status === 'open' && (
+                  <div className="applications-section">
+                    <h3>Applicants ({applications.length})</h3>
+                    {applications.length === 0 ? (
+                      <p className="muted">No applicants yet. Be the first to help!</p>
+                    ) : (
+                      <div className="applicant-list">
+                        {applications.map(app => (
+                          <div key={app._id} className={`applicant-card ${app.status}`}>
+                            <div className="applicant-info">
+                              <div className="applicant-name">
+                                <strong>{app.applicantId?.name || app.applicantEmail}</strong>
+                                {app.status === 'accepted' && <span className="badge accepted">Accepted</span>}
+                                {app.status === 'rejected' && <span className="badge rejected">Rejected</span>}
+                              </div>
+                              <div className="applicant-meta">
+                                <span className="match-score" title="AI Match Score">{Math.round(app.matchScore)}% match</span>
+                                <span> {app.proposedPrice} SP</span>
+                                <span> {app.proposedDuration} min</span>
+                              </div>
+                            </div>
+
+                            {app.status === 'pending' && isOwner && (
+                              <button className="secondary small" onClick={() => acceptApplication(app)} disabled={submitting}>
+                                Accept
+                              </button>
+                            )}
+
+                            <div className="applicant-details">
+                              {app.aiAnalysis?.strengths?.length > 0 && (
+                                <p className="ai-strengths">Strengths: {app.aiAnalysis.strengths.join(', ')}</p>
+                              )}
+                              {app.aiAnalysis?.concerns?.length > 0 && (
+                                <p className="ai-concerns">Concerns: {app.aiAnalysis.concerns.join(', ')}</p>
+                              )}
+                              {app.aiAnalysis?.recommendation && (
+                                <p className="ai-recommend">AI: {app.aiAnalysis.recommendation.replace(/_/g, ' ')}</p>
+                              )}
+                              {app.coverMessage && <p className="cover-msg">&ldquo;{app.coverMessage}&rdquo;</p>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(serviceData.status === 'assigned' || serviceData.status === 'in_progress') && !isOwner && (
+                  <div className="action-card">
+                    <h4>Work in progress</h4>
+                    <p>This request has been assigned to {serviceData.providerId?.name || 'a helper'}. Payment will be released upon completion.</p>
+                  </div>
+                )}
               </div>
-            ))}
-          </div>
-        )}
-        {isOwner && !loading && applications.length === 0 && service.status === 'open' && (
-          <p className="muted">No applications yet.</p>
+
+              <div className="service-right">
+                {isParticipant && (
+                  <div className="discussion-thread">
+                    <h3>Discussion <span className="muted">({messages.length})</span></h3>
+                    <div className="message-list">
+                      {messages.length === 0 && <p className="muted empty-msg">No messages yet. Start the conversation!</p>}
+                      {messages.map((msg, i) => (
+                        <div key={i} className={`thread-msg ${msg.isSystem ? 'system' : msg.senderEmail === student?.email ? 'mine' : 'theirs'}`}>
+                          {!msg.isSystem && <span className="msg-sender">{msg.senderEmail === student?.email ? 'You' : msg.senderName || msg.senderEmail}</span>}
+                          <p>{msg.text}</p>
+                          <span className="msg-time">{new Date(msg.createdAt).toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="reply-box">
+                      <input
+                        value={replyText}
+                        onChange={e => setReplyText(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && !e.shiftKey && postMessage()}
+                        placeholder="Write a message... (Enter to send)"
+                        disabled={postingMsg}
+                      />
+                      <button className="primary" onClick={postMessage} disabled={postingMsg || !replyText.trim()}>
+                        {postingMsg ? '...' : 'Send'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {!isParticipant && (
+                  <div className="discussion-locked">
+                    <h3>Discussion</h3>
+                    <p className="muted">Login as the requester or helper to join the discussion.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
         )}
       </section>
     </div>

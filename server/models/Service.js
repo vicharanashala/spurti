@@ -40,7 +40,15 @@ const serviceSchema = new mongoose.Schema({
   viewCount: { type: Number, default: 0 },
   applicationCount: { type: Number, default: 0 },
   isAiRecommended: { type: Boolean, default: false },
-  recommendedProviderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', default: null }
+  recommendedProviderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', default: null },
+  messages: [{
+    senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', default: null },
+    senderEmail: { type: String, default: '' },
+    senderName: { type: String, default: '' },
+    text: { type: String, required: true },
+    isSystem: { type: Boolean, default: false },
+    createdAt: { type: Date, default: Date.now }
+  }]
 }, { timestamps: true });
 
 serviceSchema.index({ buyerId: 1, status: 1 });

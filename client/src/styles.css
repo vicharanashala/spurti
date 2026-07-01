@@ -640,3 +640,123 @@ input {
 button.small { min-height: 34px; padding: 0 12px; font-size: 13px; }
 p.success { color: var(--green); font-weight: 700; }
 textarea { width: 100%; border: 1px solid var(--line); border-radius: 7px; padding: 10px 12px; font-size: 14px; resize: vertical; font-family: inherit; }
+
+/* === Service Detail Modal === */
+.service-detail-modal { width: min(1100px, 100%); }
+.service-detail-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.meta-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #f1f5f9;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--muted);
+  text-transform: capitalize;
+}
+.meta-tag.diff { background: #fef3c7; border-color: #fde68a; color: #92400e; }
+.meta-tag.price { background: #eff6ff; border-color: #bfdbfe; color: #1e40af; font-size: 14px; font-weight: 900; }
+.meta-tag.urgent { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+.meta-tag.escrow { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
+.meta-tag.provider { background: #faf5ff; border-color: #e9d5ff; color: #6b21a8; }
+
+.service-detail-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }
+@media (max-width: 720px) { .service-detail-body { grid-template-columns: 1fr; } }
+
+.service-left, .service-right { display: flex; flex-direction: column; gap: 14px; }
+
+.action-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #f8fafc;
+}
+.action-card h4 { margin: 0 0 6px; font-size: 15px; }
+.action-card p { color: var(--muted); font-size: 13px; margin: 0 0 10px; line-height: 1.5; }
+.full-width { width: 100%; }
+
+.applications-section h3 { font-size: 15px; margin-bottom: 10px; }
+.applicant-list { display: flex; flex-direction: column; gap: 10px; }
+.applicant-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+.applicant-card.accepted { border-color: #86efac; background: #f0fdf4; }
+.applicant-card.rejected { opacity: 0.5; }
+.applicant-info { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.applicant-name { display: flex; align-items: center; gap: 8px; }
+.applicant-name strong { font-size: 14px; }
+.applicant-meta { display: flex; gap: 10px; font-size: 12px; color: var(--muted); }
+.match-score {
+  background: #dbeafe;
+  color: #1e40af;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-weight: 900;
+}
+.badge { border-radius: 4px; padding: 2px 6px; font-size: 11px; font-weight: 900; }
+.badge.accepted { background: #dcfce7; color: #15803d; }
+.badge.rejected { background: #f1f5f9; color: #64748b; }
+.applicant-details { margin-top: 8px; }
+.applicant-details p { margin: 4px 0; font-size: 13px; }
+.cover-msg { font-style: italic; color: var(--muted); font-size: 12px; }
+.ai-recommend { font-weight: 700; color: var(--primary); }
+
+/* === Discussion Thread === */
+.discussion-thread {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  height: 420px;
+}
+.discussion-thread h3 { margin: 0; padding: 12px 14px; font-size: 14px; border-bottom: 1px solid var(--line); }
+.discussion-locked {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #f8fafc;
+  text-align: center;
+}
+.discussion-locked h3 { margin: 0 0 8px; font-size: 14px; }
+.message-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.empty-msg { text-align: center; font-size: 13px; margin: 20px 0; }
+.thread-msg {
+  max-width: 80%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.thread-msg.mine { align-self: flex-end; background: var(--primary); color: #fff; }
+.thread-msg.theirs { align-self: flex-start; background: #f1f5f9; }
+.thread-msg.system { align-self: center; background: #fef9c3; color: #713f12; font-size: 12px; text-align: center; max-width: 90%; }
+.msg-sender { display: block; font-size: 11px; font-weight: 900; opacity: 0.7; margin-bottom: 2px; }
+.thread-msg p { margin: 0; }
+.msg-time { display: block; font-size: 10px; opacity: 0.6; margin-top: 2px; }
+.reply-box {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+}
+.reply-box input {
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 8px 14px;
+  font-size: 13px;
+}

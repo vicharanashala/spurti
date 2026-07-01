@@ -751,4 +751,55 @@ router.post('/seed-categories', requireAdmin, async (req, res) => {
   }
 });
 
+router.get('/services/:id/messages', populateStudentFromRequest, async (req, res) => {
+  try {
+    const service = await Service.findById(req.params.id);
+    if (!service) return res.status(404).json({ error: 'Service not found' });
+
+    const isParticipant =
+      String(service.buyerId) === String(req.student._id) ||
+      String(service.providerId) === String(req.student._id);
+
+    if (!isParticipant) return res.status(403).json({ error: 'Not authorized' });
+
+    res.json({ messages: service.messages || [] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/services/:id/messages', populateStudentFromRequest, async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text || !text.trim()) return res.status(400).json({ error: 'Message text required' });
+
+    const service = await Service.findById(req.params.id);
+    if (!service) return res.status(404).json({ error: 'Service not found' });
+
+    const isParticipant =
+      String(service.buyerId) === String(req.student._id) ||
+      String(service.providerId) === String(req.student._id);
+
+    if (!isParticipant) return res.status(403).json({ error: 'Not authorized' });
+
+    const newMessage = {
+      senderId: req.student._id,
+      senderEmail: req.student.email,
+      senderName: req.student.name,
+      text: text.trim(),
+      isSystem: false,
+      createdAt: new Date()
+    };
+
+    await Service.updateOne(
+      { _id: service._id },
+      { $push: { messages: newMessage } }
+    );
+
+    res.status(201).json({ success: true, message: newMessage });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
