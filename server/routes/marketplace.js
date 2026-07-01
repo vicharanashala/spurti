@@ -322,15 +322,7 @@ router.post('/services/:id/accept', populateStudentFromRequest, async (req, res)
       { $set: { status: 'accepted', respondedAt: new Date() } }
     );
 
-    const escrowResult = await holdInEscrow({
-      serviceId: service._id,
-      buyerId: service.buyerId,
-      buyerEmail: service.buyerEmail,
-      amount: application.proposedPrice,
-      providerEmail: application.applicantEmail
-    });
-
-    await Service.updateOne(
+    const updateResult = await Service.updateOne(
       { _id: service._id },
       {
         $set: {
@@ -342,6 +334,27 @@ router.post('/services/:id/accept', populateStudentFromRequest, async (req, res)
         }
       }
     );
+
+    if (!updateResult.modifiedCount) {
+      return res.status(500).json({ error: 'Failed to assign provider' });
+    }
+
+    let escrowResult;
+    try {
+      escrowResult = await holdInEscrow({
+        serviceId: service._id,
+        buyerId: service.buyerId,
+        buyerEmail: service.buyerEmail,
+        amount: application.proposedPrice,
+        providerEmail: application.applicantEmail
+      });
+    } catch (escrowError) {
+      await Service.updateOne(
+        { _id: service._id },
+        { $set: { status: 'open', providerId: null, providerEmail: null } }
+      );
+      return res.status(400).json({ error: escrowError.message || 'Escrow failed. Provider unassigned.' });
+    }
 
     await getOrCreateReputation(application.applicantId, application.applicantEmail);
 

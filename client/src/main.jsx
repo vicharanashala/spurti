@@ -1141,7 +1141,8 @@ function CreateServiceModal({ onClose, categories, onCreated }) {
 
 function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
   const [serviceData, setServiceData] = useState(service);
-  const [applications, setApplications] = useState([]);
+  const [assignedProvider, setAssignedProvider] = useState(null);
+  const [escrowStatus, setEscrowStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [appMsg, setAppMsg] = useState('');
@@ -1150,7 +1151,9 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
   const [postingMsg, setPostingMsg] = useState(false);
 
   const isOwner = String(serviceData.buyerId?._id) === String(student?._id) || serviceData.buyerEmail === student?.email;
-  const isProvider = String(serviceData.providerId?._id) === String(student?._id) || serviceData.providerEmail === student?.email;
+  const isProvider = String(serviceData.providerId?._id) === String(student?._id) ||
+    String(serviceData.providerEmail) === String(student?.email) ||
+    (assignedProvider?.applicantId?._id && String(assignedProvider.applicantId._id) === String(student?._id));
   const canApply = !isOwner && !isProvider && serviceData.status === 'open';
   const canComplete = (isOwner || isProvider) && (serviceData.status === 'assigned' || serviceData.status === 'in_progress');
   const isParticipant = isOwner || isProvider;
@@ -1163,6 +1166,8 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
       if (res.ok) {
         const data = await res.json();
         setServiceData(data.service);
+        setAssignedProvider(data.assignedProvider || null);
+        setEscrowStatus(data.escrowStatus || null);
       }
     } finally {
       setLoading(false);
@@ -1183,7 +1188,7 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
   }, [loading, isOwner]);
 
   useEffect(() => {
-    if (isParticipant && serviceData.status === 'open') {
+    if (isParticipant && (serviceData.status === 'open' || serviceData.status === 'assigned' || serviceData.status === 'in_progress')) {
       loadMessages();
       const interval = setInterval(loadMessages, 15000);
       return () => clearInterval(interval);
@@ -1293,8 +1298,12 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
               <span className="meta-tag price">{serviceData.estimatedPrice} SP</span>
               {serviceData.urgency === 'urgent' && <span className="meta-tag urgent">Urgent</span>}
               {serviceData.buyerId?.name && <span className="meta-tag">By: {serviceData.buyerId.name}</span>}
-              {serviceData.providerId?.name && <span className="meta-tag provider">Provider: {serviceData.providerId.name}</span>}
-              {serviceData.escrowAmount > 0 && <span className="meta-tag escrow">{serviceData.escrowAmount} SP in escrow</span>}
+              {(serviceData.providerId?.name || assignedProvider?.applicantId?.name) && (
+                <span className="meta-tag provider">Provider: {serviceData.providerId?.name || assignedProvider?.applicantId?.name}</span>
+              )}
+              {(serviceData.escrowAmount > 0 || escrowStatus?.amount > 0) && (
+                <span className="meta-tag escrow">{(serviceData.escrowAmount || escrowStatus?.amount)} SP in escrow</span>
+              )}
             </div>
 
             {appMsg && (
