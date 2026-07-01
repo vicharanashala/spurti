@@ -25,7 +25,7 @@ function App() {
         page: 'record',
         recordViewed: profile.student.email
       })
-    }).catch(() => {});
+    }).catch(() => { });
     send();
     const id = setInterval(send, 30000);
     return () => clearInterval(id);
@@ -223,7 +223,7 @@ function SearchModal({ onClose, onStudent }) {
       <section className="modal">
         <div className="modal-head">
           <h2>Find your Spurti points</h2>
-          <button className="icon" onClick={onClose}>x</button>
+          <button className="icon" aria-label="Close" onClick={onClose}>×</button>
         </div>
         <div className="search-row">
           <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && search()} placeholder="Name or email" />
@@ -257,21 +257,16 @@ function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
-  const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+  const attentionItems = useMemo(() => buildAttentionItems(profile), [profile]);
   return (
     <main className="page compact">
-      <header className="topbar">
-        {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
-        <div>
-          <p className="eyebrow">Student Spurti Bank</p>
-          <h1>{student.name}</h1>
-        </div>
-        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
-      </header>
-      <LevelStatus student={student} />
-      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <DashboardHeader student={student} />
+      <DashboardProgressCards student={student} cohort={profile.cohort} vibeCourse={profile.vibeCourse} />
+      <DashboardStatCards profile={profile} badges={badges} />
+      <DashboardBottom profile={profile} attentionItems={attentionItems} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank', 'SP Bank'], ['summary', '5-Day Summary'], ['polls', 'Polls'], ['leaderboard', 'Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
+      {tab === 'summary' && <FiveDaySummary profile={profile} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
@@ -338,62 +333,506 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   );
 }
 
-function StudentPulse({ profile, badges, nextActions }) {
-  const { student, cohort, attendance, polls, transactions } = profile;
-  const qualified = attendance.filter(a => a.qualified).length;
-  const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
-  const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
-  const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
+// ============================================================
+// NEW DASHBOARD COMPONENTS (reference screenshot)
+// ============================================================
+
+function DashboardHeader({ student }) {
+  const tier = String(student.trophyLeague || 'Bronze').split(' ')[0].toLowerCase();
+  const cohortLabel = student.leaderboardGroupLabel
+    ? `Cohort: ${student.leaderboardGroupLabel}`
+    : null;
   return (
-    <section className="pulse-grid">
-      <div className="pulse-card progress-card">
-        <span>Standing</span>
-        <strong>Rank {student.rank}</strong>
-        <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP needed to enter Top 50.`}</p>
-        <p>{cohort.pointsToNextRank === 0 ? 'You are leading your comparison group.' : `${cohort.pointsToNextRank} SP needed for next rank.`}</p>
-      </div>
-      <div className="pulse-card">
-        <span>Cohort comparison</span>
-        <div className="compare-list">
-          <b>Your SP: {student.totalSp}</b>
-          <b>Cohort avg: {cohort.averageSp}</b>
-          <b>Top 50 cutoff: {cohort.top50Cutoff ?? '-'}</b>
-          <b>Top 10 cutoff: {cohort.top10Cutoff ?? '-'}</b>
+    <div className="dashboard-header">
+      <div className="dashboard-header-left">
+        <p className="eyebrow">Student Spurti Bank</p>
+        <h1>{student.name}</h1>
+        <div className="header-tags">
+          <span className="header-tag">Level {student.level} · lifetime</span>
+          <span className={`header-tag badge-tag tier-${tier}`}>{student.trophyLeague} · current</span>
+          {cohortLabel && <span className="header-tag">{cohortLabel}</span>}
         </div>
       </div>
-      <div className="pulse-card">
-        <span>Session health</span>
-        <div className="compare-list">
-          <b>{qualified}/{attendance.length} attendance qualified</b>
-          <b>{pollAttempted}/{pollTotal} polls attempted</b>
-        </div>
+      <div className="dashboard-sp-score">
+        <span className="sp-label">Spurti Points</span>
+        <span className="sp-number">{student.totalSp}</span>
+        {student.rank && student.cohortSize && (
+          <span className="sp-rank">Rank {student.rank} of {student.cohortSize.toLocaleString()}</span>
+        )}
       </div>
-      <div className="pulse-card">
-        <span>Badges</span>
-        <div className="badge-row">{badges.map(badge => <em key={badge}>{badge}</em>)}</div>
-      </div>
-      <div className="pulse-card wide-pulse">
-        <span>SP trend</span>
-        <Sparkline points={trend} />
-      </div>
-      <div className="pulse-card wide-pulse">
-        <span>What to do next</span>
-        <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
-      </div>
-    </section>
+    </div>
   );
 }
 
-function Sparkline({ points }) {
-  const values = points.map(p => p.value);
-  const min = Math.min(...values, 0);
-  const max = Math.max(...values, 1);
+function DashboardProgressCards({ student, cohort, vibeCourse }) {
+  const sp = student.totalSp || 0;
+
+  // Next rank card
+  const toNextRank = cohort.pointsToNextRank;
+  const nextRankBarPct = toNextRank === 0
+    ? 100
+    : Math.max(2, Math.min(98, Math.round((sp / (sp + toNextRank)) * 100)));
+  const nextRankNote = toNextRank === 0
+    ? 'You are leading your comparison group.'
+    : `You're ${toNextRank} SP behind rank ${(student.rank || 1) - 1}.`;
+
+  // Legend badge card
+  const legendTarget = 1500;
+  const legendPct = Math.max(2, Math.min(100, Math.round((sp / legendTarget) * 100)));
+  const legendNote = student.legendBadgeUnlocked
+    ? 'Legend Badge unlocked! Permanently yours.'
+    : `Reach ${legendTarget} SP once to unlock, permanently.`;
+
   return (
-    <div className="sparkline">
-      {points.map((point, index) => {
-        const pct = max === min ? 50 : ((point.value - min) / (max - min)) * 100;
-        return <i key={`${point.label}-${index}`} title={`${point.label}: ${point.value} SP`} style={{ height: `${Math.max(6, pct)}%` }} />;
-      })}
+    <div className="progress-cards">
+      {/* Next Rank */}
+      <div className="progress-card">
+        <div className="progress-card-header">
+          <span className="pc-label">Next rank</span>
+          <span className="pc-togo">
+            {toNextRank === 0 ? null : <><strong>{toNextRank}</strong> <span className="sp-unit">SP</span> <span className="sp-unit">to go</span></>}
+          </span>
+        </div>
+        <div className="sp-bar-track">
+          <div className="sp-bar-fill" style={{ width: `${nextRankBarPct}%` }} />
+        </div>
+        <p className="progress-card-note">{nextRankNote}</p>
+      </div>
+
+      {/* Legend badge */}
+      <div className="progress-card">
+        <div className="progress-card-header">
+          <span className="pc-label">Legend badge</span>
+          <span className="pc-togo">
+            <strong>{sp}</strong>
+            <span className="sp-unit"> / {legendTarget.toLocaleString()}</span>
+          </span>
+        </div>
+        <div className="sp-bar-track">
+          <div className="sp-bar-fill" style={{ width: `${legendPct}%` }} />
+        </div>
+        <p className="progress-card-note">{legendNote}</p>
+      </div>
+
+      {/* ViBe Course Progress rings */}
+      <VibeCourseRingsCard vibeCourse={vibeCourse} />
+    </div>
+  );
+}
+
+// SVG circular progress ring component
+function ProgressRing({ pct, color, size = 68, stroke = 6, loading = false, empty = false }) {
+  const radius = (size - stroke) / 2;
+  const circ = 2 * Math.PI * radius;
+  const filled = empty || loading ? 0 : (circ * Math.max(0, Math.min(100, pct))) / 100;
+  const label = loading ? '…' : empty ? '—' : `${Math.round(pct)}%`;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+      {/* Track */}
+      <circle
+        cx={size / 2} cy={size / 2} r={radius}
+        fill="none"
+        stroke="#e2e8f0"
+        strokeWidth={stroke}
+      />
+      {/* Fill */}
+      {!loading && !empty && (
+        <circle
+          cx={size / 2} cy={size / 2} r={radius}
+          fill="none"
+          stroke={color}
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeDasharray={circ}
+          strokeDashoffset={circ - filled}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+        />
+      )}
+      {/* Skeleton shimmer arc for loading */}
+      {loading && (
+        <circle
+          cx={size / 2} cy={size / 2} r={radius}
+          fill="none"
+          stroke="#cbd5e1"
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeDasharray={`${circ * 0.4} ${circ * 0.6}`}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          className="vibe-ring-spin"
+        />
+      )}
+      {/* Center label */}
+      <text
+        x={size / 2} y={size / 2}
+        dominantBaseline="central"
+        textAnchor="middle"
+        fill={loading || empty ? '#94a3b8' : color}
+        fontSize={pct !== null && pct >= 100 ? size * 0.19 : size * 0.22}
+        fontWeight="800"
+        fontFamily="inherit"
+      >
+        {label}
+      </text>
+    </svg>
+  );
+}
+
+const VIBE_RING_COURSES = [
+  { key: 'onboarding',     abbr: 'Onb',  color: 'var(--primary)' },
+  { key: 'aiFundamentals', abbr: 'AI',   color: 'var(--green)'   },
+  { key: 'mernStack',      abbr: 'MERN', color: 'var(--amber)'   }
+];
+
+function VibeCourseRingsCard({ vibeCourse }) {
+  return (
+    <div className="progress-card vibe-rings-card">
+      <div className="progress-card-header">
+        <span className="pc-label">ViBe Completion</span>
+      </div>
+      <div className="vibe-rings-row">
+        {VIBE_RING_COURSES.map(course => {
+          const raw = vibeCourse ? vibeCourse[course.key] : undefined;
+          const isLoading = vibeCourse === undefined || vibeCourse === null;
+          const isEmpty = !isLoading && (raw === null || raw === undefined);
+          const pct = isEmpty ? null : Math.min(100, Math.max(0, Number(raw) || 0));
+          return (
+            <div key={course.key} className="vibe-ring-item">
+              <ProgressRing
+                pct={pct}
+                color={course.color}
+                size={68}
+                stroke={6}
+                loading={isLoading}
+                empty={isEmpty}
+              />
+              <span className="vibe-ring-label">{course.abbr}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DashboardStatCards({ profile, badges }) {
+  const { student, cohort, attendance, polls } = profile;
+
+  // Attendance
+  const attQualified = attendance.filter(a => a.qualified).length;
+  const attTotal = attendance.length;
+  const attPct = attTotal ? Math.round((attQualified / attTotal) * 100) : 0;
+
+  // Polls
+  const pollAttempted = polls.reduce((s, p) => s + p.attemptedQuestions, 0);
+  const pollTotal = polls.reduce((s, p) => s + p.totalQuestions, 0);
+  const pollPct = pollTotal ? Math.round((pollAttempted / pollTotal) * 100) : 0;
+
+  // Badges
+  const badgeCount = badges.filter(b => b !== 'Getting Started').length;
+  const badgeNames = badges.filter(b => b !== 'Getting Started').join(' · ') || 'Getting Started';
+
+  // SP vs Top 50% Peers
+  const top50Avg = cohort.top50AvgSp ?? cohort.averageSp ?? 0;
+  const spDelta = student.totalSp - top50Avg;
+  const deltaSign = spDelta >= 0 ? '+' : '';
+  const deltaClass = spDelta >= 0 ? 'positive' : 'negative';
+
+  return (
+    <div className="stat-cards">
+      {/* Attendance */}
+      <div className="stat-card">
+        <span className="stat-card-label">Attendance qualified</span>
+        <span className="stat-value">{attPct}%</span>
+        <div className="stat-sub">
+          {attQualified} / {attTotal} sessions
+        </div>
+      </div>
+
+      {/* Polls */}
+      <div className="stat-card">
+        <span className="stat-card-label">Polls attempted</span>
+        <span className="stat-value">{pollPct}%</span>
+        <div className="stat-sub">
+          {pollAttempted} / {pollTotal} questions
+        </div>
+      </div>
+
+      {/* Badges */}
+      <div className="stat-card">
+        <span className="stat-card-label">Badges earned</span>
+        <span className="stat-value">{badgeCount || 0}</span>
+        <div className="stat-badge-names">{badgeNames}</div>
+      </div>
+
+      {/* SP vs Top 50% Peers */}
+      <div className="stat-card">
+        <span className="stat-card-label">SP vs top 50% peers</span>
+        <span className={`stat-value ${deltaClass}`}>{deltaSign}{spDelta}</span>
+        <div className="stat-delta-sub">
+          You: {student.totalSp} · Top 50% Avg: {top50Avg}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DashboardBottom({ profile, attentionItems }) {
+  const { transactions } = profile;
+  const sessionCount = new Set(transactions.map(tx => tx.sessionLabel).filter(Boolean)).size;
+  return (
+    <div className="dashboard-bottom">
+      <div className="trend-card">
+        <p className="trend-card-title">SP trend</p>
+        <p className="trend-card-sub">
+          {transactions.length > 0
+            ? `Cumulative balance across ${sessionCount} session${sessionCount !== 1 ? 's' : ''} — hover for the exact value on any day.`
+            : 'No SP transactions recorded yet.'}
+        </p>
+        <SpTrendChart transactions={transactions} />
+      </div>
+      <div className="attention-card">
+        <p className="attention-card-title">Needs your attention</p>
+        <p className="attention-card-sub">Ranked by what costs you the most SP if ignored.</p>
+        {attentionItems.length === 0 ? (
+          <p style={{ color: 'var(--green)', fontSize: 13 }}>All good — nothing needs your attention right now.</p>
+        ) : (
+          <ul className="attention-list">
+            {attentionItems.map((item, i) => (
+              <li key={i} className="attention-item">
+                <span className={`attention-dot ${item.severity}`} />
+                <div>
+                  {/* B2-FIX: no dangerouslySetInnerHTML — structured parts rendered as safe JSX */}
+                  <div className="attention-text">
+                    {item.preText}
+                    {item.highlight && <em>{item.highlight}</em>}
+                    {item.postText}
+                  </div>
+                  {item.sub && <div className="attention-subtext">{item.sub}</div>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// SVG line chart for SP trend
+function SpTrendChart({ transactions }) {
+  const svgRef = useRef(null);
+  const wrapRef = useRef(null);
+  const [tooltip, setTooltip] = useState(null); // { x, y, tx }
+  const [width, setWidth] = useState(600);
+
+  // Keep track of container width for responsive label density
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    const obs = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect?.width;
+      if (w) setWidth(Math.round(w));
+    });
+    obs.observe(wrapRef.current);
+    return () => obs.disconnect();
+  }, []);
+
+  if (!transactions || transactions.length === 0) {
+    return (
+      <div style={{ color: 'var(--muted)', fontSize: 13, paddingTop: 8 }}>
+        SP trend data will appear here once transactions are recorded.
+      </div>
+    );
+  }
+
+  const PAD = { top: 12, right: 16, bottom: 36, left: 44 };
+  const H = 180;
+  const W = 560; // SVG internal coordinate width (viewBox)
+  const innerW = W - PAD.left - PAD.right;
+  const innerH = H - PAD.top - PAD.bottom;
+
+  const spValues = transactions.map(tx => Number(tx.balanceAfter) || 0);
+  const minSP = Math.min(...spValues);
+  const maxSP = Math.max(...spValues);
+  const spRange = maxSP - minSP || 1;
+
+  const pts = transactions.map((tx, i) => ({
+    x: PAD.left + (transactions.length === 1 ? innerW / 2 : (i / (transactions.length - 1)) * innerW),
+    y: PAD.top + innerH - ((Number(tx.balanceAfter) - minSP) / spRange) * innerH,
+    tx
+  }));
+
+  const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const areaPath = [
+    `M${pts[0].x.toFixed(1)},${(PAD.top + innerH).toFixed(1)}`,
+    ...pts.map(p => `L${p.x.toFixed(1)},${p.y.toFixed(1)}`),
+    `L${pts[pts.length - 1].x.toFixed(1)},${(PAD.top + innerH).toFixed(1)}`,
+    'Z'
+  ].join(' ');
+
+  // Y-axis gridlines
+  const ySteps = 4;
+  const yLines = Array.from({ length: ySteps + 1 }, (_, i) => {
+    const val = Math.round(minSP + (spRange / ySteps) * i);
+    const y = PAD.top + innerH - ((val - minSP) / spRange) * innerH;
+    return { val, y };
+  });
+
+  // X-axis label density: show ~1 label per 60px of real container width
+  const maxLabels = Math.max(2, Math.floor(width / 60));
+  const labelStep = Math.ceil(transactions.length / maxLabels);
+
+  function abbreviateLabel(label = '') {
+    // "Day 10 (26 May)" -> "D10", "15 May Morning" -> "15 May", long labels truncated
+    const dayMatch = label.match(/^Day\s+(\d+)/);
+    if (dayMatch) return `D${dayMatch[1]}`;
+    const dateMatch = label.match(/^(\d{1,2}\s+[A-Za-z]{3})/);
+    if (dateMatch) return dateMatch[1];
+    return label.length > 8 ? label.slice(0, 7) + '…' : label;
+  }
+
+  function formatDate(dt) {
+    if (!dt) return null;
+    try {
+      return new Date(dt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    } catch { return null; }
+  }
+
+  function handleMouseMove(e) {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    // Convert mouse position to SVG coordinate space
+    const scaleX = W / rect.width;
+    const mouseX = (e.clientX - rect.left) * scaleX;
+    // Find nearest point
+    let closest = pts[0];
+    let minDist = Math.abs(pts[0].x - mouseX);
+    for (const p of pts) {
+      const d = Math.abs(p.x - mouseX);
+      if (d < minDist) { minDist = d; closest = p; }
+    }
+    // Position tooltip in % relative to the SVG element
+    const tooltipX = ((closest.x - PAD.left) / innerW) * 100;
+    const tooltipY = ((closest.y) / H) * 100;
+    setTooltip({ pctX: tooltipX, pctY: tooltipY, tx: closest.tx });
+  }
+
+  function handleMouseLeave() { setTooltip(null); }
+
+  return (
+    <div ref={wrapRef} className="sp-chart-wrap">
+      <svg
+        ref={svgRef}
+        className="sp-chart-svg"
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="xMidYMid meet"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+        aria-label="SP trend line chart"
+      >
+        <defs>
+          <linearGradient id="spGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.5" />
+            <stop offset="100%" stopColor="var(--primary)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {/* Y gridlines */}
+        {yLines.map(({ val, y }) => (
+          <g key={val}>
+            <line className="chart-grid" x1={PAD.left} y1={y.toFixed(1)} x2={W - PAD.right} y2={y.toFixed(1)} />
+            <text className="chart-y-label" x={PAD.left - 6} y={(y + 3.5).toFixed(1)}>{val}</text>
+          </g>
+        ))}
+
+        {/* Area fill */}
+        <path className="chart-area" d={areaPath} />
+
+        {/* Line */}
+        <path className="chart-line" d={linePath} />
+
+        {/* Dots + X labels */}
+        {pts.map((p, i) => (
+          <g key={i}>
+            <circle
+              className="chart-dot"
+              cx={p.x.toFixed(1)}
+              cy={p.y.toFixed(1)}
+              r="3"
+            />
+            {i % labelStep === 0 && (
+              <text
+                className="chart-x-label"
+                x={p.x.toFixed(1)}
+                y={(PAD.top + innerH + 16).toFixed(1)}
+              >
+                {abbreviateLabel(p.tx.sessionLabel || `#${i + 1}`)}
+              </text>
+            )}
+          </g>
+        ))}
+
+        {/* Highlighted dot on hover */}
+        {tooltip && (() => {
+          const hp = pts.find(p => p.tx === tooltip.tx);
+          return hp ? (
+            <circle
+              cx={hp.x.toFixed(1)}
+              cy={hp.y.toFixed(1)}
+              r="5"
+              fill="var(--primary)"
+              stroke="#fff"
+              strokeWidth="2"
+              pointerEvents="none"
+            />
+          ) : null;
+        })()}
+      </svg>
+
+      {/* Tooltip */}
+      {tooltip && (
+        <div
+          className="sp-tooltip"
+          style={{
+            left: `${Math.max(5, Math.min(95, tooltip.pctX))}%`,
+            top: `${Math.max(5, tooltip.pctY)}%`
+          }}
+        >
+          {tooltip.tx.sessionLabel && (
+            <div className="sp-tooltip-row">
+              <span className="tt-label">Session</span>
+              <span className="tt-val">{tooltip.tx.sessionLabel}</span>
+            </div>
+          )}
+          {tooltip.tx.dateTime && (
+            <div className="sp-tooltip-row">
+              <span className="tt-label">Date</span>
+              <span className="tt-val">{formatDate(tooltip.tx.dateTime)}</span>
+            </div>
+          )}
+          <div className="sp-tooltip-row">
+            <span className="tt-label">SP after</span>
+            <span className="tt-val">{tooltip.tx.balanceAfter}</span>
+          </div>
+          {tooltip.tx.appliedDelta !== undefined && tooltip.tx.appliedDelta !== 0 && (
+            <div className="sp-tooltip-row">
+              <span className="tt-label">Change</span>
+              <span className={`tt-val ${tooltip.tx.appliedDelta > 0 ? 'pos' : 'neg'}`}>
+                {tooltip.tx.appliedDelta > 0 ? '+' : ''}{tooltip.tx.appliedDelta}
+              </span>
+            </div>
+          )}
+          {tooltip.tx.reason && (
+            <div className="sp-tooltip-row" style={{ maxWidth: 220, flexWrap: 'wrap' }}>
+              <span className="tt-label">Reason</span>
+              <span className="tt-val" style={{ fontSize: 11, fontWeight: 500, color: '#cbd5e1', maxWidth: 160, whiteSpace: 'normal' }}>
+                {tooltip.tx.reason}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -410,18 +849,276 @@ function buildBadges(profile) {
   return badges.length ? badges : ['Getting Started'];
 }
 
-function buildNextActions(profile) {
-  const actions = [];
-  if (profile.cohort.pointsToTop50 > 0) actions.push(`Earn ${profile.cohort.pointsToTop50} more SP to enter Top 50.`);
-  if (profile.attendance.some(a => !a.qualified)) actions.push('Attend at least 75% of upcoming sessions to avoid attendance debit.');
-  if (profile.polls.some(p => p.missedQuestions > 0)) actions.push('Attempt every poll question to avoid poll debit.');
-  actions.push('Check your SP Bank after each session to understand every credit and debit.');
-  return actions.slice(0, 4);
+function buildAttentionItems(profile) {
+  const items = [];
+  const { student, cohort, attendance, polls } = profile;
+
+  // Check most recent / incomplete poll sets.
+  // B2-FIX: items carry {preText, highlight, postText} instead of raw HTML strings.
+  const sortedPolls = [...polls].sort((a, b) => pollSortKey(b.sessionLabel) - pollSortKey(a.sessionLabel));
+  for (const poll of sortedPolls.slice(0, 5)) {
+    if (poll.missedQuestions > 0 && poll.totalQuestions > 0) {
+      const remaining = poll.totalQuestions - poll.attemptedQuestions;
+      const locked = poll.attemptedQuestions === 0;
+      items.push({
+        severity: 'red',
+        preText: `${poll.sessionLabel} polls — `,
+        highlight: `${poll.attemptedQuestions} of ${poll.totalQuestions} attempted`,
+        postText: '',
+        sub: locked
+          ? 'Fully missed; this debit is already locked in.'
+          : `Finishing this set is worth up to ${remaining * 5} more SP today.`
+      });
+      if (items.length >= 2) break;
+    }
+  }
+
+  // Attendance warning
+  const attQualified = attendance.filter(a => a.qualified).length;
+  const attTotal = attendance.length;
+  const attPct = attTotal ? Math.round((attQualified / attTotal) * 100) : 100;
+  if (attPct < 75 && attTotal > 0) {
+    items.push({
+      severity: 'amber',
+      preText: `Attendance dipped to ${attPct}% qualified`,
+      highlight: '',
+      postText: '',
+      sub: 'Stay above 75% on upcoming sessions to avoid further debit.'
+    });
+  }
+
+  // Top 50 gap
+  const toTop50 = cohort.pointsToTop50;
+  if (toTop50 !== null && toTop50 > 0) {
+    items.push({
+      severity: 'amber',
+      preText: `${toTop50} SP from the Top 50 cutoff`,
+      highlight: '',
+      postText: '',
+      sub: 'Two strong attendance days would close this gap.'
+    });
+  }
+
+  return items.slice(0, 6);
+}
+
+
+// ============================================================
+// 5-DAY SUMMARY
+// ============================================================
+
+// Derive a sort key from a session label so we can order by date consistently.
+// Handles both "Day 10 (26 May)" and legacy "15 May Morning" formats.
+function sessionSortKey(label = '') {
+  // "Day N (DD Mon)" format
+  const paren = label.match(/\((\d{1,2})\s+([A-Za-z]+)\)/);
+  if (paren) {
+    const MONTHS = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
+    const m = MONTHS[paren[2].slice(0,3).toLowerCase()];
+    return m !== undefined ? m * 100 + Number(paren[1]) : -1;
+  }
+  // "DD Mon [Morning/Afternoon/Evening]" format
+  const lead = label.match(/^(\d{1,2})\s+([A-Za-z]+)/);
+  if (lead) {
+    const MONTHS = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
+    const m = MONTHS[lead[2].slice(0,3).toLowerCase()];
+    return m !== undefined ? m * 100 + Number(lead[1]) : -1;
+  }
+  return -1;
+}
+
+function FiveDaySummary({ profile }) {
+  const { attendance, polls, transactions } = profile;
+
+  // Build a map of sessionLabel -> { attendancePct, qualified, attSP, pollPct, pollSP }
+  // using existing attendance records and poll records.
+
+  // Collect all unique session labels from attendance (these are the mandatory sessions).
+  // Sort chronologically descending (most recent first), take last 5.
+  const sessionLabels = [...new Set(attendance.map(a => a.sessionLabel).filter(Boolean))]
+    .sort((a, b) => sessionSortKey(b) - sessionSortKey(a))
+    .slice(0, 5);
+
+  // Build a map for polls: sessionLabel -> poll record
+  const pollBySession = new Map();
+  for (const p of polls) {
+    if (p.sessionLabel) pollBySession.set(p.sessionLabel, p);
+  }
+
+  // Build a map for transactions: sessionLabel+category -> appliedDelta sum
+  // so we can read the actual SP that was credited from the ledger.
+  const txBySessionCat = new Map();
+  for (const tx of transactions) {
+    if (!tx.sessionLabel || !tx.category) continue;
+    const key = `${tx.sessionLabel}|${tx.category}`;
+    txBySessionCat.set(key, (txBySessionCat.get(key) || 0) + (Number(tx.appliedDelta) || 0));
+  }
+
+  // Build a map for attendance records: sessionLabel -> attendance record
+  const attBySession = new Map();
+  for (const a of attendance) {
+    if (a.sessionLabel) attBySession.set(a.sessionLabel, a);
+  }
+
+  // Assemble rows for the 5 sessions.
+  const rows = sessionLabels.map(label => {
+    const att = attBySession.get(label);
+    const poll = pollBySession.get(label);
+
+    const attPct = att ? Math.round(Number(att.attendancePercentage) || 0) : null;
+    const pollPct = poll && poll.totalQuestions > 0
+      ? Math.round((poll.attemptedQuestions / poll.totalQuestions) * 100)
+      : null;
+
+    // Read actual SP from transactions ledger (sum of attendance + poll txns for this session)
+    const attSP = txBySessionCat.get(`${label}|attendance`) ?? null;
+    const pollSP = txBySessionCat.get(`${label}|poll`) ?? null;
+    const totalSP = (attSP ?? 0) + (pollSP ?? 0);
+
+    return { label, attPct, pollPct, attSP, pollSP, totalSP };
+  });
+
+  // Summaries (only over sessions where data exists)
+  const attRows = rows.filter(r => r.attPct !== null);
+  const pollRows = rows.filter(r => r.pollPct !== null);
+  const avgAttPct = attRows.length ? Math.round(attRows.reduce((s, r) => s + r.attPct, 0) / attRows.length) : null;
+  const avgPollPct = pollRows.length ? Math.round(pollRows.reduce((s, r) => s + r.pollPct, 0) / pollRows.length) : null;
+  const totalAttSP = rows.reduce((s, r) => s + (r.attSP ?? 0), 0);
+  const totalPollSP = rows.reduce((s, r) => s + (r.pollSP ?? 0), 0);
+  const grandTotalSP = totalAttSP + totalPollSP;
+
+  // Engagement status
+  const attBelowThreshold = avgAttPct !== null && avgAttPct < 75;
+  const pollBelowThreshold = avgPollPct !== null && avgPollPct < 75;
+  const bothHealthy = !attBelowThreshold && !pollBelowThreshold && avgAttPct !== null && avgPollPct !== null;
+
+  function pctBar(pct, threshold = 75) {
+    if (pct === null) return null;
+    const color = pct >= threshold ? 'var(--green)' : 'var(--red)';
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ flex: 1, height: 6, background: '#e2e8f0', borderRadius: 999, overflow: 'hidden' }}>
+          <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: color, borderRadius: 999 }} />
+        </div>
+        <span style={{ fontSize: 12, fontWeight: 700, color, minWidth: 36, textAlign: 'right' }}>{pct}%</span>
+      </div>
+    );
+  }
+
+  if (sessionLabels.length === 0) {
+    return (
+      <section className="panel">
+        <h2>5-Day Summary</h2>
+        <p className="muted">No session attendance data found yet.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-head" style={{ marginBottom: 16 }}>
+        <div>
+          <h2 style={{ margin: 0 }}>5-Day Summary</h2>
+          <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
+            Your engagement across the last {rows.length} mandatory session{rows.length !== 1 ? 's' : ''}.
+          </p>
+        </div>
+        {/* Engagement status badge */}
+        {bothHealthy && (
+          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--green)', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '6px 12px', whiteSpace: 'nowrap' }}>
+            ✅ Healthy Engagement
+          </span>
+        )}
+      </div>
+
+      {/* Warning banners */}
+      {(attBelowThreshold || pollBelowThreshold) && (
+        <div style={{ display: 'grid', gap: 8, marginBottom: 16 }}>
+          {attBelowThreshold && (
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--amber)', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px' }}>
+              ⚠ Attendance is below the safe threshold.
+            </div>
+          )}
+          {pollBelowThreshold && (
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--amber)', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px' }}>
+              ⚠ Poll participation is below the safe threshold.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Session rows */}
+      <div className="bank" style={{ marginBottom: 16 }}>
+        {/* Header */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr repeat(5, auto)', gap: 10, padding: '10px 12px', background: '#f8fafc', borderBottom: '1px solid var(--line)', fontSize: 11, fontWeight: 900, color: 'var(--muted)', textTransform: 'uppercase' }}>
+          <span>Session</span>
+          <span style={{ textAlign: 'right', minWidth: 80 }}>Att %</span>
+          <span style={{ textAlign: 'right', minWidth: 80 }}>Poll %</span>
+          <span style={{ textAlign: 'right', minWidth: 60 }}>Att SP</span>
+          <span style={{ textAlign: 'right', minWidth: 60 }}>Poll SP</span>
+          <span style={{ textAlign: 'right', minWidth: 60 }}>Total SP</span>
+        </div>
+        {rows.map((row, i) => (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr repeat(5, auto)', gap: 10, padding: '12px 12px', borderBottom: i < rows.length - 1 ? '1px solid var(--line)' : 'none', alignItems: 'center' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{row.label}</span>
+            <div style={{ minWidth: 80 }}>
+              {row.attPct !== null
+                ? pctBar(row.attPct)
+                : <span className="muted" style={{ fontSize: 12 }}>—</span>}
+            </div>
+            <div style={{ minWidth: 80 }}>
+              {row.pollPct !== null
+                ? pctBar(row.pollPct)
+                : <span className="muted" style={{ fontSize: 12 }}>—</span>}
+            </div>
+            <span style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, color: row.attSP !== null && row.attSP > 0 ? 'var(--green)' : 'var(--muted)', minWidth: 60 }}>
+              {row.attSP !== null ? (row.attSP > 0 ? `+${row.attSP}` : row.attSP) : '—'}
+            </span>
+            <span style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, color: row.pollSP !== null && row.pollSP > 0 ? 'var(--green)' : 'var(--muted)', minWidth: 60 }}>
+              {row.pollSP !== null ? (row.pollSP > 0 ? `+${row.pollSP}` : row.pollSP) : '—'}
+            </span>
+            <span style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, color: row.totalSP > 0 ? 'var(--primary)' : 'var(--muted)', minWidth: 60 }}>
+              {row.totalSP > 0 ? `+${row.totalSP}` : row.totalSP || '—'}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Totals & averages */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+        <div className="metric">
+          <span>Avg Attendance</span>
+          <strong style={{ color: avgAttPct !== null && avgAttPct >= 75 ? 'var(--green)' : 'var(--red)' }}>
+            {avgAttPct !== null ? `${avgAttPct}%` : '—'}
+          </strong>
+        </div>
+        <div className="metric">
+          <span>Avg Poll Participation</span>
+          <strong style={{ color: avgPollPct !== null && avgPollPct >= 75 ? 'var(--green)' : 'var(--red)' }}>
+            {avgPollPct !== null ? `${avgPollPct}%` : '—'}
+          </strong>
+        </div>
+        <div className="metric">
+          <span>Total Attendance SP</span>
+          <strong>{totalAttSP > 0 ? `+${totalAttSP}` : totalAttSP}</strong>
+        </div>
+        <div className="metric">
+          <span>Total Poll SP</span>
+          <strong>{totalPollSP > 0 ? `+${totalPollSP}` : totalPollSP}</strong>
+        </div>
+        <div className="metric">
+          <span>Total SP (5 sessions)</span>
+          <strong style={{ color: 'var(--primary)' }}>{grandTotalSP > 0 ? `+${grandTotalSP}` : grandTotalSP}</strong>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function Tabs({ tab, setTab, tabs }) {
   return <nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>;
 }
+
 
 function SpBank({ transactions }) {
   return (
@@ -508,37 +1205,49 @@ function AdminView({ admin, auth, onBack }) {
 
   const headers = adminHeaders(auth);
 
-  // Track admin page views in sessionevents for historical analytics
+  // N14-FIX: depend on [auth] (the credential object) not [admin] (the data payload).
   useEffect(() => {
     if (!auth?.email) return;
     const doPing = (page) => fetch(`${API}/ping`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: auth.email, name: auth.email, page })
-    }).catch(() => {});
+    }).catch(() => { });
     doPing('admin-analytics');
     const id = setInterval(() => doPing('admin-live'), 30000);
     return () => clearInterval(id);
-  }, [admin]);
+  }, [auth]);
+
+  // N6-FIX: all admin fetches check res.ok and catch network errors to prevent silent hangs.
   const loadLeaderboard = async (limit = leaderLimit) => {
-    const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers });
-    setLeaderboard(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers });
+      if (res.ok) setLeaderboard(await res.json());
+    } catch (err) { console.error('loadLeaderboard:', err?.message); }
   };
   const loadAttendance = async () => {
-    const res = await fetch(`${API}/admin/attendance`, { headers });
-    setAttendance(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/attendance`, { headers });
+      if (res.ok) setAttendance(await res.json());
+    } catch (err) { console.error('loadAttendance:', err?.message); }
   };
   const loadStudent = async (id) => {
-    const res = await fetch(`${API}/admin/student/${id}`, { headers });
-    setStudentProfile(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/student/${id}`, { headers });
+      if (res.ok) setStudentProfile(await res.json());
+    } catch (err) { console.error('loadStudent:', err?.message); }
   };
   const loadActive = async () => {
-    const res = await fetch(`${API}/admin/active`, { headers });
-    setActive(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/active`, { headers });
+      if (res.ok) setActive(await res.json());
+    } catch (err) { console.error('loadActive:', err?.message); }
   };
   const loadAnalytics = async () => {
-    const res = await fetch(`${API}/admin/analytics`, { headers });
-    setAnalytics(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/analytics`, { headers });
+      if (res.ok) setAnalytics(await res.json());
+    } catch (err) { console.error('loadAnalytics:', err?.message); }
   };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
@@ -564,7 +1273,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard', 'Leaderboard'], ['attendance', 'Attendance'], ['live', 'Live'], ['analytics', 'Analytics'], ['students', 'Students']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -584,7 +1293,7 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
-      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
+      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" aria-label="Close" onClick={() => setStudentProfile(null)}>×</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
   );
 }
@@ -757,7 +1466,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
       {loading ? <p>Loading...</p> : list.length === 0 ? <p className="empty">No students in this category.</p> : (
         <table className="table">
           <thead><tr><th>Name</th><th>Email</th><th>SP</th><th>Start Date</th></tr></thead>
-          <tbody>{list.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{cursor:'pointer'}}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
+          <tbody>{list.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{ cursor: 'pointer' }}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
         </table>
       )}
     </section>

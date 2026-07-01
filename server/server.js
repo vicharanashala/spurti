@@ -17,8 +17,10 @@ import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
-const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || 'dled@iitrpr.ac.in');
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'vled-local-admin';
+// B1-FIX: defaults are null — admin access is denied unless .env provides real values.
+// Copilot review: using null prevents empty/missing headers (which evaluate to '') from matching.
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ? normalizeEmail(process.env.ADMIN_EMAIL) : null;
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || null;
 
 // Survey triangulation pop-up. All driven by env so the form link / mode can
 // change without a client rebuild (the client reads these via /api/config).
@@ -46,7 +48,7 @@ async function getSubmittedEmails() {
   if (_subs.set && Date.now() - _subs.at < 60000) return _subs.set;   // 60s cache
   try {
     const u = SURVEY.responsesUrl + (SURVEY.responsesUrl.includes('?') ? '&' : '?') +
-              'secret=' + encodeURIComponent(SURVEY.responsesSecret);
+      'secret=' + encodeURIComponent(SURVEY.responsesSecret);
     const r = await fetch(u, { redirect: 'follow' });
     const j = await r.json();
     _subs = { at: Date.now(), set: new Set((j.emails || []).map(e => normalizeEmail(e))) };
@@ -70,6 +72,13 @@ function surveyActive() {
 const app = express();
 const api = express.Router();
 const liveViewers = new Map();
+// N7-FIX: evict stale viewer entries every 5 min to prevent unbounded Map growth.
+setInterval(() => {
+  const stale = Date.now() - 60_000;
+  for (const [email, data] of liveViewers.entries()) {
+    if (data.lastSeen.getTime() < stale) liveViewers.delete(email);
+  }
+}, 5 * 60 * 1000).unref?.();
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -128,6 +137,15 @@ async function studentEmailFromRequest(req) {
   // fall back to a top-level email in case the shape ever flattens.
   const email = data?.user?.email || data?.email;
   if (!email) return null;
+  // Read ViBe completion percentages from Samagama's user object if exposed.
+  // These live in chatengine.users (vibeOnbPct/vibeAiPct/vibeMernPct) and may
+  // be forwarded by Samagama's /api/auth/me. We read them here (read-only) so
+  // Spurti never touches chatengine directly. If absent they remain null.
+  req.vibeData = {
+    vibeOnbPct:  data?.user?.vibeOnbPct  ?? data?.vibeOnbPct  ?? null,
+    vibeAiPct:   data?.user?.vibeAiPct   ?? data?.vibeAiPct   ?? null,
+    vibeMernPct: data?.user?.vibeMernPct ?? data?.vibeMernPct ?? null
+  };
   return normalizeEmail(email);
 }
 
@@ -168,6 +186,12 @@ async function studentPayload(student) {
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
   const top50Cutoff = allStudents[49]?.totalSp || null;
+  // Top 50% avg SP: allStudents is already sorted SP DESC, so the first ceil(N/2) are the top half.
+  const top50HalfCount = Math.ceil(allStudents.length / 2);
+  const top50Half = allStudents.slice(0, top50HalfCount);
+  const top50AvgSp = top50Half.length
+    ? Math.round(top50Half.reduce((sum, s) => sum + Number(s.totalSp || 0), 0) / top50Half.length)
+    : 0;
   const currentIndex = allStudents.findIndex(s => s.email === email);
   const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
   // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
@@ -209,6 +233,7 @@ async function studentPayload(student) {
     attendance,
     cohort: {
       averageSp,
+      top50AvgSp,
       top10Cutoff,
       top50Cutoff,
       pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - student.totalSp + 1),
@@ -220,9 +245,11 @@ async function studentPayload(student) {
 }
 
 function isAdmin(req) {
-  const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
-  const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
-  return emailOk && tokenOk;
+  const email = req.headers['x-admin-email'];
+  const token = req.headers['x-admin-token'];
+  // Verify configuration is set and headers are supplied (blocking unauthenticated empty headers)
+  if (!ADMIN_EMAIL || !ADMIN_TOKEN || !email || !token) return false;
+  return normalizeEmail(email) === ADMIN_EMAIL && String(token) === ADMIN_TOKEN;
 }
 
 function adminGuard(req, res, next) {
@@ -249,44 +276,68 @@ api.get('/me', async (req, res) => {
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
-  res.json({ authenticated: true, profile: await studentPayload(student) });
+  const payload = await studentPayload(student);
+  // Attach ViBe course percentages sourced read-only from Samagama's auth
+  // response. Null values mean Samagama hasn't exposed the field yet.
+  const vibeData = req.vibeData;
+  payload.vibeCourse = {
+    onboarding:    vibeData?.vibeOnbPct  ?? null,
+    aiFundamentals: vibeData?.vibeAiPct  ?? null,
+    mernStack:     vibeData?.vibeMernPct ?? null
+  };
+  res.json({ authenticated: true, profile: payload });
 });
 
 api.get('/search', async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ exact: false, matches: [] });
-
-  if (q.includes('@')) {
-    const email = normalizeEmail(q);
-    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
-    if (student?.status === 'excused') return res.json(excusedPayload(student));
-    if (student) return res.json({ exact: true, profile: await studentPayload(student) });
+  try {
+    if (q.includes('@')) {
+      const email = normalizeEmail(q);
+      const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+      if (student?.status === 'excused') return res.json(excusedPayload(student));
+      // ViBe data is not available for search results (no auth token to forward)
+      if (student) {
+        const payload = await studentPayload(student);
+        payload.vibeCourse = { onboarding: null, aiFundamentals: null, mernStack: null };
+        return res.json({ exact: true, profile: payload });
+      }
+    }
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matches = await Student.find({
+      $or: [
+        { name: { $regex: escaped, $options: 'i' } },
+        { email: { $regex: escaped, $options: 'i' } },
+        { alternateEmail: { $regex: escaped, $options: 'i' } }
+      ]
+    }).sort({ name: 1 }).limit(12).lean();
+    res.json({ exact: false, matches: matches.map(publicStudent) });
+  } catch (err) {
+    console.error('search error:', err?.message);
+    res.status(500).json({ error: 'Search failed. Please try again.' });
   }
-
-  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const matches = await Student.find({
-    $or: [
-      { name: { $regex: escaped, $options: 'i' } },
-      { email: { $regex: escaped, $options: 'i' } },
-      { alternateEmail: { $regex: escaped, $options: 'i' } }
-    ]
-  }).sort({ name: 1 }).limit(12).lean();
-
-  res.json({ exact: false, matches: matches.map(publicStudent) });
 });
 
 api.post('/confirm', async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const { studentId, email } = req.body || {};
   const typed = normalizeEmail(email);
-  const student = await Student.findById(studentId).lean();
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  if (typed !== normalizeEmail(student.email) && typed !== normalizeEmail(student.alternateEmail)) {
-    return res.status(403).json({ error: 'Email did not match this record' });
+  try {
+    const student = await Student.findById(studentId).lean();
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    if (typed !== normalizeEmail(student.email) && typed !== normalizeEmail(student.alternateEmail)) {
+      return res.status(403).json({ error: 'Email did not match this record' });
+    }
+    if (student.status === 'excused') return res.json(excusedPayload(student));
+    // ViBe data is not available for confirm path (no auth token to forward)
+    const payload = await studentPayload(student);
+    payload.vibeCourse = { onboarding: null, aiFundamentals: null, mernStack: null };
+    res.json(payload);
+  } catch (err) {
+    console.error('confirm error:', err?.message);
+    res.status(500).json({ error: 'Confirmation failed. Please try again.' });
   }
-  if (student.status === 'excused') return res.json(excusedPayload(student));
-  res.json(await studentPayload(student));
 });
 
 api.get('/leaderboard', async (req, res) => {
@@ -487,13 +538,13 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   const uniqueSince = (date) => new Set(activeEvents.filter(e => e.timestamp >= date).map(e => e.email)).size;
   const bucket = (date, mode) => {
     const d = new Date(date);
-    if (mode === 'hour') return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:00`;
+    if (mode === 'hour') return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:00`;
     if (mode === 'week') {
       const first = new Date(d.getFullYear(), 0, 1);
       const week = Math.ceil((((d - first) / 86400000) + first.getDay() + 1) / 7);
-      return `${d.getFullYear()}-W${String(week).padStart(2,'0')}`;
+      return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`;
     }
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   };
   const series = (mode, from) => {
     const map = new Map();
