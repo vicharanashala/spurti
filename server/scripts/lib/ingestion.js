@@ -164,7 +164,8 @@ export async function createTransactionOnce(student, category, sessionLabel, del
   const exists = await SPTransaction.exists({ email: student.email, category, sessionLabel });
   if (exists) { stats.skippedExistingTransactions = (stats.skippedExistingTransactions || 0) + 1; return null; }
   const last = await SPTransaction.findOne({ email: student.email }).sort({ dateTime: -1, createdAt: -1 }).lean();
-  const balanceAfter = Number(last?.balanceAfter ?? student.totalSp ?? 0) + delta;
+  const prevBalance = Number(last?.balanceAfter ?? student.totalSp ?? 0);
+  const balanceAfter = Math.max(0, prevBalance + delta);
   const transaction = await SPTransaction.create({
     email: student.email,
     studentId: student._id,
@@ -185,7 +186,7 @@ export async function recalculateStudentSp(studentOrEmail) {
   const txns = await SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 });
   let balance = 0;
   for (const txn of txns) {
-    balance += Number(txn.appliedDelta || 0);
+    balance = Math.max(0, balance + Number(txn.appliedDelta || 0));
     if (txn.balanceAfter !== balance) {
       txn.balanceAfter = balance;
       await txn.save();
@@ -275,6 +276,40 @@ export async function applySessionForStudents(config, students, rootDir, stats =
           { upsert: true }
         );
         stats.pollsBackfilled = (stats.pollsBackfilled || 0) + 1;
+      }
+    }
+  }
+
+  const matchedEmails = new Set(students.map(s => s.email));
+  const matchedAltEmails = new Set(students.map(s => s.alternateEmail).filter(Boolean));
+  const unmatchedZoomEmails = [];
+
+  for (const zoomEmail of parsedAttendance.rows.keys()) {
+    if (!matchedEmails.has(zoomEmail) && !matchedAltEmails.has(zoomEmail)) {
+      unmatchedZoomEmails.push(zoomEmail);
+    }
+  }
+
+  if (unmatchedZoomEmails.length > 0) {
+    stats.unmatchedEmailsFound = (stats.unmatchedEmailsFound || 0) + unmatchedZoomEmails.length;
+    for (const zoomEmail of unmatchedZoomEmails) {
+      const byAltEmail = await Student.findOne({ alternateEmail: zoomEmail }).lean();
+      if (byAltEmail && byAltEmail.status !== 'excused' && byAltEmail.email !== zoomEmail && sessionApplies(byAltEmail, endDateTime)) {
+        const minutes = parsedAttendance.rows.get(zoomEmail) || 0;
+        const pct = totalMinutes ? Math.round((minutes / totalMinutes) * 100) : 0;
+        const qualified = totalMinutes > 0 && minutes / totalMinutes >= 0.75;
+        const delta = qualified ? 5 : -5;
+        const reason = `${config.label}: alternate email match for ${zoomEmail}, attended ${minutes}/${totalMinutes} minutes (${pct}%). ${qualified ? '+5' : '-5'} SP.`;
+        const tx = await createTransactionOnce(byAltEmail, 'attendance', config.label, delta, reason, endDateTime, stats);
+        if (tx) {
+          await AttendanceRecord.findOneAndUpdate(
+            { email: byAltEmail.email, sessionLabel: config.label },
+            { $set: { email: byAltEmail.email, studentId: byAltEmail._id, sessionLabel: config.label, attendedMinutes: minutes, totalSessionMinutes: totalMinutes, attendancePercentage: pct, qualified, transactionId: tx._id } },
+            { upsert: true }
+          );
+          touchedEmails.add(byAltEmail.email);
+          stats.altEmailRecovered = (stats.altEmailRecovered || 0) + 1;
+        }
       }
     }
   }
