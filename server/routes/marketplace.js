@@ -369,8 +369,8 @@ router.post('/services/:id/complete', populateStudentFromRequest, async (req, re
     const service = await Service.findById(req.params.id);
     if (!service) return res.status(404).json({ error: 'Service not found' });
 
-    const isBuyer = String(service.buyerId) === String(req.student._id);
-    const isProvider = String(service.providerId) === String(req.student._id);
+    const isBuyer = String(service.buyerId?._id || service.buyerId) === String(req.student._id);
+    const isProvider = String(service.providerId?._id || service.providerId) === String(req.student._id);
 
     if (!isBuyer && !isProvider) {
       return res.status(403).json({ error: 'Not authorized' });
@@ -487,8 +487,8 @@ router.post('/reviews', populateStudentFromRequest, async (req, res) => {
     if (!service) return res.status(404).json({ error: 'Service not found' });
     if (service.status !== 'completed') return res.status(400).json({ error: 'Can only review completed services' });
 
-    const isBuyer = String(service.buyerId) === String(req.student._id);
-    const isProvider = String(service.providerId) === String(req.student._id);
+    const isBuyer = String(service.buyerId?._id || service.buyerId) === String(req.student._id);
+    const isProvider = String(service.providerId?._id || service.providerId) === String(req.student._id);
     if (!isBuyer && !isProvider) return res.status(403).json({ error: 'Not authorized' });
 
     const reviewer = await Student.findOne({ email: req.student.email });
@@ -528,8 +528,8 @@ router.post('/disputes', populateStudentFromRequest, async (req, res) => {
     const service = await Service.findById(serviceId);
     if (!service) return res.status(404).json({ error: 'Service not found' });
 
-    const isBuyer = String(service.buyerId) === String(req.student._id);
-    const isProvider = String(service.providerId) === String(req.student._id);
+    const isBuyer = String(service.buyerId?._id || service.buyerId) === String(req.student._id);
+    const isProvider = String(service.providerId?._id || service.providerId) === String(req.student._id);
     if (!isBuyer && !isProvider) return res.status(403).json({ error: 'Not authorized' });
 
     if (service.status === 'completed') return res.status(400).json({ error: 'Cannot dispute completed service' });
@@ -770,8 +770,8 @@ router.get('/services/:id/messages', populateStudentFromRequest, async (req, res
     if (!service) return res.status(404).json({ error: 'Service not found' });
 
     const isParticipant =
-      String(service.buyerId) === String(req.student._id) ||
-      String(service.providerId) === String(req.student._id);
+      String(service.buyerId?._id || service.buyerId) === String(req.student._id) ||
+      String(service.providerId?._id || service.providerId) === String(req.student._id);
 
     if (!isParticipant) return res.status(403).json({ error: 'Not authorized' });
 
@@ -790,8 +790,8 @@ router.post('/services/:id/messages', populateStudentFromRequest, async (req, re
     if (!service) return res.status(404).json({ error: 'Service not found' });
 
     const isParticipant =
-      String(service.buyerId) === String(req.student._id) ||
-      String(service.providerId) === String(req.student._id);
+      String(service.buyerId?._id || service.buyerId) === String(req.student._id) ||
+      String(service.providerId?._id || service.providerId) === String(req.student._id);
 
     if (!isParticipant) return res.status(403).json({ error: 'Not authorized' });
 

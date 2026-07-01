@@ -1151,9 +1151,10 @@ function ServiceDetailModal({ service, student, devEmail, onClose, onUpdate }) {
   const [postingMsg, setPostingMsg] = useState(false);
 
   const isOwner = String(serviceData.buyerId?._id) === String(student?._id) || serviceData.buyerEmail === student?.email;
-  const isProvider = String(serviceData.providerId?._id) === String(student?._id) ||
-    String(serviceData.providerEmail) === String(student?.email) ||
-    (assignedProvider?.applicantId?._id && String(assignedProvider.applicantId._id) === String(student?._id));
+  const isProvider =
+    String(serviceData.providerId?._id || serviceData.providerId || '') === String(student?._id || '') ||
+    String(serviceData.providerEmail || '') === String(student?.email || '') ||
+    String(assignedProvider?.applicantId?._id || '') === String(student?._id || '');
   const canApply = !isOwner && !isProvider && serviceData.status === 'open';
   const canComplete = (isOwner || isProvider) && (serviceData.status === 'assigned' || serviceData.status === 'in_progress');
   const isParticipant = isOwner || isProvider;
