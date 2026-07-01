@@ -17,9 +17,10 @@ import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
-// B1-FIX: defaults are empty strings — admin access is denied unless .env provides real values.
-const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || '');
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+// B1-FIX: defaults are null — admin access is denied unless .env provides real values.
+// Copilot review: using null prevents empty/missing headers (which evaluate to '') from matching.
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ? normalizeEmail(process.env.ADMIN_EMAIL) : null;
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || null;
 
 // Survey triangulation pop-up. All driven by env so the form link / mode can
 // change without a client rebuild (the client reads these via /api/config).
@@ -140,18 +141,12 @@ async function studentEmailFromRequest(req) {
   // These live in chatengine.users (vibeOnbPct/vibeAiPct/vibeMernPct) and may
   // be forwarded by Samagama's /api/auth/me. We read them here (read-only) so
   // Spurti never touches chatengine directly. If absent they remain null.
-  const vibeData = {
+  req.vibeData = {
     vibeOnbPct:  data?.user?.vibeOnbPct  ?? data?.vibeOnbPct  ?? null,
     vibeAiPct:   data?.user?.vibeAiPct   ?? data?.vibeAiPct   ?? null,
     vibeMernPct: data?.user?.vibeMernPct ?? data?.vibeMernPct ?? null
   };
-  return { email: normalizeEmail(email), vibeData };
-}
-
-// Backwards-compatible helper — extracts just the email string.
-async function emailFromRequest(req) {
-  const result = await studentEmailFromRequest(req);
-  return typeof result === 'string' ? result : result?.email ?? null;
+  return normalizeEmail(email);
 }
 
 async function rankFor(email) {
@@ -250,9 +245,11 @@ async function studentPayload(student) {
 }
 
 function isAdmin(req) {
-  const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
-  const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
-  return emailOk && tokenOk;
+  const email = req.headers['x-admin-email'];
+  const token = req.headers['x-admin-token'];
+  // Verify configuration is set and headers are supplied (blocking unauthenticated empty headers)
+  if (!ADMIN_EMAIL || !ADMIN_TOKEN || !email || !token) return false;
+  return normalizeEmail(email) === ADMIN_EMAIL && String(token) === ADMIN_TOKEN;
 }
 
 function adminGuard(req, res, next) {
@@ -274,9 +271,7 @@ api.get('/config', (_req, res) => res.json({
 }));
 
 api.get('/me', async (req, res) => {
-  const authResult = await studentEmailFromRequest(req);
-  const email = typeof authResult === 'string' ? authResult : authResult?.email ?? null;
-  const vibeData = typeof authResult === 'object' && authResult !== null ? authResult.vibeData : null;
+  const email = await studentEmailFromRequest(req);
   if (!email) return res.status(401).json({ authenticated: false });
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
@@ -284,6 +279,7 @@ api.get('/me', async (req, res) => {
   const payload = await studentPayload(student);
   // Attach ViBe course percentages sourced read-only from Samagama's auth
   // response. Null values mean Samagama hasn't exposed the field yet.
+  const vibeData = req.vibeData;
   payload.vibeCourse = {
     onboarding:    vibeData?.vibeOnbPct  ?? null,
     aiFundamentals: vibeData?.vibeAiPct  ?? null,

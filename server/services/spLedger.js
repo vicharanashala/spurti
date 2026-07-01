@@ -100,11 +100,16 @@ export async function getAllStudentsSummary() {
  */
 export async function appendTransaction(email, category, sessionLabel, delta, reason) {
   const normalized = email.toLowerCase();
-  const student = await Student.findOne({ email: normalized }).lean();
+
+  // B3-FIX: Atomic increment and retrieve the updated student record in one step to ensure balanceAfter consistency under concurrency
+  const student = await Student.findOneAndUpdate(
+    { email: normalized },
+    { $inc: { totalSp: delta } },
+    { new: true }
+  );
   if (!student) throw new Error(`appendTransaction: student not found for email ${normalized}`);
 
-  const currentBalance = student.totalSp ?? 100;
-  const balanceAfter   = currentBalance + delta;
+  const balanceAfter = student.totalSp;
 
   const [txn] = await SPTransaction.create([{
     email:        normalized,
@@ -118,12 +123,6 @@ export async function appendTransaction(email, category, sessionLabel, delta, re
     reason,
     dateTime:     new Date()              // B3-FIX: dateTime (not sessionDatetime / recordedAt)
   }]);
-
-  // Atomic increment so the stored balance stays in sync.
-  await Student.updateOne(
-    { email: normalized },
-    { $inc: { totalSp: delta } }
-  );
 
   return txn;
 }

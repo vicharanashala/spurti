@@ -835,12 +835,6 @@ function SpTrendChart({ transactions }) {
       )}
     </div>
   );
-
-  function formatDate(dt) {
-    if (!dt) return null;
-    try { return new Date(dt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); }
-    catch { return null; }
-  }
 }
 
 function buildBadges(profile) {
