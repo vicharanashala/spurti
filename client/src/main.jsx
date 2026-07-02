@@ -337,7 +337,7 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel, torchData }) {
       <table className="table">
         <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
         <tbody>{rows.map(row => {
-          const isTorch = torchData?.torch && row.name === torchData.torch.name;
+          const isTorch = torchData?.torch && row.maskedEmail === torchData.torch.maskedEmail;
           return (
           <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
             <td>{row.rank}</td>
@@ -426,13 +426,15 @@ function WeeklyPulseCard({ weeklyPulse }) {
     );
   }
 
-  const { netSp, lost, byCategory, topLossReasons } = weeklyPulse;
+  const { netSp, gained, lost, byCategory, topLossReasons } = weeklyPulse;
 
   return (
     <div className="pulse-card wide-pulse weekly-pulse-card">
       <span>Weekly SP Pulse</span>
       <div className="weekly-pulse-content">
-        {lost === 0 || topLossReasons.length === 0 ? (
+        {gained === 0 && lost === 0 ? (
+          <p className="pulse-good-news">No SP activity recorded yet this week.</p>
+        ) : lost === 0 || topLossReasons.length === 0 ? (
           <p className="pulse-good-news">You gained {netSp} SP this week — no losses. Nice run.</p>
         ) : (
           <div className="pulse-losses">

@@ -333,6 +333,9 @@ api.get('/torch', async (_req, res) => {
   }));
 
   const torch = weeklyTorchHolder(deltaRows);
+  if (torch) {
+    torch.maskedEmail = maskEmail(torch.email);
+  }
 
   res.json({ windowDays, torch });
 });
