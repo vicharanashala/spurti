@@ -446,6 +446,44 @@ input {
 }
 .bar-row b { text-align: right; }
 
+.trajectory-wrap {
+  overflow-x: auto;
+}
+.trajectory-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.trajectory-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.trajectory-legend span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.trajectory-legend i {
+  display: block;
+  width: 20px;
+  height: 3px;
+  border-radius: 2px;
+}
+.badge-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 10px;
+  background: var(--red);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 @media (max-width: 860px) {
   .hero { grid-template-columns: 1fr; align-items: start; }
   .hero-copy { padding: 24px; }
