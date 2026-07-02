@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { generateWeeklyRecap } from './generateWeeklyRecap.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -592,6 +593,48 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
+
+// Most recent Monday (local time), used as the default recap week when the
+// caller doesn't pass ?week=.
+function mostRecentMonday() {
+  const now = new Date();
+  const daysSinceMonday = (now.getDay() + 6) % 7;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysSinceMonday);
+  return monday;
+}
+
+// Ownership check mirrors /api/confirm's model: a caller either holds a valid
+// Samagama session cookie for this student, or supplies the exact email on
+// record (the same "prove you know the email" gate /confirm already uses),
+// or is an admin. Without this, the route would let anyone who guesses/finds
+// a student's Mongo _id read that student's personal weekly performance data.
+async function canViewStudent(req, student) {
+  if (isAdmin(req)) return true;
+  const sessionEmail = await studentEmailFromRequest(req);
+  if (sessionEmail && sessionEmail === normalizeEmail(student.email)) return true;
+  const confirmedEmail = normalizeEmail(req.query.email);
+  if (confirmedEmail && (confirmedEmail === normalizeEmail(student.email) || confirmedEmail === normalizeEmail(student.alternateEmail))) return true;
+  return false;
+}
+
+api.get('/students/:id/recap', async (req, res) => {
+  const student = await Student.findById(req.params.id).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (!(await canViewStudent(req, student))) return res.status(403).json({ error: 'Forbidden' });
+
+  const weekDate = req.query.week ? new Date(`${req.query.week}T00:00:00`) : mostRecentMonday();
+  if (Number.isNaN(weekDate.getTime())) return res.status(400).json({ error: 'Invalid week date' });
+  const week = weekDate.toISOString().slice(0, 10);
+  const force = req.query.force === 'true';
+
+  try {
+    const recap = await generateWeeklyRecap({ email: student.email, week, force });
+    res.json(recap);
+  } catch (err) {
+    console.error('weekly recap generation failed:', err?.message);
+    res.status(500).json({ error: 'Failed to generate weekly recap' });
+  }
+});
 
 app.use('/api', api);
 app.use('/spurti/api', api);
