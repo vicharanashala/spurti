@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { weeklySpBreakdown, weeklyTorchHolder } from './services/weeklyPulse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -164,6 +165,7 @@ async function studentPayload(student) {
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
+  const weeklyPulse = weeklySpBreakdown(transactions);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
@@ -205,6 +207,7 @@ async function studentPayload(student) {
       surveyCompleted: Boolean(student.surveyCompleted)
     },
     transactions,
+    weeklyPulse,
     polls,
     attendance,
     cohort: {
@@ -302,6 +305,36 @@ api.get('/leaderboard', async (req, res) => {
     level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
     trophyLeague: leagueBand(s.totalSp)
   })));
+});
+
+api.get('/torch', async (_req, res) => {
+  const windowDays = 7;
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000);
+
+  const activeStudents = await Student.find({ status: { $ne: 'excused' } })
+    .select('email name')
+    .lean();
+
+  const aggregation = await SPTransaction.aggregate([
+    { $match: { dateTime: { $gte: cutoff, $lte: now } } },
+    { $group: { _id: "$email", netSp: { $sum: "$appliedDelta" } } }
+  ]);
+
+  const deltaMap = new Map();
+  for (const row of aggregation) {
+    deltaMap.set(row._id, row.netSp);
+  }
+
+  const deltaRows = activeStudents.map(s => ({
+    email: s.email,
+    name: s.name,
+    netSp: deltaMap.get(s.email) || 0
+  }));
+
+  const torch = weeklyTorchHolder(deltaRows);
+
+  res.json({ windowDays, torch });
 });
 
 api.post('/ping', async (req, res) => {
