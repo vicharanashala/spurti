@@ -446,6 +446,73 @@ input {
 }
 .bar-row b { text-align: right; }
 
+.heatmap-summary {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.heatmap-summary strong { font-size: 16px; }
+.heatmap-wrap {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.heatmap-labels {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 18px;
+}
+.heatmap-labels span {
+  height: 14px;
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 14px;
+}
+.heatmap-grid {
+  display: flex;
+  gap: 3px;
+}
+.heatmap-week {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.heatmap-cell {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  cursor: default;
+}
+.heatmap-cell.future {
+  border: 1px dashed var(--line);
+}
+.heatmap-months {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 17px;
+  gap: 3px;
+  margin-top: 4px;
+  margin-left: 26px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.heatmap-legend .heatmap-cell {
+  width: 12px;
+  height: 12px;
+}
+
 @media (max-width: 860px) {
   .hero { grid-template-columns: 1fr; align-items: start; }
   .hero-copy { padding: 24px; }
