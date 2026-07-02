@@ -270,8 +270,10 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['heatmap','Heatmap'], ['trajectory','Trajectory'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
+      {tab === 'heatmap' && <SpHeatmap transactions={profile.transactions} />}
+      {tab === 'trajectory' && <SpTrajectory />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
@@ -395,6 +397,94 @@ function Sparkline({ points }) {
         return <i key={`${point.label}-${index}`} title={`${point.label}: ${point.value} SP`} style={{ height: `${Math.max(6, pct)}%` }} />;
       })}
     </div>
+  );
+}
+
+function SpTrajectory() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API}/student/trajectory`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  if (loading) return <section className="panel"><p className="muted">Loading trajectory...</p></section>;
+  if (!data || data.myPoints.length === 0) return <section className="panel"><p className="muted">Not enough data to show trajectory yet.</p></section>;
+
+  const W = 640, H = 240, padL = 44, padR = 16, padT = 12, padB = 36;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const allValues = [...data.myPoints.map(p => p.balance), ...data.cohortAverages.map(c => c.avgBalance)];
+  const minV = Math.min(...allValues, 0);
+  const maxV = Math.max(...allValues, 1);
+  const range = maxV - minV || 1;
+
+  const toX = (i, total) => padL + (i / (total - 1 || 1)) * plotW;
+  const toY = v => padT + plotH - ((v - minV) / range) * plotH;
+
+  const myLabels = data.myPoints.map(p => p.session);
+  const cohortLabels = data.cohortAverages.map(c => c.session);
+  const allLabels = [...new Set([...myLabels, ...cohortLabels])].sort();
+
+  const pathPoints = (pts) => pts.map((p, i) => {
+    const xi = allLabels.indexOf(p.session);
+    return `${i === 0 ? 'M' : 'L'}${toX(xi, allLabels.length)},${toY(p.balance)}`;
+  }).join(' ');
+
+  const areaPath = (pts) => {
+    if (!pts.length) return '';
+    const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${toX(allLabels.indexOf(p.session), allLabels.length)},${toY(p.balance)}`).join(' ');
+    const last = pts[pts.length - 1];
+    const first = pts[0];
+    const lastX = toX(allLabels.indexOf(last.session), allLabels.length);
+    const firstX = toX(allLabels.indexOf(first.session), allLabels.length);
+    return `${line} L${lastX},${padT + plotH} L${firstX},${padT + plotH} Z`;
+  };
+
+  const yTicks = Array.from({ length: 5 }, (_, i) => Math.round(minV + (range / 4) * i));
+  const gridColor = '#e2e8f0';
+
+  return (
+    <section className="panel">
+      <h2>SP Trajectory</h2>
+      <p className="muted" style={{ marginBottom: 16 }}>Your SP over time vs cohort average</p>
+      <div className="trajectory-wrap">
+        <svg viewBox={`0 0 ${W} ${H}`} className="trajectory-svg" aria-label="SP trajectory chart">
+          {yTicks.map(tick => {
+            const y = toY(tick);
+            return (
+              <g key={tick}>
+                <line x1={padL} y1={y} x2={padL + plotW} y2={y} stroke={gridColor} strokeWidth={1} />
+                <text x={padL - 6} y={y + 4} textAnchor="end" fontSize={10} fill="#64748b">{tick}</text>
+              </g>
+            );
+          })}
+          <path d={areaPath(data.cohortAverages)} fill="#e2e8f0" opacity={0.6} />
+          <path d={pathPoints(data.cohortAverages)} fill="none" stroke="#94a3b8" strokeWidth={2} strokeDasharray="4 3" />
+          <path d={areaPath(data.myPoints)} fill="#b3e5d1" opacity={0.4} />
+          <path d={pathPoints(data.myPoints)} fill="none" stroke="#12805c" strokeWidth={2.5} />
+          {data.myPoints.map((p, i) => {
+            const xi = allLabels.indexOf(p.session);
+            return <circle key={i} cx={toX(xi, allLabels.length)} cy={toY(p.balance)} r={3} fill="#12805c" />;
+          })}
+          {data.cohortAverages.map((p, i) => {
+            const xi = allLabels.indexOf(p.session);
+            return <circle key={i} cx={toX(xi, allLabels.length)} cy={toY(p.avgBalance)} r={2.5} fill="#94a3b8" />;
+          })}
+          {allLabels.filter((_, i) => i % Math.ceil(allLabels.length / 8) === 0).map((label, i) => (
+            <text key={i} x={toX(allLabels.indexOf(label), allLabels.length)} y={H - 6} textAnchor="middle" fontSize={9} fill="#64748b">{label.length > 10 ? label.slice(0, 10) + '..' : label}</text>
+          ))}
+        </svg>
+      </div>
+      <div className="trajectory-legend">
+        <span><i style={{ background: '#12805c' }} />Your SP</span>
+        <span><i style={{ background: '#94a3b8', border: '1px dashed #94a3b8', borderRadius: '50%' }} />Cohort average</span>
+      </div>
+    </section>
   );
 }
 
@@ -528,8 +618,10 @@ function AdminView({ admin, auth, onBack }) {
     const res = await fetch(`${API}/admin/attendance`, { headers });
     setAttendance(await res.json());
   };
-  const loadStudent = async (id) => {
-    const res = await fetch(`${API}/admin/student/${id}`, { headers });
+  const loadStudent = async (id, type = 'id') => {
+    const url = type === 'email' ? `${API}/admin/student/by-email/${encodeURIComponent(id)}` : `${API}/admin/student/${id}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) return;
     setStudentProfile(await res.json());
   };
   const loadActive = async () => {
@@ -564,7 +656,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['at-risk','At Risk'], ['students','Students']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -583,6 +675,7 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'attendance' && <AdminAttendance data={attendance} onStudent={loadStudent} />}
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
+      {tab === 'at-risk' && <AtRiskPanel auth={auth} onStudent={loadStudent} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
@@ -764,6 +857,51 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   );
 }
 
+
+function AtRiskPanel({ auth, onStudent }) {
+  const [students, setStudents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const headers = adminHeaders(auth);
+
+  useEffect(() => {
+    fetch(`${API}/admin/at-risk`, headers)
+      .then(r => r.ok ? r.json() : [])
+      .then(setStudents)
+      .catch(() => setStudents([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <section className="panel"><p className="muted">Loading at-risk students...</p></section>;
+
+  const count = students.length;
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>At-Risk Students</h2>
+        {count > 0 && <span className="badge-count">{count} flagged</span>}
+      </div>
+      {count === 0 ? (
+        <p className="empty">No students at risk. Great work!</p>
+      ) : (
+        <>
+          <p className="muted" style={{ marginBottom: 14 }}>Students who missed 2+ consecutive sessions. Sorted by severity.</p>
+          <table className="table">
+            <thead><tr><th>Name</th><th>Email</th><th>SP</th><th>Sessions Missed</th><th>Last Active</th></tr></thead>
+            <tbody>{students.map(s => (
+              <tr key={s.email} onClick={() => onStudent(s.email, 'email')} style={{ cursor: 'pointer' }}>
+                <td>{s.name}</td>
+                <td>{s.email}</td>
+                <td className={s.totalSp < 80 ? 'negative' : ''}>{s.totalSp}</td>
+                <td className="negative"><strong>{s.consecutiveMissed}</strong></td>
+                <td>{s.lastActive ? new Date(s.lastActive).toLocaleDateString() : '—'}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </>
+      )}
+    </section>
+  );
+}
 
 function SurveyModal({ survey, student, onDone }) {
   const [checking, setChecking] = useState(false);
