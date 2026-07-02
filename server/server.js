@@ -156,12 +156,11 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, allStudents] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
@@ -170,7 +169,7 @@ async function studentPayload(student) {
   const top50Cutoff = allStudents[49]?.totalSp || null;
   const currentIndex = allStudents.findIndex(s => s.email === email);
   const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
-  // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
+  // Spurti Levels & Trophy Leagues — derived views over SP (see services/levels.js).
   const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
   const myGroup = leaderboardGroup(student.internshipStartDate);
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
@@ -202,7 +201,8 @@ async function studentPayload(student) {
       legendBadgeUnlocked: legendBadge(highestSpEver),
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
-      surveyCompleted: Boolean(student.surveyCompleted)
+      surveyCompleted: Boolean(student.surveyCompleted),
+      shareEnabled: student.shareEnabled !== false
     },
     transactions,
     polls,
@@ -214,8 +214,8 @@ async function studentPayload(student) {
       pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - student.totalSp + 1),
       pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
     },
-    leaderboard: leaderboard.map(mapRow),
-    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
+    leaderboard: allStudents.map(mapRow),
+    groupLeaderboard: groupStudents.map(mapRow)
   };
 }
 
@@ -293,7 +293,7 @@ api.get('/leaderboard', async (req, res) => {
   const type = String(req.query.leaderboardType || 'overall');
   const filter = { status: { $ne: 'excused' } };
   if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
-  const students = await Student.find(filter).sort({ totalSp: -1, name: 1 }).limit(50).lean();
+  const students = await Student.find(filter).sort({ totalSp: -1, name: 1 }).lean();
   res.json(students.map((s, i) => ({
     rank: i + 1,
     name: s.name,
@@ -361,6 +361,21 @@ api.get('/survey/status', async (req, res) => {
     }
   }
   res.json({ completed: false });
+});
+
+api.post('/settings', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const { shareEnabled } = req.body || {};
+  if (typeof shareEnabled !== 'boolean') return res.status(400).json({ error: 'shareEnabled must be a boolean' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  student.shareEnabled = shareEnabled;
+  await student.save();
+
+  res.json({ ok: true, shareEnabled: student.shareEnabled });
 });
 
 // Authoritative confirmation: the Google Form's Apps Script onFormSubmit
