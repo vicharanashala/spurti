@@ -156,11 +156,12 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
+    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
@@ -214,8 +215,8 @@ async function studentPayload(student) {
       pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - student.totalSp + 1),
       pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
     },
-    leaderboard: allStudents.map(mapRow),
-    groupLeaderboard: groupStudents.map(mapRow)
+    leaderboard: leaderboard.map(mapRow),
+    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
   };
 }
 
@@ -293,7 +294,7 @@ api.get('/leaderboard', async (req, res) => {
   const type = String(req.query.leaderboardType || 'overall');
   const filter = { status: { $ne: 'excused' } };
   if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
-  const students = await Student.find(filter).sort({ totalSp: -1, name: 1 }).lean();
+  const students = await Student.find(filter).sort({ totalSp: -1, name: 1 }).limit(50).lean();
   res.json(students.map((s, i) => ({
     rank: i + 1,
     name: s.name,
