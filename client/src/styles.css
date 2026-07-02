@@ -514,3 +514,75 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* --- Weekly Pulse & Torch ---------------------------------------------- */
+.weekly-pulse-card .pulse-good-news {
+  font-weight: 500;
+  margin-bottom: 12px;
+}
+.pulse-losses {
+  margin-bottom: 12px;
+}
+.loss-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+.loss-list li {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+}
+.loss-list strong {
+  color: var(--red);
+  font-size: 13px !important;
+  margin-bottom: 0 !important;
+}
+.loss-list em {
+  font-style: normal;
+  color: var(--muted);
+}
+.category-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.torch-holder {
+  background: linear-gradient(135deg, #fdf6ec 0%, #faecd6 100%);
+  border-color: #f6d198;
+  box-shadow: 0 4px 20px rgba(161, 92, 7, 0.15);
+}
+.torch-holder > span {
+  color: var(--amber);
+}
+.torch-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.torch-content p {
+  margin: 0;
+  color: var(--amber);
+  font-weight: 600;
+}
+.torch-icon {
+  color: var(--amber);
+}
+.torch-badge {
+  display: inline-block;
+  margin-left: 8px;
+  font-style: normal;
+  background: linear-gradient(135deg, #fcebc5, #f5d078);
+  color: var(--amber);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 850;
+  vertical-align: middle;
+  box-shadow: 0 2px 8px rgba(161, 92, 7, 0.1);
+}
