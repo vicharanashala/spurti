@@ -215,8 +215,39 @@ async function studentPayload(student) {
       pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - student.totalSp + 1),
       pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
     },
-    leaderboard: leaderboard.map(mapRow),
-    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
+    leaderboard: (() => {
+      const rows = leaderboard.map(mapRow);
+      if (!rows.some(r => r.isCurrentStudent)) {
+        const idx = allStudents.findIndex(s => s.email === email);
+        if (idx >= 0) rows.push(mapRow(allStudents[idx], idx));
+      }
+      return rows;
+    })(),
+    groupLeaderboard: (() => {
+      const sortedGroup = [...groupStudents].sort((a, b) => b.totalSp - a.totalSp || a.name.localeCompare(b.name));
+      const rows = sortedGroup.slice(0, 50).map((s, idx) => ({
+        rank: idx + 1,
+        name: s.name,
+        maskedEmail: maskEmail(s.email),
+        totalSp: s.totalSp,
+        level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
+        isCurrentStudent: s.email === email
+      }));
+      if (!rows.some(r => r.isCurrentStudent)) {
+        const idx = sortedGroup.findIndex(s => s.email === email);
+        if (idx >= 0) {
+          rows.push({
+            rank: idx + 1,
+            name: student.name,
+            maskedEmail: maskEmail(student.email),
+            totalSp: student.totalSp,
+            level: levelFor(highestSpEver),
+            isCurrentStudent: true
+          });
+        }
+      }
+      return rows;
+    })()
   };
 }
 
