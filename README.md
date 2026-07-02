@@ -148,4 +148,39 @@ This direction can be evaluated through:
 ## Positioning
 
 This is a general educational motivation engine. It is not only for internships, and it is not only a points table. It is a self-regulated learning support system and research direction that helps students see their progress, stay encouraged, recover from setbacks, and complete any meaningful learning journey.
-Displaying PRODUCT.md.
+
+## UI Enhancements & Social Sharing Features (feature/ui-enhancements)
+
+This project has been updated with several new features and enhancements:
+
+### 1. Dark Mode 🌙
+- Accessible globally via the theme toggle button in the Landing and Admin views, and customizable via the student settings panel.
+- Dark mode preferences are stored in the browser's `localStorage` and automatically loaded on subsequent visits.
+- Utilizes CSS custom properties to dynamically swap theme colors (backgrounds, text, borders, panels, forms) and optimize visual contrast.
+
+### 2. Back to Top Button ⬆️
+- A sleek floating button appears at the bottom-right corner when scrolling down.
+- Clicking the button smooth-scrolls the viewport back to the top.
+
+### 3. Leaderboard Enhancements 🔍
+- The Overall and Onboarding Group leaderboards now list all active students in rank order rather than truncating at the top 50.
+
+### 4. Achievement Sharing & Privacy Card 📢
+- Displays a visual achievement card including name, SP points, cohort rank, current level, Trophy League status, and unlocked badges.
+- Standard social sharing buttons for Twitter, LinkedIn, WhatsApp, and Copy to Clipboard.
+- Accessible directly from the student dashboard and next to the student's own entry on the leaderboard (when sharing is enabled).
+- Privacy Toggle: Accessible through the settings panel (⚙️ gear icon) on the student dashboard, enabling or disabling social sharing. Updates are persisted in the database via the POST `/api/settings` endpoint.
+
+### 5. SP Progress Bar 📊
+- Shows "Your SP vs Maximum Possible" on the dashboard.
+- The maximum possible SP is dynamically calculated based on the active days since the student's internship start date (assuming a maximum of 20 SP per day).
+- Accompanied by motivative messaging tailored to the student's progress percentage.
+
+### 6. Testing Suite 🧪
+- The test suite is powered by Vitest and `@testing-library/react`.
+- Key coverage includes tests for `DarkModeToggle` theme switching and localStorage persistence, and `SpProgressBar` max SP calculation, progress percentage, width capping, and motivational text.
+- To run tests:
+  ```bash
+  cd client
+  npm run test
+  ```
