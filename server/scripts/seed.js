@@ -5,7 +5,7 @@ import mongoose from 'mongoose';
 
 import { MONGO_URI, SESSION_LABELS } from '../config.js';
 import Student from '../models/Student.js';
-import { normalizeEmail } from '../services/sp.js';
+import { normalizeEmail } from '../utils/email.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..', '..');

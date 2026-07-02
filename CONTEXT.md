@@ -59,22 +59,6 @@ totalQuestions, attemptedQuestions, missedQuestions,
 responses[], transactionId
 ```
 
-### chatrecords
-```
-email, studentId, sessionLabel,
-messages[], positiveCount, negativeCount, neutralCount,
-overallSentiment, transactionId
-```
-
-### chatspreviews (ChatSPReview)
-```
-sessionLabel, dateTime, studentName, studentEmail, studentId,
-issuedByName, delta, reason, evidenceText, sourceMessage,
-sourceMessageKey, confidence,
-status: 'pending' | 'accepted' | 'rejected',
-reviewedBy, reviewedAt, transactionId
-```
-
 ## Architecture — two halves
 
 1. **Web app (this repo, `server/` + `client/`)** — Express API + React SPA,
@@ -112,8 +96,7 @@ which hold the retired CSV/±5 logic). See `pipeline/README.md` for detail.
   then banded: **≥90% → +10, 75–89% → +5, 50–74% → +3, <50% → 0**.
 - **Poll (B):** `pct = answered / totalQuestions`, same band ladder (10/5/3/0).
 - **Grace day 2026-06-06:** 1-min join = full attendance + full poll.
-- **Chat / discretionary:** admin-reviewed via ChatSPReview in the web app
-  (absolute or %-of-balance award). Currently dormant (`chatrecords` empty).
+- **Chat / discretionary:** dormant. `chatrecords` is empty; no chat-based SP awards are issued.
 
 > NOTE: session labels are now `Day N (DD Mon)` / `Orientation (15 May)`
 > (produced by the pipeline), NOT the old `"15 May Morning"` form still listed
@@ -132,9 +115,16 @@ scoring — the `pipeline/` rubric is authoritative. The old Zoom ±5 ingest
 
 ## Admin Endpoints
 - `GET /api/leaderboard` — SP rankings
-- `GET /api/admin/chat-sp-reviews` — pending reviews
-- `POST /api/admin/chat-sp-reviews/:id/accept` — award SP
-- `POST /api/admin/chat-sp-reviews/:id/reject` — reject
+- `GET /api/admin/stats` — system statistics
+- `GET /api/admin/students-by-status?status=active` — list students by status
+- `GET /api/admin/leaderboard?limit=50` — admin leaderboard view
+- `GET /api/admin/attendance` — full attendance matrix
+- `GET /api/admin/student/:id` — individual student detail
+- `GET /api/admin/active` — live active viewers
+- `GET /api/admin/analytics` — analytics dashboard
+
+> Chat SP review system (chat-sp-reviews endpoints) was removed.
+> SP scoring is now handled entirely by the pipeline/ rubric.
 
 ## Auth — `chatengine_token` cookie passthrough (LIVE since 2026-06-29)
 Spurti lives at `samagama.in/spurti` (same domain as Samagama), so the browser

@@ -1,5 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import {
+  ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis,
+  CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell
+} from 'recharts';
 import './styles.css';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
@@ -339,13 +343,37 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
 }
 
 function StudentPulse({ profile, badges, nextActions }) {
-  const { student, cohort, attendance, polls, transactions } = profile;
+  const { student, cohort, attendance, polls, transactions, recovery } = profile;
   const qualified = attendance.filter(a => a.qualified).length;
   const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
   const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
   return (
     <section className="pulse-grid">
+      {recovery?.isActive && (
+        <div className="pulse-card wide-pulse recovery-card">
+          <div className="recovery-header">
+            <span>🎯 Recovery Mission</span>
+            <strong>{student.totalSp} SP — {recovery.spGap} SP below threshold</strong>
+          </div>
+          <div className="recovery-progress-bar">
+            <div className="recovery-progress-fill" style={{ width: `${recovery.progress}%` }} />
+          </div>
+          <p className="recovery-subtitle">Complete your missions to recover {recovery.targetSp} SP and get back on track</p>
+          <div className="recovery-tasks">
+            {recovery.tasks.map((task, i) => (
+              <div key={i} className="recovery-task">
+                <span className="task-icon">{task.icon}</span>
+                <div className="task-body">
+                  <strong>{task.label}</strong>
+                  <p>{task.action}</p>
+                </div>
+                <span className="task-sp">+{task.targetSp} SP</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="pulse-card progress-card">
         <span>Standing</span>
         <strong>Rank {student.rank}</strong>
@@ -626,101 +654,294 @@ function LiveAnalytics({ active }) {
 
 function Analytics({ data }) {
   if (!data) return <section className="panel empty">Loading analytics...</section>;
-  const maxHourly = Math.max(1, ...data.users.hourly.map(r => r.uniqueUsers));
-  const maxWeekly = Math.max(1, ...data.users.weekly.map(r => r.uniqueUsers));
+
+  const spBandsData = [
+    { name: '0–49', value: data.sp.bands.below100, fill: '#ef4444' },
+    { name: '50–99', value: data.sp.bands.from100to149, fill: '#f97316' },
+    { name: '100–149', value: data.sp.bands.from100to149, fill: '#eab308' },
+    { name: '150–199', value: data.sp.bands.from150to199, fill: '#22c55e' },
+    { name: '200–249', value: data.sp.bands.from200plus, fill: '#10b981' },
+    { name: '250+', value: 0, fill: '#06b6d4' }
+  ].filter(b => b.value > 0);
+
+  const categoryData = data.sp.categoryTotals.map(c => ({
+    name: c.category,
+    count: c.count,
+    netSp: c.netSp
+  }));
+
+  const CATEGORY_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#6366f1'];
+
   return (
     <section className="panel analytics">
-      <h2>Analytics</h2>
-      <div className="metric-grid">
-        <Metric label="Active now" value={data.live.activeNow} />
-        <Metric label="Unique last hour" value={data.users.activeLastHour} />
-        <Metric label="Unique today" value={data.users.activeToday} />
-        <Metric label="Unique 7 days" value={data.users.activeLast7Days} />
-        <Metric label="Unique 30 days" value={data.users.activeLast30Days} />
-        <Metric label="Attendance qualified" value={`${data.attendance.overallQualifiedPct}%`} />
+      <div className="analytics-header">
+        <h2>Analytics Dashboard</h2>
+        <span className="dashboard-meta">
+          Last updated: {new Date(data.meta?.fetchedAt).toLocaleTimeString()}
+        </span>
       </div>
 
-      <section className="subpanel alert-panel">
-        <h3>Admin alerts</h3>
-        <div className="metric-grid small">
-          <Metric label="Below 100 SP" value={data.alerts.lowSp} />
-          <Metric label="Inactive today" value={data.alerts.inactiveToday} />
-          <Metric label="Attendance debits" value={data.alerts.attendanceDebits} />
-          <Metric label="Poll debits" value={data.alerts.pollDebits} />
-        </div>
-        <table className="table">
-          <thead><tr><th>Email</th><th>Debit count</th><th>Debit SP</th></tr></thead>
-          <tbody>{data.alerts.topDrops.map(row => <tr key={row.email}><td>{row.email}</td><td>{row.debitCount}</td><td>{row.debitSp}</td></tr>)}</tbody>
-        </table>
-      </section>
-
-      <div className="analytics-grid">
-        <Chart title="Hourly active users" rows={data.users.hourly} max={maxHourly} />
-        <Chart title="Weekly active users" rows={data.users.weekly} max={maxWeekly} />
+      <div className="stats-overview">
+        <StatCard
+          label="Active Now"
+          value={data.live.activeNow}
+          sub={null}
+          trend={null}
+          icon="👁"
+          color="#3b82f6"
+        />
+        <StatCard
+          label="Unique Today"
+          value={data.users.activeToday}
+          sub={`${data.trends?.activeTodayDelta >= 0 ? '+' : ''}${data.trends?.activeTodayDelta || 0}% vs yesterday`}
+          trend={data.trends?.activeTodayDelta}
+          icon="📅"
+          color="#10b981"
+        />
+        <StatCard
+          label="Active This Week"
+          value={data.users.activeLast7Days}
+          sub="unique users"
+          trend={null}
+          icon="📆"
+          color="#6366f1"
+        />
+        <StatCard
+          label="Avg SP"
+          value={data.sp.average}
+          sub={`median ${data.sp.median}`}
+          trend={null}
+          icon="⭐"
+          color="#f59e0b"
+        />
+        <StatCard
+          label="Attendance"
+          value={`${data.attendance.overallQualifiedPct}%`}
+          sub="qualified overall"
+          trend={null}
+          icon="✅"
+          color="#22c55e"
+        />
+        <StatCard
+          label="Students Below 100 SP"
+          value={data.alerts.lowSp}
+          sub="needs attention"
+          trend={data.alerts.lowSp > 0 ? 'alert' : null}
+          icon="⚠️"
+          color={data.alerts.lowSp > 0 ? '#ef4444' : '#6b7280'}
+        />
       </div>
 
-      <div className="analytics-grid">
-        <section className="subpanel">
-          <h3>SP Points</h3>
-          <div className="metric-grid small">
-            <Metric label="Average" value={data.sp.average} />
-            <Metric label="Median" value={data.sp.median} />
-            <Metric label="Min" value={data.sp.min} />
-            <Metric label="Max" value={data.sp.max} />
-          </div>
-          <table className="table">
-            <thead><tr><th>Band</th><th>Students</th></tr></thead>
-            <tbody>
-              <tr><td>Below 100</td><td>{data.sp.bands.below100}</td></tr>
-              <tr><td>100-149</td><td>{data.sp.bands.from100to149}</td></tr>
-              <tr><td>150-199</td><td>{data.sp.bands.from150to199}</td></tr>
-              <tr><td>200+</td><td>{data.sp.bands.from200plus}</td></tr>
-            </tbody>
-          </table>
+      <div className="analytics-grid-2">
+        <section className="dash-card">
+          <h3>SP Distribution</h3>
+          <p className="dash-subtitle">Students per SP band</p>
+          {spBandsData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={spBandsData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                <Tooltip
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8 }}
+                  labelStyle={{ color: '#e2e8f0' }}
+                  itemStyle={{ color: '#94a3b8' }}
+                  formatter={(v) => [v, 'Students']}
+                />
+                <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                  {spBandsData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <p className="muted">No SP data available.</p>}
         </section>
 
-        <section className="subpanel">
-          <h3>SP by category</h3>
-          <table className="table">
-            <thead><tr><th>Category</th><th>Count</th><th>Net SP</th><th>Credits</th><th>Debits</th></tr></thead>
-            <tbody>{data.sp.categoryTotals.map(row => (
-              <tr key={row.category}><td>{row.category}</td><td>{row.count}</td><td>{row.netSp}</td><td>{row.credits}</td><td>{row.debits}</td></tr>
-            ))}</tbody>
-          </table>
+        <section className="dash-card">
+          <h3>Activity Timeline</h3>
+          <p className="dash-subtitle">Unique users per hour (last 24h)</p>
+          {data.users.hourly.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={data.users.hourly} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
+                <defs>
+                  <linearGradient id="activityGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fill: '#94a3b8', fontSize: 10 }}
+                  interval={Math.floor(data.users.hourly.length / 6)}
+                />
+                <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                <Tooltip
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8 }}
+                  labelStyle={{ color: '#e2e8f0' }}
+                  itemStyle={{ color: '#60a5fa' }}
+                  formatter={(v, n) => [v, n === 'uniqueUsers' ? 'Users' : 'Events']}
+                />
+                <Area type="monotone" dataKey="uniqueUsers" stroke="#3b82f6" fill="url(#activityGrad)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : <p className="muted">No activity data yet.</p>}
         </section>
       </div>
 
-      <section className="subpanel">
-        <h3>Attendance by session</h3>
-        <table className="table">
-          <thead><tr><th>Session</th><th>Qualified</th><th>Not qualified</th><th>Qualified %</th><th>Avg min</th><th>Session min</th></tr></thead>
-          <tbody>{data.attendance.sessions.map(row => (
-            <tr key={row.label}><td>{row.label}</td><td>{row.qualified}</td><td>{row.notQualified}</td><td>{row.qualifiedPct}%</td><td>{row.avgMinutes}</td><td>{row.sessionMinutes}</td></tr>
-          ))}</tbody>
-        </table>
-      </section>
+      <div className="analytics-grid-2">
+        <section className="dash-card">
+          <h3>Top Gainers Today</h3>
+          <p className="dash-subtitle">Highest SP gain in last 24h</p>
+          {data.alerts.todayTopGainers?.length > 0 ? (
+            <table className="dash-table">
+              <thead><tr><th>#</th><th>Name</th><th>SP Gained</th></tr></thead>
+              <tbody>
+                {data.alerts.todayTopGainers.map((g, i) => (
+                  <tr key={g.email}>
+                    <td className="rank-cell">{i + 1}</td>
+                    <td>
+                      <div className="name-cell">{g.name || g.email.split('@')[0]}</div>
+                      <div className="email-cell">{g.email}</div>
+                    </td>
+                    <td className="gain-cell">+{g.gainedSp}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <p className="muted">No gains recorded today.</p>}
+        </section>
+
+        <section className="dash-card">
+          <h3>Top Drops (Need Attention)</h3>
+          <p className="dash-subtitle">Students with most SP debits</p>
+          {data.alerts.topDrops?.length > 0 ? (
+            <table className="dash-table">
+              <thead><tr><th>#</th><th>Name</th><th>Debits</th><th>SP Lost</th></tr></thead>
+              <tbody>
+                {data.alerts.topDrops.map((d, i) => (
+                  <tr key={d.email}>
+                    <td className="rank-cell">{i + 1}</td>
+                    <td>
+                      <div className="name-cell">{d.name || d.email.split('@')[0]}</div>
+                      <div className="email-cell">{d.email}</div>
+                    </td>
+                    <td>{d.debitCount}</td>
+                    <td className="loss-cell">-{d.debitSp}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <p className="muted">No significant drops.</p>}
+        </section>
+      </div>
+
+      <div className="analytics-grid-3">
+        <section className="dash-card">
+          <h3>Session Attendance</h3>
+          <p className="dash-subtitle">Qualification rate per session</p>
+          {data.attendance.sessions?.length > 0 ? (
+            <div className="session-health-list">
+              {data.attendance.sessions.map(s => (
+                <div key={s.label} className={`session-health-row ${s.qualifiedPct < 60 ? 'problem' : s.qualifiedPct >= 85 ? 'good' : 'ok'}`}>
+                  <div className="session-label">{s.label}</div>
+                  <div className="session-bar-wrap">
+                    <div className="session-bar">
+                      <div
+                        className="session-bar-fill"
+                        style={{
+                          width: `${s.qualifiedPct}%`,
+                          background: s.qualifiedPct < 60 ? '#ef4444' : s.qualifiedPct >= 85 ? '#22c55e' : '#f59e0b'
+                        }}
+                      />
+                    </div>
+                    <span className="session-pct">{s.qualifiedPct}%</span>
+                  </div>
+                  <div className="session-nums">{s.qualified}/{s.totalStudents}</div>
+                </div>
+              ))}
+            </div>
+          ) : <p className="muted">No session data.</p>}
+        </section>
+
+        <section className="dash-card">
+          <h3>SP by Category</h3>
+          <p className="dash-subtitle">Transaction breakdown</p>
+          {categoryData.length > 0 ? (
+            <div className="category-donut-wrap">
+              <ResponsiveContainer width="100%" height={180}>
+                <PieChart>
+                  <Pie
+                    data={categoryData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={50}
+                    outerRadius={75}
+                    paddingAngle={3}
+                    dataKey="count"
+                  >
+                    {categoryData.map((_, i) => (
+                      <Cell key={i} fill={CATEGORY_COLORS[i % CATEGORY_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8 }}
+                    formatter={(v, n) => [v, n || 'Count']}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="category-legend">
+                {categoryData.map((c, i) => (
+                  <div key={c.name} className="legend-item">
+                    <span className="legend-dot" style={{ background: CATEGORY_COLORS[i % CATEGORY_COLORS.length] }} />
+                    <span className="legend-label">{c.name}</span>
+                    <span className="legend-val">{c.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : <p className="muted">No category data.</p>}
+        </section>
+
+        <section className="dash-card">
+          <h3>Weekly Activity</h3>
+          <p className="dash-subtitle">Unique users per week (last 30 days)</p>
+          {data.users.weekly?.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={data.users.weekly} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="label" tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                <Tooltip
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8 }}
+                  labelStyle={{ color: '#e2e8f0' }}
+                  itemStyle={{ color: '#60a5fa' }}
+                  formatter={(v) => [v, 'Users']}
+                />
+                <Bar dataKey="uniqueUsers" fill="#6366f1" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <p className="muted">No weekly data.</p>}
+        </section>
+      </div>
     </section>
   );
 }
 
-function Metric({ label, value }) {
-  return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
-}
-
-function Chart({ title, rows, max }) {
+function StatCard({ label, value, sub, trend, icon, color }) {
   return (
-    <section className="subpanel">
-      <h3>{title}</h3>
-      <div className="bars">
-        {rows.length ? rows.map(row => (
-          <div className="bar-row" key={row.label}>
-            <span>{row.label}</span>
-            <div><i style={{ width: `${Math.max(4, Math.round((row.uniqueUsers / max) * 100))}%` }} /></div>
-            <b>{row.uniqueUsers}</b>
-          </div>
-        )) : <p className="muted">No activity yet.</p>}
+    <div className="stat-card" style={{ '--accent': color }}>
+      <div className="stat-icon">{icon}</div>
+      <div className="stat-body">
+        <div className="stat-value">{value}</div>
+        <div className="stat-label">{label}</div>
+        {sub && <div className={`stat-sub ${trend === 'alert' ? 'alert-text' : ''}`}>{sub}</div>}
       </div>
-    </section>
+      {trend !== null && trend !== 'alert' && (
+        <div className={`stat-trend ${trend >= 0 ? 'up' : 'down'}`}>
+          {trend >= 0 ? '▲' : '▼'} {Math.abs(trend)}%
+        </div>
+      )}
+    </div>
   );
 }
 
