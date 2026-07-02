@@ -291,17 +291,26 @@ api.post('/confirm', async (req, res) => {
 
 api.get('/leaderboard', async (req, res) => {
   const type = String(req.query.leaderboardType || 'overall');
+  const page = Math.max(1, Number(req.query.page || 1));
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit || 50)));
+  const skip = (page - 1) * limit;
   const filter = { status: { $ne: 'excused' } };
   if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
-  const students = await Student.find(filter).sort({ totalSp: -1, name: 1 }).limit(50).lean();
-  res.json(students.map((s, i) => ({
-    rank: i + 1,
-    name: s.name,
-    maskedEmail: maskEmail(s.email),
-    totalSp: s.totalSp,
-    level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
-    trophyLeague: leagueBand(s.totalSp)
-  })));
+  const [students, total] = await Promise.all([
+    Student.find(filter).sort({ totalSp: -1, name: 1 }).skip(skip).limit(limit).lean(),
+    Student.countDocuments(filter)
+  ]);
+  res.json({
+    students: students.map((s, i) => ({
+      rank: skip + i + 1,
+      name: s.name,
+      maskedEmail: maskEmail(s.email),
+      totalSp: s.totalSp,
+      level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
+      trophyLeague: leagueBand(s.totalSp)
+    })),
+    meta: { page, limit, total, totalPages: Math.ceil(total / limit), hasMore: skip + students.length < total }
+  });
 });
 
 api.post('/ping', async (req, res) => {
@@ -460,6 +469,20 @@ api.get('/admin/active', adminGuard, (_req, res) => {
     }
   }
   res.json(viewers);
+});
+
+api.get('/admin/export/leaderboard.csv', adminGuard, async (req, res) => {
+  const filter = { status: { $ne: 'excused' } };
+  const students = await Student.find(filter).sort({ totalSp: -1, name: 1 }).lean();
+  const csvHeader = 'Rank,Name,Email,SP,Level\n';
+  const csvRows = students.map((s, i) => {
+    const rank = i + 1;
+    const level = levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0));
+    return `${rank},"${s.name}",${s.email},${s.totalSp},${level}`;
+  }).join('\n');
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="leaderboard.csv"');
+  res.send(csvHeader + csvRows);
 });
 
 api.get('/admin/analytics', adminGuard, async (_req, res) => {
