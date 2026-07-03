@@ -176,6 +176,7 @@ async function studentPayload(student) {
   const myGroup = leaderboardGroup(student.internshipStartDate);
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
   const mapRow = (row, index) => ({
+    id: String(row._id),
     rank: index + 1,
     name: row.name,
     maskedEmail: maskEmail(row.email),
@@ -294,16 +295,15 @@ api.post('/tip', async (req, res) => {
   const fromEmail = await studentEmailFromRequest(req);
   if (!fromEmail) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { toEmail, amount, note } = req.body || {};
-  const toNormalized = normalizeEmail(toEmail);
-  if (!toNormalized) return res.status(400).json({ error: 'Recipient email is required' });
+  const { toStudentId, amount, note } = req.body || {};
+  if (!toStudentId || !mongoose.Types.ObjectId.isValid(toStudentId)) return res.status(404).json({ error: 'Recipient not found' });
 
   const cleanNote = String(note || '').replace(/<[^>]*>?/gm, '').trim().slice(0, 140);
   const amt = Number(amount);
 
   const fromStudent = await Student.findOne({ $or: [{ email: fromEmail }, { alternateEmail: fromEmail }] }).lean();
   if (!fromStudent) return res.status(401).json({ error: 'Sender not found' });
-  const toStudent = await Student.findOne({ $or: [{ email: toNormalized }, { alternateEmail: toNormalized }] }).lean();
+  const toStudent = await Student.findById(toStudentId).lean();
   if (!toStudent) return res.status(404).json({ error: 'Recipient not found' });
 
   const windowDays = 7;
@@ -427,6 +427,7 @@ api.get('/leaderboard', async (req, res) => {
   if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
   const students = await Student.find(filter).sort({ totalSp: -1, name: 1 }).limit(50).lean();
   res.json(students.map((s, i) => ({
+    id: String(s._id),
     rank: i + 1,
     name: s.name,
     maskedEmail: maskEmail(s.email),
