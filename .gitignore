@@ -22,3 +22,5 @@ pipeline/.env
 # runtime log + local DB backups (not for the repo)
 server.log
 sp-runs/
+data/mongodb_data/
+

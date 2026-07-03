@@ -69,7 +69,7 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} setProfile={setProfile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -262,7 +262,7 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, setProfile, onBack }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -279,9 +279,10 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['booster','SP Booster'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
+      {tab === 'booster' && <SpBooster profile={profile} setProfile={setProfile} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
   );
@@ -492,6 +493,384 @@ function Polls({ polls }) {
     </section>
   );
 }
+
+function SpBoosterInfo() {
+  return (
+    <div className="panel" style={{ marginTop: '24px', padding: '24px' }}>
+      <h2 style={{ fontSize: '20px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span>📚</span> How SP Booster Quiz Works
+      </h2>
+      <p style={{ color: 'var(--muted)', fontSize: '14px', lineHeight: '1.6', marginBottom: '20px' }}>
+        The SP Booster Quiz helps you revise and retain concepts discussed during the morning learning session.
+      </p>
+
+      <h3 style={{ fontSize: '16px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span>🎯</span> How it works
+      </h3>
+      <ol style={{ paddingLeft: '20px', lineHeight: '1.6', margin: '0 0 20px', display: 'grid', gap: '12px', fontSize: '14px' }}>
+        <li>
+          <strong>Morning Session:</strong> Every day, mentors conduct a learning session (e.g., on Zoom). The quiz is generated from the concepts discussed during that session.
+        </li>
+        <li>
+          <strong>Quiz Generation:</strong> A short quiz containing <strong>5 multiple-choice questions (MCQs)</strong> is automatically created based on the session content. Questions focus on understanding and application rather than memorization.
+        </li>
+        <li>
+          <strong>Random Quiz Time:</strong> The quiz does <strong>not</strong> start immediately after the session. A random quiz time is selected during the day.
+        </li>
+        <li>
+          <strong>1-Hour Notification:</strong> You will receive a notification <strong>1 hour before</strong> your SP Booster Quiz begins. Make sure notifications are enabled so you don't miss it.
+        </li>
+        <li>
+          <strong>Attempt the Quiz:</strong> The quiz contains <strong>5 questions</strong>. Answer all questions before the timer expires.
+        </li>
+      </ol>
+
+      <h3 style={{ fontSize: '16px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span>🏆</span> SP Point Rules
+      </h3>
+      <table className="table" style={{ maxWidth: '360px', marginBottom: '16px' }}>
+        <thead>
+          <tr>
+            <th>Correct Answers</th>
+            <th>SP Points Earned</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>0</td>
+            <td>0 SP</td>
+          </tr>
+          <tr>
+            <td>1</td>
+            <td>0 SP</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>0 SP</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>3 SP</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>4 SP</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>5 SP</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '20px' }}>
+        * You must answer at least 3 questions correctly to earn SP points.
+      </p>
+
+      <h3 style={{ fontSize: '16px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span>📌</span> Important Notes
+      </h3>
+      <ul style={{ paddingLeft: '20px', lineHeight: '1.6', margin: '0 0 16px', display: 'grid', gap: '8px', fontSize: '14px', color: '#334155' }}>
+        <li>Each quiz is based on the day's morning session.</li>
+        <li>Quiz timings are randomized to encourage continuous learning.</li>
+        <li>Notifications are sent <strong>1 hour before</strong> the quiz starts.</li>
+        <li>Once the quiz ends, your score and earned SP points are updated automatically.</li>
+        <li>SP Booster Quizzes are designed to reinforce concepts, not just test memory—so pay attention during the morning session!</li>
+      </ul>
+
+      <p style={{ fontWeight: 'bold', color: 'var(--primary)', textAlign: 'center', margin: '20px 0 0', fontSize: '15px' }}>
+        Learn. Revise. Attempt. Earn SP. 🚀
+      </p>
+    </div>
+  );
+}
+
+function SpBooster({ profile, setProfile }) {
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState(null);
+  const [activeQuiz, setActiveQuiz] = useState(null);
+  const [attempting, setAttempting] = useState(false);
+  const [answers, setAnswers] = useState([null, null, null, null, null]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState(null);
+
+  const fetchQuizStatus = async () => {
+    try {
+      const headers = { 'x-test-email': profile.student.email };
+      const resStatus = await fetch(`${API}/quiz/status`, { headers });
+      if (!resStatus.ok) throw new Error('Failed to load status');
+      const dataStatus = await resStatus.json();
+      setStatus(dataStatus);
+
+      if (dataStatus.latestQuiz) {
+        const resQuiz = await fetch(`${API}/quiz/current`, { headers });
+        if (resQuiz.ok) {
+          const dataQuiz = await resQuiz.json();
+          setActiveQuiz(dataQuiz);
+          if (dataQuiz.alreadyAttempted && dataQuiz.attemptDetails?.answers) {
+            setAnswers(dataQuiz.attemptDetails.answers);
+          }
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      setError('Failed to load quiz details.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchQuizStatus();
+  }, []);
+
+  const handleSelectOption = (questionIndex, optionIndex) => {
+    setAnswers(prev => {
+      const next = [...prev];
+      next[questionIndex] = optionIndex;
+      return next;
+    });
+  };
+
+  const handleSubmit = async () => {
+    if (answers.some(a => a === null)) {
+      setError('Please answer all questions before submitting.');
+      return;
+    }
+    setSubmitting(true);
+    setError('');
+    try {
+      const res = await fetch(`${API}/quiz/submit`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-test-email': profile.student.email
+        },
+        body: JSON.stringify({
+          quizId: activeQuiz.quizId,
+          answers
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to submit quiz');
+      }
+      setResult(data);
+      setStatus(prev => ({
+        ...prev,
+        attempted: true,
+        score: data.score,
+        appliedDelta: data.appliedDelta
+      }));
+      setAttempting(false);
+
+      // Re-fetch the student profile to update SP balance and statement in header
+      const meRes = await fetch(`${API}/me`);
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        if (meData.authenticated && meData.profile) {
+          setProfile(meData.profile);
+        }
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <>
+        <section className="panel empty">Loading SP Booster Quiz details...</section>
+        <SpBoosterInfo />
+      </>
+    );
+  }
+
+  if (error && !attempting && !result) {
+    return (
+      <>
+        <section className="panel"><p className="error">{error}</p></section>
+        <SpBoosterInfo />
+      </>
+    );
+  }
+
+  const latestQuiz = status?.latestQuiz;
+
+  // Case 1: No quizzes scheduled or active
+  if (status?.status === 'no_quizzes' || !latestQuiz) {
+    return (
+      <>
+        <section className="panel empty">
+          <h2>No Active Quiz</h2>
+          <p>There are no SP Booster Quizzes scheduled at this moment. Quizzes are generated randomly after morning sessions.</p>
+        </section>
+        <SpBoosterInfo />
+      </>
+    );
+  }
+
+  // Case 2: Quiz is completed (either from DB status check or just submitted)
+  const isCompleted = status.attempted || result;
+  const score = result ? result.score : status.score;
+  const appliedDelta = result ? result.appliedDelta : status.appliedDelta;
+  const questionsToShow = result ? result.questions : activeQuiz?.questions;
+
+  if (isCompleted) {
+    return (
+      <>
+        <div className="panel quiz-box">
+          <div className="quiz-header">
+            <h2>SP Booster Quiz Completed</h2>
+            <p className="muted">Session: {latestQuiz.sessionLabel}</p>
+          </div>
+
+          <div className="quiz-score-banner">
+            <h3>Your Score</h3>
+            <strong>{score} / 5</strong>
+            <p>{appliedDelta > 0 ? `🔥 Credited +${appliedDelta} SP to your ledger!` : 'Good try! Score at least 3/5 to earn points.'}</p>
+          </div>
+
+          {questionsToShow && (
+            <div className="quiz-review">
+              <h3>Review Questions & Explanations</h3>
+              {questionsToShow.map((q, qIndex) => {
+                const studentAnswer = answers[qIndex];
+                return (
+                  <div key={qIndex} className="quiz-question">
+                    <h3>{qIndex + 1}. {q.question}</h3>
+                    <div className="quiz-options">
+                      {q.options.map((opt, optIndex) => {
+                        let btnClass = 'option-btn';
+                        if (optIndex === q.correctAnswerIndex) {
+                          btnClass += ' correct';
+                        } else if (studentAnswer === optIndex && studentAnswer !== q.correctAnswerIndex) {
+                          btnClass += ' incorrect';
+                        }
+                        return (
+                          <button key={optIndex} className={btnClass} disabled>
+                            {opt}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="explanation-box">
+                      <strong>Explanation:</strong> {q.explanation}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <SpBoosterInfo />
+      </>
+    );
+  }
+
+  // Case 3: Quiz is upcoming
+  if (latestQuiz.isUpcoming) {
+    return (
+      <>
+        <div className="panel quiz-box">
+          <div className="quiz-header">
+            <h2>Upcoming SP Booster Quiz</h2>
+            <p className="muted">Session: {latestQuiz.sessionLabel}</p>
+          </div>
+          <div className="quiz-intro">
+            <h3>Starts at {new Date(latestQuiz.startTime).toLocaleTimeString()}</h3>
+            <p>This quiz is scheduled to open soon. It consists of 5 conceptual multiple choice questions from today's morning class. Stay tuned!</p>
+            <button className="secondary" disabled>Waiting for Quiz to start...</button>
+          </div>
+        </div>
+        <SpBoosterInfo />
+      </>
+    );
+  }
+
+  // Case 4: Quiz is active and not attempted
+  if (latestQuiz.isActive) {
+    if (!attempting) {
+      return (
+        <>
+          <div className="panel quiz-box">
+            <div className="quiz-header">
+              <h2>Active SP Booster Quiz</h2>
+              <p className="muted">Session: {latestQuiz.sessionLabel}</p>
+            </div>
+            <div className="quiz-intro">
+              <h3>Boost your Spurti Points!</h3>
+              <p>Solve 5 conceptual questions based on today's morning lecture to test your understanding. You will earn points based on your performance:</p>
+              <div className="compare-list" style={{ maxWidth: '300px', margin: '0 auto 20px', textAlign: 'left' }}>
+                <b>• 5 correct: +5 SP</b>
+                <b>• 4 correct: +4 SP</b>
+                <b>• 3 correct: +3 SP</b>
+                <b>• 0-2 correct: 0 SP</b>
+              </div>
+              <button className="primary" onClick={() => setAttempting(true)}>Start Quiz (15 mins)</button>
+            </div>
+          </div>
+          <SpBoosterInfo />
+        </>
+      );
+    }
+
+    // Active Attempting Mode
+    return (
+      <>
+        <div className="panel quiz-box">
+          <div className="quiz-header">
+            <h2>SP Booster Quiz</h2>
+            <p className="muted">Session: {latestQuiz.sessionLabel}</p>
+          </div>
+
+          {error && <p className="error" style={{ marginBottom: '14px' }}>{error}</p>}
+
+          <div className="quiz-questions">
+            {activeQuiz?.questions?.map((q, qIndex) => (
+              <div key={qIndex} className="quiz-question">
+                <h3>{qIndex + 1}. {q.question}</h3>
+                <div className="quiz-options">
+                  {q.options.map((opt, optIndex) => (
+                    <button
+                      key={optIndex}
+                      className={answers[qIndex] === optIndex ? 'option-btn selected' : 'option-btn'}
+                      onClick={() => handleSelectOption(qIndex, optIndex)}
+                      disabled={submitting}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="quiz-footer">
+            <button
+              className="primary"
+              onClick={handleSubmit}
+              disabled={submitting || answers.some(a => a === null)}
+            >
+              {submitting ? 'Submitting...' : 'Submit Quiz'}
+            </button>
+          </div>
+        </div>
+        <SpBoosterInfo />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <section className="panel empty">No active quiz.</section>
+      <SpBoosterInfo />
+    </>
+  );
+}
+
 
 function Leaderboard({ rows }) {
   return (
