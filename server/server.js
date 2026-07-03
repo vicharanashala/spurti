@@ -301,7 +301,7 @@ api.post('/tip', async (req, res) => {
   const cleanNote = String(note || '').replace(/<[^>]*>?/gm, '').trim().slice(0, 140);
   const amt = Number(amount);
 
-  const fromStudent = await Student.findOne({ email: fromEmail }).lean();
+  const fromStudent = await Student.findOne({ $or: [{ email: fromEmail }, { alternateEmail: fromEmail }] }).lean();
   if (!fromStudent) return res.status(401).json({ error: 'Sender not found' });
   const toStudent = await Student.findOne({ $or: [{ email: toNormalized }, { alternateEmail: toNormalized }] }).lean();
   if (!toStudent) return res.status(404).json({ error: 'Recipient not found' });
@@ -408,7 +408,13 @@ api.post('/tip', async (req, res) => {
 
     res.json({ ok: true, newBalance: debited.totalSp, sentTo: maskEmail(toStudent.email) });
   } catch (err) {
-    console.error('Critical Error: Credit or Transaction insertion failed after a successful debit:', err);
+    console.error('CRITICAL: tip credit/transaction-write failed after successful debit', {
+      fromEmail: fromStudent.email,
+      toEmail: toStudent.email,
+      amount: amt,
+      debitedBalance: debited.totalSp,
+      error: err.message || err
+    });
     // Since full multi-document atomicity requires a replica-set transaction session 
     // (which is assumed unavailable here), we return 500 and log aggressively for manual intervention.
     res.status(500).json({ error: 'Internal server error while processing the credit phase.' });
