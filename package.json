@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "mongo": "node server/scripts/run-mongo.js",
     "seed": "node server/scripts/seed.js",
     "rebuild": "node server/scripts/rebuild.js",
     "add-students": "node server/scripts/addStudents.js",
@@ -20,5 +21,8 @@
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
     "mongoose": "^8.8.4"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^11.2.0"
   }
 }

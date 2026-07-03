@@ -13,6 +13,8 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import quizRouter from './routes/quizRoutes.js';
+import { checkAndSendNotifications } from './services/quiz/quizScheduler.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -617,6 +619,8 @@ function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
 
+app.use('/api/quiz', quizRouter);
+app.use('/spurti/api/quiz', quizRouter);
 app.use('/api', api);
 app.use('/spurti/api', api);
 
@@ -630,7 +634,19 @@ if (fs.existsSync(clientDist)) {
 }
 
 mongoose.connect(MONGO_URI).then(() => {
-  app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
+  app.listen(PORT, () => {
+    console.log(`Spurti app running at http://localhost:${PORT}/`);
+    
+    // Start background worker for quiz notifications (checks every 60 seconds)
+    setInterval(async () => {
+      try {
+        await checkAndSendNotifications();
+      } catch (err) {
+        console.error('Background notification runner error:', err.message);
+      }
+    }, 60 * 1000);
+    console.log('⏰ Quiz background notification worker started (checking every minute).');
+  });
 }).catch((error) => {
   console.error(error);
   process.exit(1);
