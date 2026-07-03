@@ -408,16 +408,27 @@ api.post('/tip', async (req, res) => {
 
     res.json({ ok: true, newBalance: debited.totalSp, sentTo: maskEmail(toStudent.email) });
   } catch (err) {
-    console.error('CRITICAL: tip credit/transaction-write failed after successful debit', {
-      fromEmail: fromStudent.email,
-      toEmail: toStudent.email,
-      amount: amt,
-      debitedBalance: debited.totalSp,
-      error: err.message || err
-    });
     // Since full multi-document atomicity requires a replica-set transaction session 
-    // (which is assumed unavailable here), we return 500 and log aggressively for manual intervention.
-    res.status(500).json({ error: 'Internal server error while processing the credit phase.' });
+    // (which is assumed unavailable here), we attempt a best-effort compensating action 
+    // to reverse the debit. If that fails, we return 500 and log aggressively for manual intervention.
+    try {
+      await Student.findOneAndUpdate(
+        { email: fromStudent.email },
+        { $inc: { totalSp: amt } }
+      );
+      console.warn(`WARNING: Tip from ${fromStudent.email} to ${toStudent.email} failed during credit phase, but sender was successfully refunded ${amt} SP.`);
+      return res.status(500).json({ error: 'Tip could not be completed. Your balance was not affected.' });
+    } catch (reversalErr) {
+      console.error('CRITICAL: tip credit/transaction-write failed AND sender reversal also failed.', {
+        fromEmail: fromStudent.email,
+        toEmail: toStudent.email,
+        amount: amt,
+        debitedBalance: debited.totalSp,
+        originalError: err.message || err,
+        reversalError: reversalErr.message || reversalErr
+      });
+      return res.status(500).json({ error: 'Internal server error while processing the credit phase. Please contact support to restore your balance.' });
+    }
   }
 });
 
