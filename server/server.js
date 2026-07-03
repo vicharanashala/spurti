@@ -13,6 +13,10 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import StudyBuddyProfile from './models/StudyBuddyProfile.js';
+import StudyBuddyRequest from './models/StudyBuddyRequest.js';
+import StudyBuddy from './models/StudyBuddy.js';
+import StudyBuddyNotification from './models/StudyBuddyNotification.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -126,7 +130,10 @@ async function studentEmailFromRequest(req) {
   const data = await getSamagamaUser(cookies.chatengine_token);
   // Samagama's /api/auth/me nests the user as { user: { email, ... } };
   // fall back to a top-level email in case the shape ever flattens.
-  const email = data?.user?.email || data?.email;
+  let email = data?.user?.email || data?.email;
+  if (!email && ALLOW_STUDENT_SEARCH) {
+    email = req.headers['x-student-email'] || req.query.email;
+  }
   if (!email) return null;
   return normalizeEmail(email);
 }
@@ -592,6 +599,580 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
+
+// --- Study Buddy Matching Feature Endpoints -----------------------------
+
+async function studentAuthMiddleware(req, res, next) {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ authenticated: false, error: 'Unauthorized' });
+    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    if (student.status === 'excused') return res.status(403).json({ error: 'Account excused' });
+    req.student = student;
+    next();
+  } catch (err) {
+    console.error('Study Buddy Auth error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+function isStudentOnline(email) {
+  const viewer = liveViewers.get(normalizeEmail(email));
+  if (!viewer) return false;
+  return (new Date() - new Date(viewer.lastSeen)) <= 60000;
+}
+
+api.get('/study-buddy/profile', studentAuthMiddleware, async (req, res) => {
+  try {
+    const profile = await StudyBuddyProfile.findOne({ studentId: req.student._id });
+    if (!profile) return res.json({ hasProfile: false });
+    res.json({ hasProfile: true, profile });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.post('/study-buddy/profile', studentAuthMiddleware, async (req, res) => {
+  try {
+    const {
+      preferredSubjects,
+      currentSemester,
+      course,
+      learningGoals,
+      preferredStudyTime,
+      weeklyAvailability,
+      languages,
+      interests,
+      skillLevel
+    } = req.body;
+    
+    const updateData = {
+      preferredSubjects: preferredSubjects || [],
+      currentSemester: currentSemester || '',
+      course: course || '',
+      learningGoals: learningGoals || [],
+      preferredStudyTime: preferredStudyTime || '',
+      weeklyAvailability: Number(weeklyAvailability) || 0,
+      languages: languages || [],
+      interests: interests || [],
+      skillLevel: skillLevel || 'Intermediate',
+      lastActive: new Date()
+    };
+    
+    const profile = await StudyBuddyProfile.findOneAndUpdate(
+      { studentId: req.student._id },
+      { $set: updateData, $setOnInsert: { email: req.student.email } },
+      { new: true, upsert: true }
+    );
+    
+    res.json({ success: true, profile });
+  } catch (err) {
+    console.error('Save study buddy profile error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.post('/study-buddy/progress', studentAuthMiddleware, async (req, res) => {
+  try {
+    const { studyHours, weeklyGoal, weeklyGoalCompleted, completedTasksCount, streak } = req.body;
+    const profile = await StudyBuddyProfile.findOne({ studentId: req.student._id });
+    if (!profile) return res.status(404).json({ error: 'Profile not found' });
+    
+    const prevGoalCompleted = profile.weeklyGoalCompleted;
+    const prevStreak = profile.streak;
+    
+    if (studyHours !== undefined) profile.studyHours = Number(studyHours);
+    if (weeklyGoal !== undefined) profile.weeklyGoal = weeklyGoal;
+    if (weeklyGoalCompleted !== undefined) profile.weeklyGoalCompleted = Boolean(weeklyGoalCompleted);
+    if (completedTasksCount !== undefined) profile.completedTasksCount = Number(completedTasksCount);
+    if (streak !== undefined) profile.streak = Number(streak);
+    profile.lastActive = new Date();
+    await profile.save();
+    
+    // Nudge triggers for buddies
+    const buddies = await StudyBuddy.find({ studentId: req.student._id });
+    const buddyStudentIds = buddies.map(b => b.buddyId);
+    
+    if (buddyStudentIds.length > 0) {
+      // 1. Goal completed notification
+      if (profile.weeklyGoalCompleted && !prevGoalCompleted) {
+        await Promise.all(buddyStudentIds.map(buddyId => 
+          StudyBuddyNotification.create({
+            studentId: buddyId,
+            type: 'completed_goal',
+            senderId: req.student._id,
+            message: `${req.student.name} completed their weekly goal: "${profile.weeklyGoal}"!`
+          })
+        ));
+      }
+      
+      // 2. Lost streak notification
+      if (profile.streak < prevStreak && profile.streak === 0) {
+        await Promise.all(buddyStudentIds.map(buddyId => 
+          StudyBuddyNotification.create({
+            studentId: buddyId,
+            type: 'lost_streak',
+            senderId: req.student._id,
+            message: `${req.student.name} lost their study streak of ${prevStreak} days. Encourage them!`
+          })
+        ));
+      }
+    }
+    
+    res.json({ success: true, profile });
+  } catch (err) {
+    console.error('Update study buddy progress error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.get('/study-buddy/suggestions', studentAuthMiddleware, async (req, res) => {
+  try {
+    const student = req.student;
+    const currentProfile = await StudyBuddyProfile.findOne({ studentId: student._id });
+    if (!currentProfile) return res.status(400).json({ error: 'Profile not found' });
+    
+    const buddies = await StudyBuddy.find({ studentId: student._id });
+    const buddyIds = buddies.map(b => b.buddyId.toString());
+    
+    const requests = await StudyBuddyRequest.find({
+      $or: [{ senderId: student._id }, { receiverId: student._id }]
+    });
+    
+    const excludedStudentIds = new Set([student._id.toString(), ...buddyIds]);
+    for (const r of requests) {
+      if (r.status === 'pending' || r.status === 'accepted') {
+        excludedStudentIds.add(r.senderId.toString());
+        excludedStudentIds.add(r.receiverId.toString());
+      }
+    }
+    
+    const candidateProfiles = await StudyBuddyProfile.find({
+      studentId: { $nin: Array.from(excludedStudentIds).map(id => new mongoose.Types.ObjectId(id)) },
+      isActive: true
+    }).populate('studentId').lean();
+    
+    const suggestions = candidateProfiles.map(candidate => {
+      let score = 10;
+      const reasons = [];
+      
+      if (candidate.currentSemester && candidate.currentSemester === currentProfile.currentSemester) {
+        score += 20;
+        reasons.push('Same Semester');
+      }
+      
+      if (candidate.course && candidate.course.toLowerCase() === currentProfile.course.toLowerCase()) {
+        score += 20;
+        reasons.push('Same Course');
+      }
+      
+      const commonSubjects = candidate.preferredSubjects.filter(s => 
+        currentProfile.preferredSubjects.some(cs => cs.toLowerCase() === s.toLowerCase())
+      );
+      if (commonSubjects.length > 0) {
+        score += Math.min(30, commonSubjects.length * 15);
+        reasons.push(`Common subjects: ${commonSubjects.join(', ')}`);
+      }
+      
+      const commonGoals = candidate.learningGoals.filter(g => 
+        currentProfile.learningGoals.some(cg => cg.toLowerCase() === g.toLowerCase())
+      );
+      if (commonGoals.length > 0) {
+        score += Math.min(30, commonGoals.length * 15);
+        reasons.push(`Shared goals: ${commonGoals.join(', ')}`);
+      }
+      
+      if (candidate.preferredStudyTime && candidate.preferredStudyTime.toLowerCase() === currentProfile.preferredStudyTime.toLowerCase()) {
+        score += 10;
+        reasons.push(`Both study in the ${candidate.preferredStudyTime}`);
+      }
+      
+      const commonLanguages = candidate.languages.filter(l => 
+        currentProfile.languages.some(cl => cl.toLowerCase() === l.toLowerCase())
+      );
+      if (commonLanguages.length > 0) {
+        score += 10;
+        reasons.push(`Both speak ${commonLanguages.join(', ')}`);
+      }
+      
+      const commonInterests = candidate.interests.filter(i => 
+        currentProfile.interests.some(ci => ci.toLowerCase() === i.toLowerCase())
+      );
+      if (commonInterests.length > 0) {
+        score += Math.min(20, commonInterests.length * 10);
+        reasons.push(`Shared interest: ${commonInterests.slice(0, 2).join(', ')}`);
+      }
+      
+      if (candidate.skillLevel && candidate.skillLevel.toLowerCase() === currentProfile.skillLevel.toLowerCase()) {
+        score += 10;
+        reasons.push(`Same skill level (${candidate.skillLevel})`);
+      }
+      
+      const matchPercentage = Math.min(100, score);
+      const isOnline = isStudentOnline(candidate.email);
+      
+      return {
+        profile: {
+          _id: candidate._id,
+          studentId: candidate.studentId._id,
+          name: candidate.studentId.name,
+          email: candidate.email,
+          preferredSubjects: candidate.preferredSubjects,
+          currentSemester: candidate.currentSemester,
+          course: candidate.course,
+          learningGoals: candidate.learningGoals,
+          preferredStudyTime: candidate.preferredStudyTime,
+          weeklyAvailability: candidate.weeklyAvailability,
+          languages: candidate.languages,
+          interests: candidate.interests,
+          skillLevel: candidate.skillLevel,
+          streak: candidate.streak,
+          studyHours: candidate.studyHours,
+          weeklyGoal: candidate.weeklyGoal,
+          completedTasksCount: candidate.completedTasksCount,
+          lastActive: candidate.lastActive,
+          totalSp: candidate.studentId.totalSp
+        },
+        matchPercentage,
+        commonSubjects,
+        sharedGoals: commonGoals,
+        commonSkills: [...commonSubjects, ...commonInterests],
+        isOnline,
+        reasons
+      };
+    });
+    
+    suggestions.sort((a, b) => b.matchPercentage - a.matchPercentage);
+    res.json(suggestions.slice(0, 15));
+  } catch (err) {
+    console.error('Suggestions error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.get('/study-buddy/search', studentAuthMiddleware, async (req, res) => {
+  try {
+    const { q, semester, course, subject, goal, studyTime, language, online } = req.query;
+    const filter = { studentId: { $ne: req.student._id }, isActive: true };
+    
+    if (semester) filter.currentSemester = semester;
+    if (course) filter.course = { $regex: new RegExp(course.trim(), 'i') };
+    if (subject) filter.preferredSubjects = { $in: [subject] };
+    if (goal) filter.learningGoals = { $in: [goal] };
+    if (studyTime) filter.preferredStudyTime = studyTime;
+    if (language) filter.languages = { $in: [language] };
+    
+    if (q && q.trim().length >= 2) {
+      const escaped = q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const students = await Student.find({
+        $or: [
+          { name: { $regex: escaped, $options: 'i' } },
+          { email: { $regex: escaped, $options: 'i' } }
+        ]
+      }).select('_id');
+      filter.studentId = { $in: students.map(s => s._id), $ne: req.student._id };
+    }
+    
+    let candidateProfiles = await StudyBuddyProfile.find(filter).populate('studentId').lean();
+    
+    if (online === 'true') {
+      candidateProfiles = candidateProfiles.filter(candidate => isStudentOnline(candidate.email));
+    }
+    
+    const [buddies, requests] = await Promise.all([
+      StudyBuddy.find({ studentId: req.student._id }),
+      StudyBuddyRequest.find({
+        $or: [{ senderId: req.student._id }, { receiverId: req.student._id }]
+      })
+    ]);
+    
+    const buddyIdsSet = new Set(buddies.map(b => b.buddyId.toString()));
+    const sentRequestsMap = new Map();
+    const receivedRequestsMap = new Map();
+    
+    for (const r of requests) {
+      if (r.status === 'pending') {
+        if (r.senderId.toString() === req.student._id.toString()) {
+          sentRequestsMap.set(r.receiverId.toString(), r._id);
+        } else {
+          receivedRequestsMap.set(r.senderId.toString(), r._id);
+        }
+      }
+    }
+    
+    const results = candidateProfiles.map(candidate => {
+      const candIdStr = candidate.studentId._id.toString();
+      return {
+        profile: {
+          _id: candidate._id,
+          studentId: candidate.studentId._id,
+          name: candidate.studentId.name,
+          email: candidate.email,
+          preferredSubjects: candidate.preferredSubjects,
+          currentSemester: candidate.currentSemester,
+          course: candidate.course,
+          learningGoals: candidate.learningGoals,
+          preferredStudyTime: candidate.preferredStudyTime,
+          weeklyAvailability: candidate.weeklyAvailability,
+          languages: candidate.languages,
+          interests: candidate.interests,
+          skillLevel: candidate.skillLevel,
+          streak: candidate.streak,
+          studyHours: candidate.studyHours,
+          weeklyGoal: candidate.weeklyGoal,
+          completedTasksCount: candidate.completedTasksCount,
+          lastActive: candidate.lastActive,
+          totalSp: candidate.studentId.totalSp
+        },
+        isBuddy: buddyIdsSet.has(candIdStr),
+        sentRequestId: sentRequestsMap.get(candIdStr) || null,
+        receivedRequestId: receivedRequestsMap.get(candIdStr) || null,
+        isOnline: isStudentOnline(candidate.email)
+      };
+    });
+    
+    res.json(results);
+  } catch (err) {
+    console.error('Search buddies error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.post('/study-buddy/request', studentAuthMiddleware, async (req, res) => {
+  try {
+    const { receiverId } = req.body;
+    if (!receiverId) return res.status(400).json({ error: 'receiverId required' });
+    if (receiverId.toString() === req.student._id.toString()) {
+      return res.status(400).json({ error: 'You cannot connect with yourself' });
+    }
+    
+    const existingBuddy = await StudyBuddy.findOne({ studentId: req.student._id, buddyId: receiverId });
+    if (existingBuddy) return res.status(400).json({ error: 'Already buddies' });
+    
+    const reciprocalRequest = await StudyBuddyRequest.findOne({
+      senderId: receiverId,
+      receiverId: req.student._id,
+      status: 'pending'
+    });
+    
+    if (reciprocalRequest) {
+      reciprocalRequest.status = 'accepted';
+      await reciprocalRequest.save();
+      
+      await Promise.all([
+        StudyBuddy.create({ studentId: req.student._id, buddyId: receiverId }),
+        StudyBuddy.create({ studentId: receiverId, buddyId: req.student._id }),
+        StudyBuddyNotification.create({
+          studentId: receiverId,
+          type: 'accepted',
+          senderId: req.student._id,
+          message: `${req.student.name} accepted your study buddy request!`
+        })
+      ]);
+      return res.json({ success: true, status: 'accepted' });
+    }
+    
+    let request = await StudyBuddyRequest.findOne({ senderId: req.student._id, receiverId });
+    if (request) {
+      if (request.status === 'pending') {
+        return res.json({ success: true, request, message: 'Already pending' });
+      }
+      request.status = 'pending';
+      await request.save();
+    } else {
+      request = await StudyBuddyRequest.create({
+        senderId: req.student._id,
+        receiverId,
+        status: 'pending'
+      });
+    }
+    
+    await StudyBuddyNotification.create({
+      studentId: receiverId,
+      type: 'request',
+      senderId: req.student._id,
+      message: `You received a study buddy request from ${req.student.name}!`
+    });
+    
+    res.json({ success: true, request });
+  } catch (err) {
+    console.error('Request error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.post('/study-buddy/request/:requestId/accept', studentAuthMiddleware, async (req, res) => {
+  try {
+    const request = await StudyBuddyRequest.findById(req.params.requestId);
+    if (!request) return res.status(404).json({ error: 'Request not found' });
+    if (request.receiverId.toString() !== req.student._id.toString()) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    
+    request.status = 'accepted';
+    await request.save();
+    
+    await Promise.all([
+      StudyBuddy.findOneAndUpdate(
+        { studentId: req.student._id, buddyId: request.senderId },
+        { studentId: req.student._id, buddyId: request.senderId },
+        { upsert: true }
+      ),
+      StudyBuddy.findOneAndUpdate(
+        { studentId: request.senderId, buddyId: req.student._id },
+        { studentId: request.senderId, buddyId: req.student._id },
+        { upsert: true }
+      ),
+      StudyBuddyNotification.create({
+        studentId: request.senderId,
+        type: 'accepted',
+        senderId: req.student._id,
+        message: `${req.student.name} accepted your study buddy request!`
+      })
+    ]);
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Accept error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.post('/study-buddy/request/:requestId/reject', studentAuthMiddleware, async (req, res) => {
+  try {
+    const request = await StudyBuddyRequest.findById(req.params.requestId);
+    if (!request) return res.status(404).json({ error: 'Request not found' });
+    if (request.receiverId.toString() !== req.student._id.toString()) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    request.status = 'rejected';
+    await request.save();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.post('/study-buddy/request/:requestId/cancel', studentAuthMiddleware, async (req, res) => {
+  try {
+    const request = await StudyBuddyRequest.findById(req.params.requestId);
+    if (!request) return res.status(404).json({ error: 'Request not found' });
+    if (request.senderId.toString() !== req.student._id.toString()) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    request.status = 'cancelled';
+    await request.save();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.delete('/study-buddy/buddy/:buddyId', studentAuthMiddleware, async (req, res) => {
+  try {
+    const { buddyId } = req.params;
+    await Promise.all([
+      StudyBuddy.deleteOne({ studentId: req.student._id, buddyId }),
+      StudyBuddy.deleteOne({ studentId: buddyId, buddyId: req.student._id }),
+      StudyBuddyRequest.deleteMany({
+        $or: [
+          { senderId: req.student._id, receiverId: buddyId },
+          { senderId: buddyId, receiverId: req.student._id }
+        ]
+      })
+    ]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.get('/study-buddy/buddies', studentAuthMiddleware, async (req, res) => {
+  try {
+    const buddies = await StudyBuddy.find({ studentId: req.student._id });
+    const buddyIds = buddies.map(b => b.buddyId);
+    
+    const buddyProfiles = await StudyBuddyProfile.find({ studentId: { $in: buddyIds } })
+      .populate('studentId')
+      .lean();
+      
+    const results = buddyProfiles.map(bp => ({
+      profile: {
+        _id: bp._id,
+        studentId: bp.studentId._id,
+        name: bp.studentId.name,
+        email: bp.email,
+        preferredSubjects: bp.preferredSubjects,
+        currentSemester: bp.currentSemester,
+        course: bp.course,
+        learningGoals: bp.learningGoals,
+        preferredStudyTime: bp.preferredStudyTime,
+        weeklyAvailability: bp.weeklyAvailability,
+        languages: bp.languages,
+        interests: bp.interests,
+        skillLevel: bp.skillLevel,
+        streak: bp.streak,
+        studyHours: bp.studyHours,
+        weeklyGoal: bp.weeklyGoal,
+        weeklyGoalCompleted: bp.weeklyGoalCompleted,
+        completedTasksCount: bp.completedTasksCount,
+        lastActive: bp.lastActive,
+        totalSp: bp.studentId.totalSp
+      },
+      isOnline: isStudentOnline(bp.email)
+    }));
+    
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.get('/study-buddy/requests', studentAuthMiddleware, async (req, res) => {
+  try {
+    const [incoming, outgoing] = await Promise.all([
+      StudyBuddyRequest.find({ receiverId: req.student._id, status: 'pending' }).populate('senderId').lean(),
+      StudyBuddyRequest.find({ senderId: req.student._id, status: 'pending' }).populate('receiverId').lean()
+    ]);
+    res.json({
+      incoming: incoming.map(i => ({
+        _id: i._id,
+        sender: { _id: i.senderId._id, name: i.senderId.name, email: i.senderId.email },
+        createdAt: i.createdAt
+      })),
+      outgoing: outgoing.map(o => ({
+        _id: o._id,
+        receiver: { _id: o.receiverId._id, name: o.receiverId.name, email: o.receiverId.email },
+        createdAt: o.createdAt
+      }))
+    ]);
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.get('/study-buddy/notifications', studentAuthMiddleware, async (req, res) => {
+  try {
+    const notifications = await StudyBuddyNotification.find({ studentId: req.student._id })
+      .populate('senderId', 'name email')
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
+    res.json(notifications);
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+api.post('/study-buddy/notifications/read', studentAuthMiddleware, async (req, res) => {
+  try {
+    await StudyBuddyNotification.updateMany({ studentId: req.student._id, read: false }, { $set: { read: true } });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 app.use('/api', api);
 app.use('/spurti/api', api);
