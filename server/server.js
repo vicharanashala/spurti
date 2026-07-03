@@ -17,8 +17,15 @@ import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
-const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || 'dled@iitrpr.ac.in');
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'vled-local-admin';
+const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || '');
+const ADMIN_TOKEN = String(process.env.ADMIN_TOKEN || '');
+if (!ADMIN_EMAIL || !ADMIN_TOKEN) {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('FATAL: ADMIN_EMAIL and ADMIN_TOKEN environment variables are required in production.');
+    process.exit(1);
+  }
+  console.warn('WARNING: ADMIN_EMAIL/ADMIN_TOKEN not set — using insecure defaults. Set them in .env for production.');
+}
 
 // Survey triangulation pop-up. All driven by env so the form link / mode can
 // change without a client rebuild (the client reads these via /api/config).
@@ -70,9 +77,42 @@ function surveyActive() {
 const app = express();
 const api = express.Router();
 const liveViewers = new Map();
+const SERVER_START = Date.now();
+
+// Lightweight in-memory rate limiter — 100 req/min per IP on student-facing routes
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 60_000;
+const RATE_LIMIT_MAX = 100;
+function rateLimit(ip) {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+  if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + RATE_LIMIT_WINDOW; }
+  entry.count++;
+  rateLimitMap.set(ip, entry);
+  return entry.count > RATE_LIMIT_MAX;
+}
+function rateLimitReset() {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap.entries()) {
+    if (now > entry.resetAt) rateLimitMap.delete(ip);
+  }
+}
+setInterval(rateLimitReset, RATE_LIMIT_WINDOW);
 
 app.use(cors());
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '2mb' }));
+
+function ipOf(req) {
+  return String(req.ip || req.socket?.remoteAddress || 'unknown');
+}
+
+function studentRateLimit(req, res, next) {
+  if (rateLimit(ipOf(req))) {
+    return res.status(429).json({ error: 'Too many requests. Slow down.' });
+  }
+  next();
+}
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
@@ -230,7 +270,16 @@ function adminGuard(req, res, next) {
   next();
 }
 
-api.get('/health', (_req, res) => res.json({ status: 'ok' }));
+api.get('/health', (_req, res) => {
+  const dbConnected = mongoose.connection.readyState === 1;
+  const status = dbConnected ? 'ok' : 'degraded';
+  res.status(dbConnected ? 200 : 503).json({
+    status,
+    db: dbConnected ? 'connected' : 'disconnected',
+    uptime: Math.round((Date.now() - SERVER_START) / 1000),
+    timestamp: new Date().toISOString()
+  });
+});
 
 api.get('/config', (_req, res) => res.json({
   allowStudentSearch: ALLOW_STUDENT_SEARCH,
@@ -243,7 +292,7 @@ api.get('/config', (_req, res) => res.json({
   }
 }));
 
-api.get('/me', async (req, res) => {
+api.get('/me', studentRateLimit, async (req, res) => {
   const email = await studentEmailFromRequest(req);
   if (!email) return res.status(401).json({ authenticated: false });
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
@@ -252,7 +301,7 @@ api.get('/me', async (req, res) => {
   res.json({ authenticated: true, profile: await studentPayload(student) });
 });
 
-api.get('/search', async (req, res) => {
+api.get('/search', studentRateLimit, async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ exact: false, matches: [] });
@@ -276,7 +325,7 @@ api.get('/search', async (req, res) => {
   res.json({ exact: false, matches: matches.map(publicStudent) });
 });
 
-api.post('/confirm', async (req, res) => {
+api.post('/confirm', studentRateLimit, async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const { studentId, email } = req.body || {};
   const typed = normalizeEmail(email);
@@ -313,7 +362,7 @@ api.get('/leaderboard', async (req, res) => {
   });
 });
 
-api.post('/ping', async (req, res) => {
+api.post('/ping', studentRateLimit, async (req, res) => {
   const { email, name, page } = req.body || {};
   const normalized = normalizeEmail(email);
   if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
@@ -400,7 +449,7 @@ api.get('/admin/students-by-status', adminGuard, async (req, res) => {
   res.json(students.map(s => ({
     _id: String(s._id),
     name: s.name,
-    email: s.email,
+    email: maskEmail(s.email),
     totalSp: s.totalSp,
     internshipStartDate: s.internshipStartDate
   })));
@@ -414,7 +463,7 @@ api.get('/admin/leaderboard', adminGuard, async (req, res) => {
     rank: i + 1,
     _id: String(s._id),
     name: s.name,
-    email: s.email,
+    email: maskEmail(s.email),
     totalSp: s.totalSp
   })));
 });
