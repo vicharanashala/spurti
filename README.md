@@ -163,7 +163,7 @@ This project has been updated with several new features and enhancements:
 - Clicking the button smooth-scrolls the viewport back to the top.
 
 ### 3. Leaderboard Enhancements 🔍
-- The Overall and Onboarding Group leaderboards now list all active students in rank order rather than truncating at the top 50.
+- The Overall and Onboarding Group leaderboards display the top 50 students in rank order. At the bottom of the leaderboard, you can also see your own rank for easy reference.
 
 ### 4. Achievement Sharing & Privacy Card 📢
 - Displays a visual achievement card including name, SP points, cohort rank, current level, Trophy League status, and unlocked badges.
