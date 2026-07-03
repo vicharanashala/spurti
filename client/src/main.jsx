@@ -854,6 +854,11 @@ function TipModal({ onClose, recipient, onTipSuccess }) {
   const [amount, setAmount] = useState(1);
   const [note, setNote] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [amountTouched, setAmountTouched] = useState(false);
+  const [newBalance, setNewBalance] = useState(null);
+
+  const amountValue = Number(amount);
+  const isAmountValid = Number.isInteger(amountValue) && amountValue >= 1 && amountValue <= 10;
 
   const confirmSubmit = async () => {
     setStep('loading');
@@ -870,6 +875,7 @@ function TipModal({ onClose, recipient, onTipSuccess }) {
         setErrorMsg(data.error || 'Failed to send tip.');
         return;
       }
+      setNewBalance(data.newBalance);
       setStep('success');
       setTimeout(() => {
         onTipSuccess();
@@ -893,6 +899,7 @@ function TipModal({ onClose, recipient, onTipSuccess }) {
           <div className="tip-success">
             <h3>Sent!</h3>
             <p className="muted">{recipient.name} now knows you appreciate them.</p>
+            {newBalance !== null && <p className="muted">Your new balance: {newBalance} SP</p>}
           </div>
         )}
 
@@ -900,14 +907,15 @@ function TipModal({ onClose, recipient, onTipSuccess }) {
           <div className="tip-form">
              <p className="lead" style={{marginBottom: 0}}>Recognize <strong>{recipient.name}</strong> for their contribution to the cohort.</p>
              <label>Amount (SP)</label>
-             <input type="number" min="1" max="10" value={amount} onChange={e => setAmount(e.target.value)} />
+             <input type="number" min="1" max="10" value={amount} onChange={e => setAmount(e.target.value)} onBlur={() => setAmountTouched(true)} />
+             {amountTouched && !isAmountValid && <p className="muted" style={{margin: '-6px 0 0', fontSize: 13}}>Enter a whole number between 1 and 10.</p>}
              
              <div className="note-label"><label>Note</label><span className="muted">{note.length}/140</span></div>
              <input type="text" maxLength={140} placeholder="e.g. Great answer today!" value={note} onChange={e => setNote(e.target.value)} />
              
              {step === 'error' && <p className="error">{errorMsg}</p>}
              
-             <button className="primary" onClick={() => setStep('confirm')} style={{ marginTop: 12 }}>Review Tip</button>
+             <button className="primary" onClick={() => setStep('confirm')} style={{ marginTop: 12 }} disabled={!isAmountValid}>Review Tip</button>
           </div>
         )}
 
