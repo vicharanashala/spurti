@@ -281,7 +281,7 @@ function StudentView({ profile, onBack }) {
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
-      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} torchData={torchData} />}
+      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
   );
 }
@@ -320,7 +320,7 @@ function LevelStatus({ student }) {
   );
 }
 
-function LeaderboardTabs({ overall = [], group = [], groupLabel, torchData }) {
+function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   const [type, setType] = useState('overall');
   const rows = type === 'overall' ? overall : group;
   return (
@@ -337,13 +337,12 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel, torchData }) {
       <table className="table">
         <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
         <tbody>{rows.map(row => {
-          const isTorch = torchData?.torch && row.maskedEmail === torchData.torch.maskedEmail;
           return (
           <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
             <td>{row.rank}</td>
             <td>
               {row.name}
-              {isTorch && <em className="torch-badge">Torch Holder</em>}
+              {row.isTorchHolder && <em className="torch-badge">Torch Holder</em>}
             </td>
             <td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
           </tr>

@@ -292,22 +292,7 @@ api.post('/confirm', async (req, res) => {
   res.json(await studentPayload(student));
 });
 
-api.get('/leaderboard', async (req, res) => {
-  const type = String(req.query.leaderboardType || 'overall');
-  const filter = { status: { $ne: 'excused' } };
-  if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
-  const students = await Student.find(filter).sort({ totalSp: -1, name: 1 }).limit(50).lean();
-  res.json(students.map((s, i) => ({
-    rank: i + 1,
-    name: s.name,
-    maskedEmail: maskEmail(s.email),
-    totalSp: s.totalSp,
-    level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
-    trophyLeague: leagueBand(s.totalSp)
-  })));
-});
-
-api.get('/torch', async (_req, res) => {
+async function getWeeklyTorchHolderEmail() {
   const windowDays = 7;
   const now = new Date();
   const cutoff = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000);
@@ -332,11 +317,35 @@ api.get('/torch', async (_req, res) => {
     netSp: deltaMap.get(s.email) || 0
   }));
 
-  const torch = weeklyTorchHolder(deltaRows);
+  return { windowDays, torch: weeklyTorchHolder(deltaRows) };
+}
+
+api.get('/leaderboard', async (req, res) => {
+  const type = String(req.query.leaderboardType || 'overall');
+  const filter = { status: { $ne: 'excused' } };
+  if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
+  
+  const [students, { torch }] = await Promise.all([
+    Student.find(filter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
+    getWeeklyTorchHolderEmail()
+  ]);
+
+  res.json(students.map((s, i) => ({
+    rank: i + 1,
+    name: s.name,
+    maskedEmail: maskEmail(s.email),
+    totalSp: s.totalSp,
+    level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
+    trophyLeague: leagueBand(s.totalSp),
+    isTorchHolder: torch ? s.email === torch.email : false
+  })));
+});
+
+api.get('/torch', async (_req, res) => {
+  const { windowDays, torch } = await getWeeklyTorchHolderEmail();
   if (torch) {
     torch.maskedEmail = maskEmail(torch.email);
   }
-
   res.json({ windowDays, torch });
 });
 
