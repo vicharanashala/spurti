@@ -396,7 +396,7 @@ function StudentPulse({ profile, badges, nextActions, torchData }) {
         <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
       </div>
       <WeeklyPulseCard weeklyPulse={weeklyPulse} />
-      <WeeklyTorchCard torchData={torchData} currentEmail={student.email} />
+      <WeeklyTorchCard torchData={torchData} />
     </section>
   );
 }
@@ -455,7 +455,7 @@ function WeeklyPulseCard({ weeklyPulse }) {
   );
 }
 
-function WeeklyTorchCard({ torchData, currentEmail }) {
+function WeeklyTorchCard({ torchData }) {
   if (torchData === undefined) {
     return (
       <div className="pulse-card wide-pulse torch-card">
@@ -476,7 +476,7 @@ function WeeklyTorchCard({ torchData, currentEmail }) {
     );
   }
 
-  const isHolder = torch.email === currentEmail;
+  const isHolder = torch.isCurrentUser;
 
   return (
     <div className={`pulse-card wide-pulse torch-card ${isHolder ? 'torch-holder' : ''}`}>

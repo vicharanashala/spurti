@@ -341,12 +341,20 @@ api.get('/leaderboard', async (req, res) => {
   })));
 });
 
-api.get('/torch', async (_req, res) => {
+api.get('/torch', async (req, res) => {
+  const requesterEmail = await studentEmailFromRequest(req);
   const { windowDays, torch } = await getWeeklyTorchHolderEmail();
+  
+  let safeTorch = null;
   if (torch) {
-    torch.maskedEmail = maskEmail(torch.email);
+    safeTorch = {
+      name: torch.name,
+      maskedEmail: maskEmail(torch.email),
+      netSp: torch.netSp,
+      isCurrentUser: requesterEmail === torch.email
+    };
   }
-  res.json({ windowDays, torch });
+  res.json({ windowDays, torch: safeTorch });
 });
 
 api.post('/ping', async (req, res) => {
