@@ -6,6 +6,7 @@ import SpProgressBar from './components/SpProgressBar';
 import ShareCard from './components/ShareCard';
 import SettingsModal from './components/SettingsModal';
 import DarkModeToggle from './components/DarkModeToggle';
+import GroupLeaderboard from './components/GroupLeaderboard';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -36,7 +37,7 @@ function App() {
         page: 'record',
         recordViewed: profile.student.email
       })
-    }).catch(() => {});
+    }).catch(() => { });
     send();
     const id = setInterval(send, 30000);
     return () => clearInterval(id);
@@ -83,9 +84,9 @@ function App() {
     };
     return (
       <>
-        <StudentView 
-          profile={profile} 
-          onBack={config.allowStudentSearch ? () => setView('landing') : null} 
+        <StudentView
+          profile={profile}
+          onBack={config.allowStudentSearch ? () => setView('landing') : null}
           onUpdateStudent={handleUpdateStudent}
         />
         <SurveyModal
@@ -294,7 +295,7 @@ function StudentView({ profile, onBack, onUpdateStudent }) {
   const [tab, setTab] = useState('bank');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shareCardOpen, setShareCardOpen] = useState(false);
-  
+
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
@@ -314,32 +315,32 @@ function StudentView({ profile, onBack, onUpdateStudent }) {
       <LevelStatus student={student} />
       <SpProgressBar totalSp={student.totalSp} internshipStartDate={student.internshipStartDate} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} onShare={() => setShareCardOpen(true)} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank', 'SP Bank'], ['polls', 'Polls'], ['leaderboard', 'Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && (
-        <LeaderboardTabs 
-          overall={profile.leaderboard} 
-          group={profile.groupLeaderboard} 
-          groupLabel={student.leaderboardGroupLabel} 
+        <LeaderboardTabs
+          overall={profile.leaderboard}
+          group={profile.groupLeaderboard}
+          groupLabel={student.leaderboardGroupLabel}
           student={student}
           onShareRank={() => setShareCardOpen(true)}
         />
       )}
 
       {settingsOpen && (
-        <SettingsModal 
-          student={student} 
-          onUpdateStudent={onUpdateStudent} 
-          API={API} 
-          onClose={() => setSettingsOpen(false)} 
+        <SettingsModal
+          student={student}
+          onUpdateStudent={onUpdateStudent}
+          API={API}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
       {shareCardOpen && (
-        <ShareCard 
-          student={student} 
-          badges={badges} 
-          onClose={() => setShareCardOpen(false)} 
+        <ShareCard
+          student={student}
+          badges={badges}
+          onClose={() => setShareCardOpen(false)}
         />
       )}
     </main>
@@ -382,7 +383,6 @@ function LevelStatus({ student }) {
 
 function LeaderboardTabs({ overall = [], group = [], groupLabel, student, onShareRank }) {
   const [type, setType] = useState('overall');
-  const rows = type === 'overall' ? overall : group;
   return (
     <section className="panel">
       <div className="panel-head">
@@ -392,25 +392,37 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel, student, onShar
           <option value="my_onboarding_group">My Onboarding Group</option>
         </select>
       </div>
-      {type === 'my_onboarding_group' && groupLabel &&
-        <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
-      <table className="table">
-        <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
-        <tbody>{rows.map(row => (
-          <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
-            <td>{row.rank}</td>
-            <td>
-              {row.name}
-              {row.isCurrentStudent && student?.shareEnabled !== false && onShareRank && (
-                <button className="inline-share-btn" onClick={onShareRank} title="Share My Rank">
-                  📢 Share Rank
-                </button>
-              )}
-            </td>
-            <td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
-          </tr>
-        ))}</tbody>
-      </table>
+
+      {type === 'overall' && (
+        <>
+          <table className="table">
+            <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
+            <tbody>{overall.map(row => (
+              <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
+                <td>{row.rank}</td>
+                <td>
+                  {row.name}
+                  {row.isCurrentStudent && student?.shareEnabled !== false && onShareRank && (
+                    <button className="inline-share-btn" onClick={onShareRank} title="Share My Rank">
+                      📢 Share Rank
+                    </button>
+                  )}
+                </td>
+                <td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </>
+      )}
+
+      {type === 'my_onboarding_group' && (
+        <GroupLeaderboard
+          group={group}
+          groupLabel={groupLabel}
+          student={student}
+          onShareRank={onShareRank}
+        />
+      )}
     </section>
   );
 }
@@ -597,7 +609,7 @@ function AdminView({ admin, auth, onBack }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: auth.email, name: auth.email, page })
-    }).catch(() => {});
+    }).catch(() => { });
     doPing('admin-analytics');
     const id = setInterval(() => doPing('admin-live'), 30000);
     return () => clearInterval(id);
@@ -649,7 +661,7 @@ function AdminView({ admin, auth, onBack }) {
           <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
         </div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard', 'Leaderboard'], ['attendance', 'Attendance'], ['live', 'Live'], ['analytics', 'Analytics'], ['students', 'Students']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -842,7 +854,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
       {loading ? <p>Loading...</p> : list.length === 0 ? <p className="empty">No students in this category.</p> : (
         <table className="table">
           <thead><tr><th>Name</th><th>Email</th><th>SP</th><th>Start Date</th></tr></thead>
-          <tbody>{list.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{cursor:'pointer'}}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
+          <tbody>{list.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{ cursor: 'pointer' }}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
         </table>
       )}
     </section>
@@ -921,6 +933,5 @@ function SurveyModal({ survey, student, onDone }) {
     </div>
   );
 }
-
 
 createRoot(document.getElementById('root')).render(<App />);

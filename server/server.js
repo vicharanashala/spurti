@@ -46,7 +46,7 @@ async function getSubmittedEmails() {
   if (_subs.set && Date.now() - _subs.at < 60000) return _subs.set;   // 60s cache
   try {
     const u = SURVEY.responsesUrl + (SURVEY.responsesUrl.includes('?') ? '&' : '?') +
-              'secret=' + encodeURIComponent(SURVEY.responsesSecret);
+      'secret=' + encodeURIComponent(SURVEY.responsesSecret);
     const r = await fetch(u, { redirect: 'follow' });
     const j = await r.json();
     _subs = { at: Date.now(), set: new Set((j.emails || []).map(e => normalizeEmail(e))) };
@@ -231,6 +231,7 @@ async function studentPayload(student) {
         maskedEmail: maskEmail(s.email),
         totalSp: s.totalSp,
         level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
+        trophyLeague: leagueBand(s.totalSp),
         isCurrentStudent: s.email === email
       }));
       if (!rows.some(r => r.isCurrentStudent)) {
@@ -242,6 +243,7 @@ async function studentPayload(student) {
             maskedEmail: maskEmail(student.email),
             totalSp: student.totalSp,
             level: levelFor(highestSpEver),
+            trophyLeague: leagueBand(student.totalSp),
             isCurrentStudent: true
           });
         }
@@ -534,13 +536,13 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   const uniqueSince = (date) => new Set(activeEvents.filter(e => e.timestamp >= date).map(e => e.email)).size;
   const bucket = (date, mode) => {
     const d = new Date(date);
-    if (mode === 'hour') return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:00`;
+    if (mode === 'hour') return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:00`;
     if (mode === 'week') {
       const first = new Date(d.getFullYear(), 0, 1);
       const week = Math.ceil((((d - first) / 86400000) + first.getDay() + 1) / 7);
-      return `${d.getFullYear()}-W${String(week).padStart(2,'0')}`;
+      return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`;
     }
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   };
   const series = (mode, from) => {
     const map = new Map();
@@ -642,6 +644,67 @@ function last24Hours(now) {
 
 app.use('/api', api);
 app.use('/spurti/api', api);
+
+// --- LinkedIn / Social Open Graph Share Page ---
+// LinkedIn (and other crawlers) cannot preview localhost or private pages.
+// This endpoint generates a server-rendered HTML page with full Open Graph
+// meta tags so crawlers can produce a rich card preview.
+app.get('/share', (req, res) => {
+  const { name = 'A Spurti Student', sp = '0', rank = '?', level = '1', league = 'Bronze II' } = req.query;
+  const origin = process.env.APP_ORIGIN || `http://localhost:${PORT}`;
+  const appUrl = `${origin}${rootDir.includes('spurti') ? '/spurti' : ''}`;
+  const title = encodeURIComponent(`${name} — Spurti Achievement`);
+  const summary = `Spurti Points: ${sp} | Rank: #${rank} | Level: ${level} | ${league}`;
+  const imageUrl = `${appUrl}/og-card.png`; // static OG image (optional, see note)
+
+  const html = `<!DOCTYPE html>
+<html lang="en" prefix="og: http://ogp.me/ns#">
+<head>
+  <meta charset="UTF-8" />
+  <title>${name} — Spurti Achievement</title>
+  <!-- Primary Open Graph tags — read by LinkedIn, WhatsApp, Slack, etc. -->
+  <meta property="og:type"        content="website" />
+  <meta property="og:url"         content="${appUrl}" />
+  <meta property="og:title"       content="${name} — Spurti Achievement Card" />
+  <meta property="og:description" content="${summary}" />
+  <meta property="og:image"       content="${imageUrl}" />
+  <meta property="og:image:width"  content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:site_name"   content="Spurti Motivation Engine" />
+  <!-- Twitter Card (also used by some LinkedIn renderers) -->
+  <meta name="twitter:card"        content="summary_large_image" />
+  <meta name="twitter:title"       content="${name} — Spurti Achievement Card" />
+  <meta name="twitter:description" content="${summary}" />
+  <meta name="twitter:image"       content="${imageUrl}" />
+  <!-- Redirect humans to the main app after 0 seconds -->
+  <meta http-equiv="refresh" content="0;url=${appUrl}" />
+  <style>
+    body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#0f172a;color:#f8fafc;}
+    .card{max-width:480px;text-align:center;padding:40px;border:2px solid #38bdf8;border-radius:20px;background:#1e293b;}
+    h1{color:#38bdf8;margin:0 0 12px;}
+    p{color:#94a3b8;margin:6px 0;}
+    .sp{font-size:2.5rem;font-weight:900;color:#38bdf8;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <p style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#38bdf8;">Spurti Achievement Card</p>
+    <h1>${name}</h1>
+    <div class="sp">${sp} SP</div>
+    <p>Cohort Rank <strong>#${rank}</strong></p>
+    <p>Level ${level} &bull; ${league}</p>
+    <p style="margin-top:20px;font-size:13px;">Redirecting to the Spurti dashboard…</p>
+  </div>
+</body>
+</html>`;
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  // Cache for 5 minutes — long enough for crawlers, short enough to stay fresh
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.send(html);
+});
+app.get('/spurti/share', (req, res) => res.redirect(`/share?${new URLSearchParams(req.query).toString()}`));
+// -----------------------------------------------
 
 if (fs.existsSync(clientDist)) {
   app.use('/spurti', express.static(clientDist));
