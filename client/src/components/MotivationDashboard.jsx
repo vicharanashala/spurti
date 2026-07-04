@@ -169,7 +169,7 @@ export default function MotivationDashboard({ student }) {
           </div>
         </div>
         <p className="helper-note">
-          Your virtual tree grows every day you earn <strong>≥ 20 SP</strong>. If you miss a day, the growth pauses. Let's make it blossom!
+          Your virtual tree grows every day you earn <strong>= 20 SP</strong>. If you miss a day, the growth pauses. Let's make it blossom!
         </p>
       </div>
 
