@@ -112,6 +112,8 @@ input {
 .primary { background: var(--primary); color: #fff; }
 .primary:hover { background: var(--primary-dark); }
 .secondary { background: #e9f2f5; color: var(--primary-dark); }
+.secondary:hover { opacity: 0.85; }
+.export-btn { font-size: 12px; padding: 7px 12px; white-space: nowrap; }
 .icon { width: 38px; min-height: 38px; padding: 0; background: #eef2f7; color: var(--text); }
 .error { color: var(--red); font-weight: 700; }
 .muted { color: var(--muted); }

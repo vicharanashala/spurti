@@ -261,6 +261,24 @@ api.get('/config', (_req, res) => res.json({
   poll2: surveyPublic(POLL2)
 }));
 
+// Student self-service CSV export of their full SP ledger. Session-authenticated;
+// returns an RFC-4180 CSV with header row + one line per SPTransaction in
+// chronological order. Used by the "Download my data" button in the student topbar.
+api.get('/student/export.csv', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ authenticated: false });
+  const txns = await SPTransaction.find({ email }).sort({ dateTime: 1 }).lean();
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+  const rows = ['Date,Session,Category,Delta,Balance,Reason'];
+  for (const t of txns) {
+    rows.push(`${new Date(t.dateTime).toISOString()}, "${t.sessionLabel || ''}", ${t.category}, ${t.appliedDelta}, ${t.balanceAfter}, "${(t.reason || '').replace(/"/g, '""')}"`);
+  }
+  const filename = `spurti-export-${(student?.name || email).replace(/\s+/g, '-')}.csv`;
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(rows.join('\n'));
+});
+
 api.get('/me', async (req, res) => {
   const email = await studentEmailFromRequest(req);
   if (!email) return res.status(401).json({ authenticated: false });

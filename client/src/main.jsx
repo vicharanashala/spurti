@@ -276,6 +276,7 @@ function StudentView({ profile, onBack }) {
           <h1>{student.name}</h1>
         </div>
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
+        <button className="secondary export-btn" onClick={() => window.open(`${API}/student/export.csv`, '_blank')}>Download my data</button>
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
