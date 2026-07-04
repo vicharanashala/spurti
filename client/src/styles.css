@@ -514,3 +514,333 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* --- Motivation Dashboard Styles --- */
+.dashboard-row {
+  display: flex;
+  flex-direction: row;
+  gap: 20px;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  width: 100%;
+}
+.dashboard-col {
+  flex: 1;
+}
+.dashboard-col.main-col {
+  flex: 1.6;
+}
+.dashboard-col.side-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+@media (max-width: 960px) {
+  .dashboard-row {
+    flex-direction: column;
+  }
+  .dashboard-col.main-col, .dashboard-col.side-col {
+    width: 100%;
+    flex: none;
+  }
+}
+
+.motivation-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.tree-container {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 20px;
+  justify-content: center;
+  padding: 10px 0;
+}
+@media (max-width: 480px) {
+  .tree-container {
+    flex-direction: column;
+    text-align: center;
+  }
+}
+.tree-details {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tree-status-text {
+  font-size: 15px;
+  margin: 0;
+}
+.tree-status-text strong {
+  color: var(--primary);
+  font-size: 17px;
+}
+.tree-progress-container {
+  background: var(--bar-row-bg, #e2e8f0);
+  border-radius: 999px;
+  height: 20px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+.tree-progress-bar {
+  background: linear-gradient(90deg, #81c784, #4caf50);
+  height: 100%;
+  position: absolute;
+  left: 0;
+  top: 0;
+  transition: width 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.tree-progress-label {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--text);
+  z-index: 1;
+  text-shadow: 0 1px 2px rgba(255,255,255,0.8);
+}
+:root[data-theme="dark"] .tree-progress-label {
+  text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+}
+.milestones-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.milestone-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card-bg, #fbfdff);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.milestone-item:hover {
+  transform: translateX(4px);
+  border-color: var(--primary);
+}
+.milestone-item.unlocked {
+  border-left: 4px solid var(--green, #12805c);
+}
+.milestone-item.locked {
+  opacity: 0.65;
+  border-left: 4px solid var(--muted, #64748b);
+}
+.milestone-icon {
+  font-size: 20px;
+}
+.milestone-desc {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+.milestone-desc strong {
+  font-size: 13px;
+  color: var(--text);
+}
+.milestone-desc p {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* SVG animations */
+@keyframes sway {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(2.5deg); }
+}
+.mature-foliage, .sprout-leaves {
+  transform-origin: 100px 180px;
+  animation: sway 5s ease-in-out infinite;
+}
+.blossom, .apple {
+  transform-origin: center;
+  animation: sway 3s ease-in-out infinite alternate;
+}
+.trunk-path {
+  stroke-dasharray: 200;
+  stroke-dashoffset: 200;
+  animation: drawTrunk 1.8s ease-out forwards;
+}
+@keyframes drawTrunk {
+  to { stroke-dashoffset: 0; }
+}
+
+/* Chain Calendar styles */
+.month-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.month-controls .icon-btn {
+  background: var(--icon-bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.month-controls .icon-btn:hover {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+.month-label {
+  font-weight: 800;
+  font-size: 14px;
+  min-width: 120px;
+  text-align: center;
+}
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  margin-top: 14px;
+}
+.weekday-header {
+  text-align: center;
+  font-weight: 800;
+  font-size: 11px;
+  color: var(--muted);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.calendar-cell {
+  aspect-ratio: 1;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 5px;
+  min-height: 48px;
+  position: relative;
+  transition: all 0.2s ease;
+  background: var(--card-bg, #fbfdff);
+}
+.calendar-cell:hover {
+  transform: scale(1.08);
+  box-shadow: var(--shadow);
+  z-index: 2;
+  border-color: var(--primary);
+}
+.padding-cell {
+  background: transparent;
+  border: none;
+  pointer-events: none;
+}
+.before-start {
+  opacity: 0.3;
+  background: var(--icon-bg);
+}
+.future-cell {
+  opacity: 0.45;
+  border-style: dashed;
+  background: transparent;
+}
+.success-cell {
+  background: var(--green, #12805c);
+  border-color: var(--green, #12805c);
+}
+.success-cell .day-number, .success-cell .sp-indicator {
+  color: #fff !important;
+}
+.missed-cell {
+  background: var(--icon-bg);
+}
+.today-cell {
+  border: 2px dashed var(--primary);
+  box-shadow: 0 0 6px var(--primary);
+}
+.day-number {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.sp-indicator {
+  font-size: 9px;
+  font-weight: 800;
+  text-align: right;
+  align-self: flex-end;
+}
+.sp-indicator.positive {
+  color: var(--green, #12805c);
+}
+.sp-indicator.negative {
+  color: var(--red, #b42318);
+}
+.sp-indicator.zero {
+  color: var(--muted);
+}
+.calendar-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 14px;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.legend-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.legend-color.success {
+  background: var(--green, #12805c);
+}
+.legend-color.missed {
+  background: var(--icon-bg);
+  border: 1px solid var(--line);
+}
+.calendar-encouragement {
+  font-size: 12px;
+  text-align: center;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 14px 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+.loading-state, .error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  text-align: center;
+}
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 4px solid var(--line);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 12px;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
