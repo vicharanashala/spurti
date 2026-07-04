@@ -218,8 +218,8 @@ export default function MotivationDashboard({ student }) {
                 title={`${cell.dateStr}: ${cell.spEarned} SP ${cell.success ? '(Success!)' : ''}`}
               >
                 <span className="day-number">{cell.dayNum}</span>
-                {!cell.isPadding && !cell.isFuture && !cell.isBeforeStart && (
-                  <span className={`sp-indicator ${cell.spEarned > 0 ? 'positive' : cell.spEarned < 0 ? 'negative' : 'zero'}`}>
+                {!cell.isPadding && !cell.isFuture && !cell.isBeforeStart && cell.spEarned !== 0 && (
+                  <span className={`sp-indicator ${cell.spEarned > 0 ? 'positive' : 'negative'}`}>
                     {cell.spEarned > 0 ? `+${cell.spEarned}` : cell.spEarned}
                   </span>
                 )}
