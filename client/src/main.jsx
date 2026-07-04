@@ -385,11 +385,86 @@ function StudentPulse({ profile, badges, nextActions }) {
         <span>SP trend</span>
         <Sparkline points={trend} />
       </div>
+      <WeeklyGoalWidget
+        student={profile.student}
+        weeklyGoal={profile.student.weeklyGoal}
+        onGoalUpdated={(updatedGoal) => {
+          profile.student.weeklyGoal = updatedGoal;
+          window.location.reload();
+        }}
+      />
       <div className="pulse-card wide-pulse">
         <span>What to do next</span>
         <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
       </div>
     </section>
+  );
+}
+
+function WeeklyGoalWidget({ student, weeklyGoal, onGoalUpdated }) {
+  const [editing, setEditing] = useState(false);
+  const [inputValue, setInputValue] = useState(weeklyGoal?.targetSp || '');
+  const [saving, setSaving] = useState(false);
+
+  const target = weeklyGoal?.targetSp || 0;
+  const earned = weeklyGoal?.spEarnedThisWeek || 0;
+  const pct = weeklyGoal?.progressPct || 0;
+
+  const saveGoal = async () => {
+    const value = Number(inputValue);
+    if (!Number.isFinite(value) || value < 0) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API}/goal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: student.email, targetSp: value })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        onGoalUpdated(data.student.weeklyGoal);
+        setEditing(false);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="pulse-card wide-pulse">
+      <span>Weekly Goal</span>
+      {target === 0 && !editing ? (
+        <div className="goal-setup">
+          <p className="muted">Set a weekly SP target to track your pace.</p>
+          <button className="secondary" onClick={() => setEditing(true)}>Set a goal</button>
+        </div>
+      ) : editing ? (
+        <div className="goal-setup">
+          <input
+            type="number"
+            min="0"
+            value={inputValue}
+            onChange={e => setInputValue(e.target.value)}
+            placeholder="Target SP for this week"
+          />
+          <button className="primary" disabled={saving} onClick={saveGoal}>
+            {saving ? 'Saving...' : 'Save goal'}
+          </button>
+          <button className="secondary" onClick={() => setEditing(false)}>Cancel</button>
+        </div>
+      ) : (
+        <div className="goal-progress">
+          <p>{earned} / {target} SP this week</p>
+          <div className="progress-bar">
+            <div className="progress-fill" style={{ width: `${pct}%` }} />
+          </div>
+          <p className="muted">
+            {pct >= 100 ? 'Goal achieved! Great work.' : `${pct}% of the way there.`}
+          </p>
+          <button className="secondary" onClick={() => { setInputValue(target); setEditing(true); }}>Edit goal</button>
+        </div>
+      )}
+    </div>
   );
 }
 
