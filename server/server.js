@@ -367,14 +367,31 @@ api.post('/tip', async (req, res) => {
     return res.status(409).json({ error: 'Balance too low or concurrent transaction conflict.' });
   }
 
+  let credited;
   try {
     // If debit succeeded, perform the credit
-    const credited = await Student.findOneAndUpdate(
+    credited = await Student.findOneAndUpdate(
       { email: toStudent.email },
       { $inc: { totalSp: amt } },
       { new: true }
     );
+  } catch (creditErr) {
+    // Nothing else has happened yet — safe to refund the sender.
+    try {
+      await Student.findOneAndUpdate({ email: fromStudent.email }, { $inc: { totalSp: amt } });
+      console.warn(`Tip from ${fromStudent.email} to ${toStudent.email} failed before crediting recipient; sender refunded ${amt} SP.`);
+      return res.status(500).json({ error: 'Tip could not be completed. Your balance was not affected.' });
+    } catch (reversalErr) {
+      console.error('CRITICAL: tip credit failed AND sender reversal also failed.', {
+        fromEmail: fromStudent.email, toEmail: toStudent.email, amount: amt,
+        debitedBalance: debited.totalSp, originalError: creditErr.message || creditErr,
+        reversalError: reversalErr.message || reversalErr
+      });
+      return res.status(500).json({ error: 'Internal server error. Please contact support to restore your balance.' });
+    }
+  }
 
+  try {
     // Insert transactions using the new counterpartEmail field
     const senderReason = `Sent tip to ${toStudent.name}${cleanNote ? ` - "${cleanNote}"` : ''}`;
     await SPTransaction.create({
@@ -407,28 +424,13 @@ api.post('/tip', async (req, res) => {
     });
 
     res.json({ ok: true, newBalance: debited.totalSp, sentTo: maskEmail(toStudent.email) });
-  } catch (err) {
-    // Since full multi-document atomicity requires a replica-set transaction session 
-    // (which is assumed unavailable here), we attempt a best-effort compensating action 
-    // to reverse the debit. If that fails, we return 500 and log aggressively for manual intervention.
-    try {
-      await Student.findOneAndUpdate(
-        { email: fromStudent.email },
-        { $inc: { totalSp: amt } }
-      );
-      console.warn(`WARNING: Tip from ${fromStudent.email} to ${toStudent.email} failed during credit phase, but sender was successfully refunded ${amt} SP.`);
-      return res.status(500).json({ error: 'Tip could not be completed. Your balance was not affected.' });
-    } catch (reversalErr) {
-      console.error('CRITICAL: tip credit/transaction-write failed AND sender reversal also failed.', {
-        fromEmail: fromStudent.email,
-        toEmail: toStudent.email,
-        amount: amt,
-        debitedBalance: debited.totalSp,
-        originalError: err.message || err,
-        reversalError: reversalErr.message || reversalErr
-      });
-      return res.status(500).json({ error: 'Internal server error while processing the credit phase. Please contact support to restore your balance.' });
-    }
+  } catch (writeErr) {
+    console.error('CRITICAL: tip credit succeeded but transaction record write failed. DO NOT REFUND SENDER — money movement is real.', {
+      fromEmail: fromStudent.email, toEmail: toStudent.email, amount: amt,
+      debitedBalance: debited.totalSp, creditedBalance: credited.totalSp,
+      error: writeErr.message || writeErr
+    });
+    return res.status(500).json({ error: 'Your tip was sent, but we could not confirm it. Please check your SP Bank, and contact support if anything looks wrong.' });
   }
 });
 
