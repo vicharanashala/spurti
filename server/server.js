@@ -261,13 +261,45 @@ api.get('/config', (_req, res) => res.json({
   poll2: surveyPublic(POLL2)
 }));
 
-// Student self-service CSV export of their full SP ledger. Session-authenticated;
-// returns an RFC-4180 CSV with header row + one line per SPTransaction in
-// chronological order. Used by the "Download my data" button in the student topbar.
+// Student self-service CSV export of their SP ledger. Session-authenticated;
+// returns an RFC-4180 CSV with header row + one line per SPTransaction.
+// Optional query params:
+//   start=ISO  - earliest dateTime to include (inclusive)
+//   end=ISO    - latest   dateTime to include (inclusive)
+//   category=initial|attendance|poll|manual  - filter to a single category
+// Used by the "Download my data" button in the student topbar.
+const VALID_CATEGORIES = new Set(['initial', 'attendance', 'poll', 'manual']);
+
+function parseExportQuery(query) {
+  const out = { filter: {}, rangeError: null };
+  if (query.start) {
+    const d = new Date(query.start);
+    if (isNaN(d.getTime())) return { filter: {}, rangeError: `invalid start date: ${query.start}` };
+    out.filter.dateTime = { ...(out.filter.dateTime || {}), $gte: d };
+  }
+  if (query.end) {
+    const d = new Date(query.end);
+    if (isNaN(d.getTime())) return { filter: {}, rangeError: `invalid end date: ${query.end}` };
+    out.filter.dateTime = { ...(out.filter.dateTime || {}), $lte: d };
+  }
+  if (out.filter.dateTime && out.filter.dateTime.$gte > out.filter.dateTime.$lte) {
+    return { filter: {}, rangeError: 'start must be on or before end' };
+  }
+  if (query.category) {
+    if (!VALID_CATEGORIES.has(query.category)) {
+      return { filter: {}, rangeError: `invalid category: ${query.category} (must be one of: initial, attendance, poll, manual)` };
+    }
+    out.filter.category = query.category;
+  }
+  return out;
+}
+
 api.get('/student/export.csv', async (req, res) => {
   const email = await studentEmailFromRequest(req);
   if (!email) return res.status(401).json({ authenticated: false });
-  const txns = await SPTransaction.find({ email }).sort({ dateTime: 1 }).lean();
+  const { filter, rangeError } = parseExportQuery(req.query);
+  if (rangeError) return res.status(400).json({ error: rangeError });
+  const txns = await SPTransaction.find({ email, ...filter }).sort({ dateTime: 1 }).lean();
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   const rows = ['Date,Session,Category,Delta,Balance,Reason'];
   for (const t of txns) {
@@ -276,6 +308,7 @@ api.get('/student/export.csv', async (req, res) => {
   const filename = `spurti-export-${(student?.name || email).replace(/\s+/g, '-')}.csv`;
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('X-Export-Row-Count', String(txns.length));
   res.send(rows.join('\n'));
 });
 

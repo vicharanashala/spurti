@@ -264,7 +264,15 @@ function SearchModal({ onClose, onStudent }) {
 
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportStart, setExportStart] = useState('');
+  const [exportEnd, setExportEnd] = useState('');
   const { student } = profile;
+  const downloadCsv = (extra = {}) => {
+    const params = new URLSearchParams(extra).toString();
+    window.open(`${API}/student/export.csv${params ? '?' + params : ''}`, '_blank');
+    setExportOpen(false);
+  };
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
   return (
@@ -276,7 +284,35 @@ function StudentView({ profile, onBack }) {
           <h1>{student.name}</h1>
         </div>
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
-        <button className="secondary export-btn" onClick={() => window.open(`${API}/student/export.csv`, '_blank')}>Download my data</button>
+        <div className="export-menu">
+          <button
+            className="secondary export-btn"
+            onClick={() => setExportOpen(o => !o)}
+            aria-haspopup="true"
+            aria-expanded={exportOpen}
+          >Download my data ▾</button>
+          {exportOpen && (
+            <div className="export-popup" role="menu">
+              <button className="export-popup-item" onClick={() => downloadCsv()}>All transactions</button>
+              <button className="export-popup-item" onClick={() => downloadCsv({ category: 'attendance' })}>Attendance only</button>
+              <button className="export-popup-item" onClick={() => downloadCsv({ category: 'poll' })}>Poll only</button>
+              <button className="export-popup-item" onClick={() => downloadCsv({ category: 'initial' })}>Initial credit</button>
+              <hr className="export-popup-sep" />
+              <label className="export-popup-row">
+                From <input type="date" value={exportStart} onChange={e => setExportStart(e.target.value)} />
+              </label>
+              <label className="export-popup-row">
+                To <input type="date" value={exportEnd} onChange={e => setExportEnd(e.target.value)} />
+              </label>
+              <button className="export-popup-apply" onClick={() => {
+                const q = {};
+                if (exportStart) q.start = exportStart;
+                if (exportEnd) q.end = exportEnd;
+                downloadCsv(q);
+              }}>Download filtered range</button>
+            </div>
+          )}
+        </div>
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
