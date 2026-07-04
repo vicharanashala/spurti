@@ -385,6 +385,7 @@ function StudentPulse({ profile, badges, nextActions }) {
         <span>SP trend</span>
         <Sparkline points={trend} />
       </div>
+      <ForecastWidget forecast={profile.student.forecast} currentSp={student.totalSp} />
       <div className="pulse-card wide-pulse">
         <span>What to do next</span>
         <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
@@ -392,7 +393,69 @@ function StudentPulse({ profile, badges, nextActions }) {
     </section>
   );
 }
+function ForecastWidget({ forecast, currentSp }) {
+  const [goalInput, setGoalInput] = useState('');
+  const [requiredPace, setRequiredPace] = useState(null);
 
+  const { completedSessions, remainingSessions, avgSpPerSession, projectedFinalSp } = forecast;
+
+  const calculateRequiredPace = () => {
+    const goal = Number(goalInput);
+    if (!Number.isFinite(goal) || goal <= currentSp) {
+      setRequiredPace(null);
+      return;
+    }
+    if (remainingSessions === 0) {
+      setRequiredPace('no-sessions-left');
+      return;
+    }
+    const needed = (goal - currentSp) / remainingSessions;
+    setRequiredPace(Math.round(needed * 10) / 10);
+  };
+
+  return (
+    <div className="pulse-card wide-pulse">
+      <span>SP Forecast</span>
+      <div className="forecast-stats">
+        <div className="forecast-stat">
+          <b>{avgSpPerSession}</b>
+          <em>avg SP / session so far</em>
+        </div>
+        <div className="forecast-stat">
+          <b>{remainingSessions}</b>
+          <em>sessions remaining</em>
+        </div>
+        <div className="forecast-stat">
+          <b>{projectedFinalSp}</b>
+          <em>projected final SP</em>
+        </div>
+      </div>
+      <p className="muted">
+        Based on your pace across {completedSessions} completed sessions, you're on track to finish around
+        {' '}<strong>{projectedFinalSp} SP</strong>.
+      </p>
+      <div className="forecast-goal">
+        <input
+          type="number"
+          min="0"
+          value={goalInput}
+          onChange={e => setGoalInput(e.target.value)}
+          placeholder="Enter a target SP"
+        />
+        <button className="secondary" onClick={calculateRequiredPace}>Check pace needed</button>
+      </div>
+      {requiredPace === 'no-sessions-left' && (
+        <p className="error">No sessions remain — this goal isn't reachable this cohort.</p>
+      )}
+      {typeof requiredPace === 'number' && (
+        <p className={requiredPace > avgSpPerSession * 1.5 ? 'error' : 'muted'}>
+          You'll need about <strong>{requiredPace} SP/session</strong> for your remaining {remainingSessions} sessions
+          {requiredPace > avgSpPerSession * 1.5 ? ' — that\'s a big jump from your current pace.' : ' — achievable at a slightly better pace.'}
+        </p>
+      )}
+    </div>
+  );
+}
 function Sparkline({ points }) {
   const values = points.map(p => p.value);
   const min = Math.min(...values, 0);

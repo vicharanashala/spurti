@@ -178,13 +178,14 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents, sessions] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
+    Session.find().lean()
   ]);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
@@ -195,6 +196,24 @@ async function studentPayload(student) {
   // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
   const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
   const myGroup = leaderboardGroup(student.internshipStartDate);
+  // SP Forecast — projects final SP based on the student's average earning
+  // pace across completed sessions, and how much pace is needed to hit a goal.
+  const now = new Date();
+  const completedSessions = sessions.filter(s => new Date(s.endDateTime) <= now);
+  const remainingSessions = sessions.filter(s => new Date(s.endDateTime) > now);
+  const earnedFromSessions = transactions
+    .filter(tx => tx.category === 'attendance' || tx.category === 'poll')
+    .reduce((sum, tx) => sum + Number(tx.appliedDelta || 0), 0);
+  const avgSpPerSession = completedSessions.length
+    ? Math.round((earnedFromSessions / completedSessions.length) * 10) / 10
+    : 0;
+  const projectedFinalSp = Math.round(student.totalSp + (avgSpPerSession * remainingSessions.length));
+  const forecast = {
+    completedSessions: completedSessions.length,
+    remainingSessions: remainingSessions.length,
+    avgSpPerSession,
+    projectedFinalSp
+  };
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
   const mapRow = (row, index) => ({
     rank: index + 1,
@@ -225,7 +244,8 @@ async function studentPayload(student) {
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      poll2Completed: Boolean(student.poll2Completed),
+      forecast
     },
     transactions,
     polls,
