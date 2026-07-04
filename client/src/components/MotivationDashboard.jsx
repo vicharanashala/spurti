@@ -233,7 +233,7 @@ export default function MotivationDashboard({ student }) {
           <div className="legend-item"><span className="legend-color missed" /> Missed Day (&lt; 20 SP)</div>
         </div>
         <p className="calendar-encouragement">
-          Maintain your streak! Target earning <strong>20+ SP</strong> daily through sessions, attendance, and polls to keep the chain green.
+          Maintain your streak! Target earning <strong>20 SP</strong> daily through sessions, attendance, and polls to keep the chain green.
         </p>
       </div>
     </section>
