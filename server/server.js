@@ -95,6 +95,15 @@ const liveViewers = new Map();
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+// Returns the start (Monday 00:00) of the current week, for weekly goal tracking.
+function weekStart(date = new Date()) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = (day === 0 ? 6 : day - 1);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - diff);
+  return d;
+}
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
@@ -194,6 +203,11 @@ async function studentPayload(student) {
   const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
   // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
   const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
+  const currentWeekStart = weekStart();
+  const spEarnedThisWeek = transactions
+    .filter(tx => new Date(tx.dateTime) >= currentWeekStart)
+    .reduce((sum, tx) => sum + Number(tx.appliedDelta || 0), 0);
+  const weeklyGoalSp = Number(student.weeklyGoalSp) || 0;
   const myGroup = leaderboardGroup(student.internshipStartDate);
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
   const mapRow = (row, index) => ({
@@ -225,7 +239,13 @@ async function studentPayload(student) {
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      poll2Completed: Boolean(student.poll2Completed),
+      weeklyGoal: {
+        targetSp: weeklyGoalSp,
+        spEarnedThisWeek,
+        progressPct: weeklyGoalSp > 0 ? Math.min(100, Math.round((spEarnedThisWeek / weeklyGoalSp) * 100)) : 0,
+        weekStart: currentWeekStart
+      }
     },
     transactions,
     polls,
@@ -306,7 +326,20 @@ api.post('/confirm', async (req, res) => {
   if (student.status === 'excused') return res.json(excusedPayload(student));
   res.json(await studentPayload(student));
 });
-
+api.post('/goal', async (req, res) => {
+  const { email, targetSp } = req.body || {};
+  const normalized = normalizeEmail(email);
+  const target = Number(targetSp);
+  if (!normalized || !Number.isFinite(target) || target < 0) {
+    return res.status(400).json({ error: 'email and a valid targetSp are required' });
+  }
+  const student = await Student.findOne({ $or: [{ email: normalized }, { alternateEmail: normalized }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  student.weeklyGoalSp = Math.round(target);
+  student.weeklyGoalSetAt = new Date();
+  await student.save();
+  res.json(await studentPayload(student));
+});
 api.get('/leaderboard', async (req, res) => {
   const type = String(req.query.leaderboardType || 'overall');
   const filter = { status: { $ne: 'excused' } };
