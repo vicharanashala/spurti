@@ -514,3 +514,45 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* --- Admin Notes (feature/admin-notes) --- */
+.admin-note-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.admin-note-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.admin-note-head .muted { font-weight: 400; text-transform: none; }
+.admin-note-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  resize: vertical;
+  min-height: 72px;
+  box-sizing: border-box;
+}
+.admin-note-input::placeholder { color: var(--muted); }
+.admin-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.admin-note-actions .primary { font-size: 13px; padding: 7px 14px; }
+.admin-note-actions .error { font-size: 12px; }

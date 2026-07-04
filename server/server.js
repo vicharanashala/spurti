@@ -226,6 +226,7 @@ async function studentPayload(student) {
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
       poll2Completed: Boolean(student.poll2Completed)
+      // adminNote intentionally NOT included — private to admins, never sent to /api/me.
     },
     transactions,
     polls,
@@ -465,7 +466,26 @@ api.get('/admin/attendance', adminGuard, async (_req, res) => {
 api.get('/admin/student/:id', adminGuard, async (req, res) => {
   const student = await Student.findById(req.params.id).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
-  res.json(await studentPayload(student));
+  const payload = await studentPayload(student);
+  // Admin-only: attach the private adminNote. studentPayload never returns it
+  // for /api/me, so this is the only place it leaks out.
+  payload.student.adminNote = student.adminNote || '';
+  res.json(payload);
+});
+
+// Update a student's private admin note. Email-keyed for convenience (admins
+// usually have an email in hand, not an _id). Overwrites — there is no history.
+api.put('/admin/student/by-email/:email/note', adminGuard, async (req, res) => {
+  const email = normalizeEmail(req.params.email);
+  if (!email) return res.status(400).json({ error: 'email is required' });
+  const { note } = req.body ?? {};
+  const student = await Student.findOneAndUpdate(
+    { email },
+    { adminNote: String(note || '') },
+    { new: true }
+  ).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  res.json({ ok: true, adminNote: student.adminNote });
 });
 
 api.get('/admin/active', adminGuard, (_req, res) => {

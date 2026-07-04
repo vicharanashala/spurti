@@ -514,6 +514,9 @@ function AdminView({ admin, auth, onBack }) {
   const [analytics, setAnalytics] = useState(null);
   const [stats, setStats] = useState(null);
   const [studentProfile, setStudentProfile] = useState(null);
+  const [adminNote, setAdminNote] = useState('');
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteError, setNoteError] = useState('');
 
   const headers = adminHeaders(auth);
 
@@ -539,7 +542,10 @@ function AdminView({ admin, auth, onBack }) {
   };
   const loadStudent = async (id) => {
     const res = await fetch(`${API}/admin/student/${id}`, { headers });
-    setStudentProfile(await res.json());
+    const data = await res.json();
+    setStudentProfile(data);
+    setAdminNote(data.student?.adminNote || '');
+    setNoteError('');
   };
   const loadActive = async () => {
     const res = await fetch(`${API}/admin/active`, { headers });
@@ -548,6 +554,26 @@ function AdminView({ admin, auth, onBack }) {
   const loadAnalytics = async () => {
     const res = await fetch(`${API}/admin/analytics`, { headers });
     setAnalytics(await res.json());
+  };
+  const saveAdminNote = async () => {
+    if (!studentProfile) return;
+    setNoteSaving(true);
+    setNoteError('');
+    try {
+      const email = encodeURIComponent(studentProfile.student.email);
+      const res = await fetch(`${API}/admin/student/by-email/${email}/note`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: adminNote })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setAdminNote(data.adminNote ?? adminNote);
+    } catch (err) {
+      setNoteError(err.message);
+    } finally {
+      setNoteSaving(false);
+    }
   };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
@@ -593,7 +619,37 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
-      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
+      {studentProfile && (
+        <div className="overlay">
+          <section className="modal wide">
+            <div className="modal-head">
+              <h2>{studentProfile.student.name}</h2>
+              <button className="icon" onClick={() => setStudentProfile(null)}>x</button>
+            </div>
+            <div className="admin-note-wrap">
+              <div className="admin-note-head">
+                <span>Admin Notes</span>
+                <span className="muted">Private — never shown to the student</span>
+              </div>
+              <textarea
+                className="admin-note-input"
+                value={adminNote}
+                onChange={e => setAdminNote(e.target.value)}
+                placeholder="Network issue reported, medical leave, reached out via email..."
+                rows={3}
+                maxLength={2000}
+              />
+              <div className="admin-note-actions">
+                <button className="primary" onClick={saveAdminNote} disabled={noteSaving}>
+                  {noteSaving ? 'Saving...' : 'Save note'}
+                </button>
+                {noteError && <span className="error">{noteError}</span>}
+              </div>
+            </div>
+            <SpBank transactions={studentProfile.transactions} />
+          </section>
+        </div>
+      )}
     </main>
   );
 }
