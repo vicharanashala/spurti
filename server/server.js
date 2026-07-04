@@ -156,6 +156,7 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
+  const studentIsActive = student.status !== 'excused';
   const myGroup = leaderboardGroup(student.internshipStartDate);
   let bucketStart, bucketEnd;
   if (student.internshipStartDate) {
@@ -184,17 +185,27 @@ async function studentPayload(student) {
     Student.aggregate([{ $match: activeFilter }, { $group: { _id: null, avg: { $avg: '$totalSp' } } }]),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).skip(9).limit(1).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).skip(49).limit(1).lean(),
-    Student.find({
+    studentIsActive ? Student.find({
       ...activeFilter,
       $or: [
         { totalSp: { $gt: student.totalSp } },
         { totalSp: student.totalSp, name: { $lt: student.name } }
       ]
-    }).sort({ totalSp: 1, name: -1 }).limit(1).lean(),
+    }).sort({ totalSp: 1, name: -1 }).limit(1).lean() : Promise.resolve([]),
     bucketStart && bucketEnd ? Student.find({
       ...activeFilter,
       internshipStartDate: { $gte: bucketStart, $lte: bucketEnd }
-    }).sort({ totalSp: -1, name: 1 }).limit(50).lean() : []
+    }).sort({ totalSp: -1, name: 1 }).limit(50).lean() : 
+    // Fallback: If internshipStartDate is missing/invalid, fetch others who are also missing it.
+    // Note: Schema enforces Date type and ingestion scripts reject unparseable strings,
+    // so truthy-but-unparseable string edge cases are impossible in this DB.
+    Student.find({
+      ...activeFilter,
+      $or: [
+        { internshipStartDate: { $exists: false } },
+        { internshipStartDate: null }
+      ]
+    }).sort({ totalSp: -1, name: 1 }).limit(50).lean()
   ]);
 
   const averageSp = avgAgg.length ? Math.round(avgAgg[0].avg) : 0;
