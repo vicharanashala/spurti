@@ -228,11 +228,16 @@ router.get('/sessions', async (req, res) => {
     const cohortId = new mongoose.Types.ObjectId(req.instructor.cohortId);
     const sessions = await Session.find({ cohortId }).sort({ date: -1 }).lean();
 
-    const cohortStudentsCount = await Student.countDocuments({ cohortId });
+    const cohortStudents = await Student.find({ cohortId }).select('_id').lean();
+    const cohortStudentIds = cohortStudents.map(s => s._id);
+    const cohortStudentsCount = cohortStudentIds.length;
 
     const enrichedSessions = await Promise.all(sessions.map(async s => {
-      const records = await AttendanceRecord.find({ sessionLabel: s.label }).select('qualified');
-      const qualifiedCount = records.filter(r => r.qualified).length;
+      const qualifiedCount = await AttendanceRecord.countDocuments({
+        sessionLabel: s.label,
+        studentId: { $in: cohortStudentIds },
+        qualified: true
+      });
       const attendanceRate = cohortStudentsCount > 0
         ? Math.round((qualifiedCount / cohortStudentsCount) * 1000) / 10
         : 0;
