@@ -12,6 +12,7 @@
     "split-22-may": "node server/scripts/split22MaySessions.js",
     "setup": "npm install && npm --prefix client install && npm run rebuild && npm run build",
     "build": "npm --prefix client run build",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "start": "node server/server.js",
     "dev": "node server/server.js"
   },
@@ -19,6 +20,11 @@
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
-    "mongoose": "^8.8.4"
+    "mongoose": "^8.8.4",
+    "node-cron": "^4.5.0"
+  },
+  "devDependencies": {
+    "jest": "^30.4.2",
+    "supertest": "^7.2.2"
   }
 }

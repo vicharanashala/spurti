@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import LeaderboardPage from './pages/LeaderboardPage.jsx';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -282,7 +283,7 @@ function StudentView({ profile, onBack }) {
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
-      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'leaderboard' && <LeaderboardPage currentStudentId={student._id} />}
     </main>
   );
 }
