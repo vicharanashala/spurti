@@ -6,6 +6,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
+import { normalizeEmail, maskEmail } from './utils/email.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
@@ -95,18 +96,6 @@ const liveViewers = new Map();
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
-
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function maskEmail(email) {
-  const [name, domain] = String(email || '').split('@');
-  if (!name || !domain) return 'hidden email';
-  const start = name.slice(0, Math.min(2, name.length));
-  const end = name.length > 4 ? name.slice(-2) : '';
-  return `${start}${'*'.repeat(Math.max(3, name.length - start.length - end.length))}${end}@${domain}`;
-}
 
 function publicStudent(student) {
   return {
