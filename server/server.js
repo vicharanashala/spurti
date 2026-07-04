@@ -198,7 +198,7 @@ async function studentPayload(student) {
     }).sort({ totalSp: -1, name: 1 }).limit(50).lean() : 
     // Fallback: If internshipStartDate is missing/invalid, fetch others who are also missing it.
     // Note: Schema enforces Date type and ingestion scripts reject unparseable strings,
-    // so truthy-but-unparseable string edge cases are impossible in this DB.
+    // so this is not expected via standard ingestion; the fallback below still handles it safely if it ever occurs.
     Student.find({
       ...activeFilter,
       $or: [
