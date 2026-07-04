@@ -229,7 +229,7 @@ export default function MotivationDashboard({ student }) {
         </div>
 
         <div className="calendar-legend">
-          <div className="legend-item"><span className="legend-color success" /> Successful Day (≥ 20 SP)</div>
+          <div className="legend-item"><span className="legend-color success" /> Successful Day (= 20 SP)</div>
           <div className="legend-item"><span className="legend-color missed" /> Missed Day (&lt; 20 SP)</div>
         </div>
         <p className="calendar-encouragement">
