@@ -156,24 +156,54 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const myGroup = leaderboardGroup(student.internshipStartDate);
+  let bucketStart, bucketEnd;
+  if (student.internshipStartDate) {
+    const d = new Date(student.internshipStartDate);
+    if (!isNaN(d.getTime())) {
+      const y = d.getUTCFullYear();
+      const m = d.getUTCMonth();
+      const day = d.getUTCDate();
+      if (day <= 15) {
+        bucketStart = new Date(Date.UTC(y, m, 1, 0, 0, 0));
+        bucketEnd = new Date(Date.UTC(y, m, 15, 23, 59, 59, 999));
+      } else {
+        const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+        bucketStart = new Date(Date.UTC(y, m, 16, 0, 0, 0));
+        bucketEnd = new Date(Date.UTC(y, m, lastDay, 23, 59, 59, 999));
+      }
+    }
+  }
+
+  const [transactions, polls, attendance, rankInfo, leaderboard, avgAgg, top10, top50, nextStudentMatch, groupStudents] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    Student.aggregate([{ $match: activeFilter }, { $group: { _id: null, avg: { $avg: '$totalSp' } } }]),
+    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).skip(9).limit(1).lean(),
+    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).skip(49).limit(1).lean(),
+    Student.find({
+      ...activeFilter,
+      $or: [
+        { totalSp: { $gt: student.totalSp } },
+        { totalSp: student.totalSp, name: { $lt: student.name } }
+      ]
+    }).sort({ totalSp: 1, name: -1 }).limit(1).lean(),
+    bucketStart && bucketEnd ? Student.find({
+      ...activeFilter,
+      internshipStartDate: { $gte: bucketStart, $lte: bucketEnd }
+    }).sort({ totalSp: -1, name: 1 }).limit(50).lean() : []
   ]);
-  const allSp = allStudents.map(s => Number(s.totalSp || 0));
-  const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
-  const top10Cutoff = allStudents[9]?.totalSp || null;
-  const top50Cutoff = allStudents[49]?.totalSp || null;
-  const currentIndex = allStudents.findIndex(s => s.email === email);
-  const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
+
+  const averageSp = avgAgg.length ? Math.round(avgAgg[0].avg) : 0;
+  const top10Cutoff = top10.length ? top10[0].totalSp : null;
+  const top50Cutoff = top50.length ? top50[0].totalSp : null;
+  const nextStudent = nextStudentMatch.length ? nextStudentMatch[0] : null;
+  
   // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
   const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
-  const myGroup = leaderboardGroup(student.internshipStartDate);
-  const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
   const mapRow = (row, index) => ({
     rank: index + 1,
     name: row.name,
@@ -469,19 +499,56 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   const last7Days = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  const [allStudents, sessions, attendance, transactions, events] = await Promise.all([
+  const [allStudents, sessions, attendanceAgg, transactionAgg, events] = await Promise.all([
     Student.find().lean(),
     Session.find().sort({ endDateTime: 1 }).lean(),
-    AttendanceRecord.find().lean(),
-    SPTransaction.find().lean(),
+    AttendanceRecord.aggregate([
+      { $lookup: { from: 'students', localField: 'email', foreignField: 'email', as: 'studentDoc' } },
+      { $match: { 'studentDoc.status': 'active' } },
+      { $group: {
+          _id: "$sessionLabel",
+          totalStudents: { $sum: 1 },
+          qualified: { $sum: { $cond: ["$qualified", 1, 0] } },
+          totalMinutes: { $sum: { $toDouble: "$attendedMinutes" } }
+        }
+      }
+    ]),
+    SPTransaction.aggregate([
+      { $lookup: { from: 'students', localField: 'email', foreignField: 'email', as: 'studentDoc' } },
+      { $match: { 'studentDoc.status': 'active' } },
+      { $facet: {
+          categoryTotals: [
+            { $group: {
+                _id: "$category",
+                count: { $sum: 1 },
+                netSp: { $sum: { $toDouble: "$appliedDelta" } },
+                credits: { $sum: { $cond: [{ $gt: ["$appliedDelta", 0] }, 1, 0] } },
+                debits: { $sum: { $cond: [{ $lt: ["$appliedDelta", 0] }, 1, 0] } }
+            }}
+          ],
+          attendanceDebits: [
+            { $match: { category: "attendance", appliedDelta: { $lt: 0 } } },
+            { $count: "count" }
+          ],
+          pollDebits: [
+            { $match: { category: "poll", appliedDelta: { $lt: 0 } } },
+            { $count: "count" }
+          ],
+          topDrops: [
+            { $match: { category: { $in: ["attendance", "poll"] }, appliedDelta: { $lt: 0 } } },
+            { $group: { _id: "$email", debitSp: { $sum: { $abs: { $toDouble: "$appliedDelta" } } }, debitCount: { $sum: 1 } } },
+            { $sort: { debitSp: -1 } },
+            { $limit: 10 }
+          ]
+        }
+      }
+    ]),
     SessionEvent.find({ timestamp: { $gte: last30Days } }).lean()
   ]);
   const statusCounts = { active: 0, 'yet to onboard': 0, excused: 0 };
   for (const s of allStudents) { if (s.status in statusCounts) statusCounts[s.status]++; }
   const activeStudents = allStudents.filter(s => s.status === 'active');
   const activeEmails = new Set(activeStudents.map(student => student.email));
-  const activeAttendance = attendance.filter(row => activeEmails.has(row.email));
-  const activeTransactions = transactions.filter(row => activeEmails.has(row.email));
   const activeEvents = events.filter(row => activeEmails.has(row.email));
 
   const uniqueSince = (date) => new Set(activeEvents.filter(e => e.timestamp >= date).map(e => e.email)).size;
@@ -519,40 +586,44 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   };
 
   const attendanceBySession = sessions.map(session => {
-    const rows = activeAttendance.filter(a => a.sessionLabel === session.label);
-    const qualified = rows.filter(r => r.qualified).length;
-    const totalMinutes = rows.reduce((sum, r) => sum + Number(r.attendedMinutes || 0), 0);
+    const agg = attendanceAgg.find(a => a._id === session.label) || { totalStudents: 0, qualified: 0, totalMinutes: 0 };
     return {
       label: session.label,
-      totalStudents: rows.length,
-      qualified,
-      notQualified: rows.length - qualified,
-      qualifiedPct: rows.length ? Math.round((qualified / rows.length) * 100) : 0,
-      avgMinutes: rows.length ? Math.round(totalMinutes / rows.length) : 0,
+      totalStudents: agg.totalStudents,
+      qualified: agg.qualified,
+      notQualified: agg.totalStudents - agg.qualified,
+      qualifiedPct: agg.totalStudents ? Math.round((agg.qualified / agg.totalStudents) * 100) : 0,
+      avgMinutes: agg.totalStudents ? Math.round(agg.totalMinutes / agg.totalStudents) : 0,
       sessionMinutes: session.totalMinutes
     };
   });
+  
+  const activeAttendanceRowsCount = attendanceAgg.reduce((sum, s) => sum + s.totalStudents, 0);
+  const activeAttendanceQualifiedCount = attendanceAgg.reduce((sum, s) => sum + s.qualified, 0);
+  const overallQualifiedPct = activeAttendanceRowsCount ? Math.round((activeAttendanceQualifiedCount / activeAttendanceRowsCount) * 100) : 0;
 
+  const txFacet = transactionAgg[0];
   const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
-    const rows = activeTransactions.filter(t => t.category === category);
+    const agg = txFacet.categoryTotals.find(c => c._id === category) || { count: 0, netSp: 0, credits: 0, debits: 0 };
     return {
       category,
-      count: rows.length,
-      netSp: rows.reduce((sum, t) => sum + Number(t.appliedDelta || 0), 0),
-      credits: rows.filter(t => t.appliedDelta > 0).length,
-      debits: rows.filter(t => t.appliedDelta < 0).length
+      count: agg.count,
+      netSp: agg.netSp,
+      credits: agg.credits,
+      debits: agg.debits
     };
   });
-  const attendanceDebits = activeTransactions.filter(t => t.category === 'attendance' && t.appliedDelta < 0);
-  const pollDebits = activeTransactions.filter(t => t.category === 'poll' && t.appliedDelta < 0);
+  const attendanceDebitsCount = txFacet.attendanceDebits[0]?.count || 0;
+  const pollDebitsCount = txFacet.pollDebits[0]?.count || 0;
+
   const inactiveToday = activeStudents.length - new Set(activeEvents.filter(e => e.timestamp >= todayStart).map(e => e.email)).size;
   const lowSp = activeStudents.filter(s => Number(s.totalSp || 0) < 100).length;
-  const topDrops = Object.values(attendanceDebits.concat(pollDebits).reduce((acc, txn) => {
-    if (!acc[txn.email]) acc[txn.email] = { email: txn.email, debitCount: 0, debitSp: 0 };
-    acc[txn.email].debitCount += 1;
-    acc[txn.email].debitSp += Math.abs(Number(txn.appliedDelta || 0));
-    return acc;
-  }, {})).sort((a, b) => b.debitSp - a.debitSp).slice(0, 10);
+  
+  const topDrops = txFacet.topDrops.map(d => ({
+    email: d._id,
+    debitCount: d.debitCount,
+    debitSp: d.debitSp
+  }));
 
   res.json({
     live: { activeNow },
@@ -567,7 +638,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     },
     attendance: {
       sessions: attendanceBySession,
-      overallQualifiedPct: activeAttendance.length ? Math.round((activeAttendance.filter(a => a.qualified).length / activeAttendance.length) * 100) : 0
+      overallQualifiedPct
     },
     sp: {
       students: activeStudents.length,
@@ -582,8 +653,8 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     alerts: {
       lowSp,
       inactiveToday,
-      attendanceDebits: attendanceDebits.length,
-      pollDebits: pollDebits.length,
+      attendanceDebits: attendanceDebitsCount,
+      pollDebits: pollDebitsCount,
       topDrops
     }
   });
