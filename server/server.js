@@ -131,14 +131,22 @@ function parseCookies(header = '') {
 // by the chatengine_token cookie value; a null result (bad token / Samagama
 // down) is cached too so a flood of bad requests doesn't hammer Samagama.
 const _samagamaCache = new Map();
+const _samagamaStats = { hits: 0, misses: 0, negativeHits: 0, sets: 0, evictions: 0, lastResetAt: Date.now() };
 const SAMAGAMA_CACHE_TTL_MS = 60_000;
 function _samagamaCacheGet(token) {
   const entry = _samagamaCache.get(token);
-  if (!entry) return undefined;
-  if (Date.now() - entry.at > SAMAGAMA_CACHE_TTL_MS) {
-    _samagamaCache.delete(token);
+  if (!entry) {
+    _samagamaStats.misses++;
     return undefined;
   }
+  if (Date.now() - entry.at > SAMAGAMA_CACHE_TTL_MS) {
+    _samagamaCache.delete(token);
+    _samagamaStats.evictions++;
+    _samagamaStats.misses++;
+    return undefined;
+  }
+  _samagamaStats.hits++;
+  if (entry.data === null) _samagamaStats.negativeHits++;
   return entry.data;
 }
 
@@ -162,6 +170,7 @@ async function getSamagamaUser(chatengineToken) {
     // network / timeout / non-JSON body -> cache null so we don't retry for 60s
   }
   _samagamaCache.set(chatengineToken, { at: Date.now(), data: result });
+  _samagamaStats.sets++;
   return result;
 }
 
@@ -506,6 +515,43 @@ api.get('/admin/active', adminGuard, (_req, res) => {
     }
   }
   res.json(viewers);
+});
+
+// Observability for the Samagama auth cache. Returns hit/miss/set/eviction
+// counters + size + oldest entry age so admins can quantify the perf win
+// in production. Use ?reset=1 to zero the counters.
+api.get('/admin/cache-stats', adminGuard, (_req, res) => {
+  if (_req.query.reset === '1') {
+    _samagamaStats.hits = 0;
+    _samagamaStats.misses = 0;
+    _samagamaStats.negativeHits = 0;
+    _samagamaStats.sets = 0;
+    _samagamaStats.evictions = 0;
+    _samagamaStats.lastResetAt = Date.now();
+  }
+  const now = Date.now();
+  let oldestAge = 0;
+  let newestAge = 0;
+  for (const [, entry] of _samagamaCache) {
+    const age = now - entry.at;
+    if (age > oldestAge) oldestAge = age;
+    if (newestAge === 0 || age < newestAge) newestAge = age;
+  }
+  const total = _samagamaStats.hits + _samagamaStats.misses;
+  res.json({
+    hits: _samagamaStats.hits,
+    misses: _samagamaStats.misses,
+    negativeHits: _samagamaStats.negativeHits,
+    sets: _samagamaStats.sets,
+    evictions: _samagamaStats.evictions,
+    hitRate: total ? _samagamaStats.hits / total : 0,
+    entries: _samagamaCache.size,
+    ttlMs: SAMAGAMA_CACHE_TTL_MS,
+    oldestAgeMs: oldestAge,
+    newestAgeMs: newestAge,
+    uptimeMs: now - _samagamaStats.lastResetAt,
+    sinceReset: _samagamaStats.lastResetAt
+  });
 });
 
 api.get('/admin/analytics', adminGuard, async (_req, res) => {
