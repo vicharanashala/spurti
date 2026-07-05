@@ -101,3 +101,11 @@ APPLY=1 OUT_DIR=./sp-runs node sp-rubric-build.js
 # push to the app + records
 node sync-spurti-from-sakshi.js && node sync-attendance-records.js && node sync-poll-records.js
 ```
+### Notifications
+
+After the daily SP pipeline completes successfully, `notify.js` publishes a notification to the configured ntfy topic.
+
+Required environment variables:
+
+NTFY_URL=https://ntfy.sh
+NTFY_TOPIC=spurti-announcements
