@@ -12,7 +12,8 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
-import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import publicRouter from './routes/public.js';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -91,6 +92,8 @@ function surveyPublic(cfg) {
 
 const app = express();
 const api = express.Router();
+api.use('/public', publicRouter);
+
 const liveViewers = new Map();
 
 app.use(cors());
