@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { validateNoteUpdate } from './services/adminNote.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -470,6 +471,7 @@ api.get('/admin/student/:id', adminGuard, async (req, res) => {
   // Admin-only: attach the private adminNote. studentPayload never returns it
   // for /api/me, so this is the only place it leaks out.
   payload.student.adminNote = student.adminNote || '';
+  payload.student.adminNoteUpdatedAt = student.adminNoteUpdatedAt || null;
   res.json(payload);
 });
 
@@ -478,14 +480,25 @@ api.get('/admin/student/:id', adminGuard, async (req, res) => {
 api.put('/admin/student/by-email/:email/note', adminGuard, async (req, res) => {
   const email = normalizeEmail(req.params.email);
   if (!email) return res.status(400).json({ error: 'email is required' });
-  const { note } = req.body ?? {};
+  const validation = validateNoteUpdate(req.body);
+  if (!validation.ok) return res.status(400).json({ error: validation.error });
   const student = await Student.findOneAndUpdate(
     { email },
-    { adminNote: String(note || '') },
+    {
+      adminNote: validation.note,
+      // Update the timestamp on every save so admins see when the note
+      // was last touched. Falls back to null for legacy notes that pre-date
+      // this field (the admin UI shows "Never edited" for those).
+      adminNoteUpdatedAt: new Date()
+    },
     { new: true }
   ).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
-  res.json({ ok: true, adminNote: student.adminNote });
+  res.json({
+    ok: true,
+    adminNote: student.adminNote,
+    adminNoteUpdatedAt: student.adminNoteUpdatedAt
+  });
 });
 
 api.get('/admin/active', adminGuard, (_req, res) => {

@@ -28,7 +28,11 @@ const studentSchema = new mongoose.Schema({
   // Admin Notes (feature/admin-notes) — private notes admins keep on a student
   // (network issue, medical leave, follow-up). Never exposed to the student
   // (server.js strips it from /api/me).
-  adminNote: { type: String, default: '' }
+  adminNote: { type: String, default: '' },
+  // Timestamp of the most recent adminNote change. Set by the
+  // PUT /api/admin/student/by-email/:email/note endpoint. Surfaced to admins
+  // as "Last edited: …"; never sent to /api/me.
+  adminNoteUpdatedAt: { type: Date, default: null, index: true }
 }, { timestamps: true });
 
 studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });
