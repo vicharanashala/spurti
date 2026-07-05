@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import InstructorLogin from './views/InstructorLogin.jsx';
+import InstructorDashboard from './views/InstructorDashboard.jsx';
+import FlexibleDayStore from './views/StudentDashboard.jsx';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -14,6 +17,21 @@ function App() {
   const [config, setConfig] = useState({ allowStudentSearch: true });
   const [loading, setLoading] = useState(true);
 
+  console.log('[DEBUG] Current view:', view);
+  console.log('[DEBUG] Role from storage:', localStorage.getItem('spurti_role'));
+
+  function handleLoginResponse(response) {
+    if (response.role === 'student') {
+      setView('student');
+    } else if (response.role === 'instructor') {
+      localStorage.setItem('spurti_token', response.token);
+      localStorage.setItem('spurti_role', 'instructor');
+      setView('instructor');
+    } else if (response.role === 'admin') {
+      setView('admin');
+    }
+  }
+
   useEffect(() => {
     if (!profile?.student) return;
     const send = () => fetch(`${API}/ping`, {
@@ -25,7 +43,7 @@ function App() {
         page: 'record',
         recordViewed: profile.student.email
       })
-    }).catch(() => {});
+    }).catch(() => { });
     send();
     const id = setInterval(send, 30000);
     return () => clearInterval(id);
@@ -40,7 +58,17 @@ function App() {
         if (!active) return;
         setConfig(nextConfig);
 
-        if (view !== 'admin-login') {
+        const role = localStorage.getItem('spurti_role');
+        const token = localStorage.getItem('spurti_token');
+
+        console.log('[DEBUG] Stored role:', role);
+        console.log('[DEBUG] Stored token exists:', !!token);
+
+        if (role === 'instructor' && token) {
+          setView('instructor');
+        } else if (role === 'student' && token) {
+          setView('student');
+        } else if (view !== 'admin-login') {
           const meRes = await fetch(`${API}/me`);
           if (meRes.ok) {
             const data = await meRes.json();
@@ -66,50 +94,63 @@ function App() {
   if (loading) {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
   }
-  if (view === 'student' && profile) {
-    return (
-      <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
-        <SurveyModal
-          survey={config.survey}
-          student={profile.student}
-          statusPath="/survey/status"
-          completedKey="surveyCompleted"
-          onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, surveyCompleted: true } }))}
+
+  switch (view) {
+    case 'student':
+      return profile ? (
+        <>
+          <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+          <SurveyModal
+            survey={config.survey}
+            student={profile.student}
+            statusPath="/survey/status"
+            completedKey="surveyCompleted"
+            onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, surveyCompleted: true } }))}
+          />
+          <SurveyModal
+            survey={config.poll2}
+            student={profile.student}
+            statusPath="/poll2/status"
+            completedKey="poll2Completed"
+            onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll2Completed: true } }))}
+          />
+        </>
+      ) : null;
+    case 'excused':
+      return excused ? <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} /> : null;
+    case 'instructor-login':
+      return (
+        <InstructorLogin
+          onLoginSuccess={() => setView('instructor')}
+          onBackToLanding={() => setView('landing')}
         />
-        <SurveyModal
-          survey={config.poll2}
-          student={profile.student}
-          statusPath="/poll2/status"
-          completedKey="poll2Completed"
-          onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll2Completed: true } }))}
-        />
-      </>
-    );
+      );
+    case 'instructor':
+      return <InstructorDashboard onLogout={() => setView('landing')} />;
+    case 'admin-login':
+      return <AdminLogin onAdmin={(data, auth) => {
+        setAdmin(data);
+        setAdminAuth(auth);
+        handleLoginResponse({ role: 'instructor', token: auth?.token || 'token', ...data });
+      }} onBack={() => setView('landing')} />;
+    case 'admin':
+      return admin && adminAuth ? <AdminView admin={admin} auth={adminAuth} onBack={() => setView('landing')} /> : null;
+    default:
+      return <Landing config={config} onInstructorLogin={() => setView('instructor-login')} onStudent={(data) => {
+        if (data?.excused) {
+          setExcused(data);
+          setProfile(null);
+          setView('excused');
+          return;
+        }
+        setProfile(data);
+        setExcused(null);
+        setView('student');
+      }} />;
   }
-  if (view === 'excused' && excused) {
-    return <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />;
-  }
-  if (view === 'admin-login') {
-    return <AdminLogin onAdmin={(data, auth) => { setAdmin(data); setAdminAuth(auth); setView('admin'); }} onBack={() => setView('landing')} />;
-  }
-  if (view === 'admin' && admin && adminAuth) {
-    return <AdminView admin={admin} auth={adminAuth} onBack={() => setView('landing')} />;
-  }
-  return <Landing config={config} onStudent={(data) => {
-    if (data?.excused) {
-      setExcused(data);
-      setProfile(null);
-      setView('excused');
-      return;
-    }
-    setProfile(data);
-    setExcused(null);
-    setView('student');
-  }} />;
 }
 
-function Landing({ config, onStudent }) {
+function Landing({ config, onStudent, onInstructorLogin }) {
   const [searchOpen, setSearchOpen] = useState(false);
 
   return (
@@ -533,6 +574,13 @@ function StudentView({ profile, onBack }) {
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+
+  const showStore = (student.totalSp || 0) >= 300;
+  const tabList = [['bank', 'SP Bank'], ['polls', 'Polls'], ['leaderboard', 'Leaderboard']];
+  if (showStore) {
+    tabList.push(['store', 'SP Store']);
+  }
+
   return (
     <main className="page compact">
       <header className="topbar">
@@ -545,10 +593,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={tabList} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'store' && <FlexibleDayStore studentProfile={profile} />}
     </main>
   );
 }
@@ -790,7 +839,7 @@ function AdminView({ admin, auth, onBack }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: auth.email, name: auth.email, page })
-    }).catch(() => {});
+    }).catch(() => { });
     doPing('admin-analytics');
     const id = setInterval(() => doPing('admin-live'), 30000);
     return () => clearInterval(id);
@@ -839,7 +888,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard', 'Leaderboard'], ['attendance', 'Attendance'], ['live', 'Live'], ['analytics', 'Analytics'], ['students', 'Students']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -1032,7 +1081,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
       {loading ? <p>Loading...</p> : list.length === 0 ? <p className="empty">No students in this category.</p> : (
         <table className="table">
           <thead><tr><th>Name</th><th>Email</th><th>SP</th><th>Start Date</th></tr></thead>
-          <tbody>{list.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{cursor:'pointer'}}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
+          <tbody>{list.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{ cursor: 'pointer' }}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
         </table>
       )}
     </section>

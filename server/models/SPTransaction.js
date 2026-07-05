@@ -6,12 +6,11 @@ const spTransactionSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['initial', 'attendance', 'poll', 'manual'],
     index: true
   },
   sessionLabel: { type: String, default: '', index: true },
   deltaMode: { type: String, enum: ['absolute', 'percentage'], default: 'absolute' },
-  deltaValue: { type: Number, required: true },
+  deltaValue: { type: Number, default: 0 },
   appliedDelta: { type: Number, required: true },
   balanceAfter: { type: Number, required: true },
   reason: { type: String, required: true },
@@ -21,4 +20,4 @@ const spTransactionSchema = new mongoose.Schema({
 spTransactionSchema.index({ email: 1, dateTime: 1, createdAt: 1 });
 spTransactionSchema.index({ sessionLabel: 1, category: 1 });
 
-export default mongoose.model('SPTransaction', spTransactionSchema);
+export default mongoose.model('SPTransaction', spTransactionSchema, 'sptransactions');
