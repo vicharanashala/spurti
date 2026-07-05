@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -6,10 +6,12 @@ const API = `${APP_BASE}/api`;
 function authFetch(url, options = {}) {
   const token = localStorage.getItem('spurti_token') || '';
   const headers = {
-    'Content-Type': 'application/json',
     'Authorization': `Bearer ${token}`,
     ...(options.headers || {})
   };
+  if (!(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+  }
   return fetch(url, { ...options, headers });
 }
 
@@ -89,7 +91,8 @@ export default function InstructorDashboard({ onLogout }) {
           { id: 'overview', label: 'Overview' },
           { id: 'students', label: 'Students' },
           { id: 'sessions', label: 'Sessions' },
-          { id: 'sp-controls', label: 'SP Controls' }
+          { id: 'sp-controls', label: 'SP Controls' },
+          { id: 'upload-data', label: 'Upload Data' }
         ].map(tab => (
           <button
             key={tab.id}
@@ -116,6 +119,7 @@ export default function InstructorDashboard({ onLogout }) {
       {activeTab === 'students' && <StudentsTab />}
       {activeTab === 'sessions' && <SessionsTab />}
       {activeTab === 'sp-controls' && <SpControlsTab />}
+      {activeTab === 'upload-data' && <UploadDataTab />}
     </main>
   );
 }
@@ -1111,6 +1115,394 @@ function StudentSearchInput({ selectedStudent, onSelect, onClear }) {
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  );
+}
+
+/* ==================== TAB 5: UPLOAD DATA ==================== */
+function UploadDataTab() {
+  const [history, setHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [historyError, setHistoryError] = useState('');
+  const [successBanner, setSuccessBanner] = useState('');
+
+  // Stable identity needed so useEffect dependency array does not trigger on every render
+  const fetchHistory = useCallback(async () => {
+    try {
+      setLoadingHistory(true);
+      const res = await authFetch(`${API}/instructor/upload/history`);
+      if (!res.ok) throw new Error('Failed to load upload history');
+      const data = await res.json();
+      setHistory(data);
+    } catch (err) {
+      setHistoryError(err.message);
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
+
+  const handleUploadSuccess = () => {
+    setSuccessBanner('Upload complete. Data is now live.');
+    // Auto-dismiss after 5 s so a stale success message cannot persist across a failed re-upload
+    setTimeout(() => setSuccessBanner(''), 5000);
+    fetchHistory();
+  };
+
+  return (
+    <div style={{ display: 'grid', gap: '24px' }}>
+      {successBanner && (
+        <div style={{
+          padding: '12px 16px',
+          background: '#dcfce7',
+          color: '#166534',
+          border: '1px solid #bbf7d0',
+          borderRadius: '8px',
+          fontWeight: 600,
+          fontSize: '14px'
+        }}>
+          {successBanner}
+        </div>
+      )}
+
+      {/* UPLOAD HISTORY TABLE */}
+      <div className="panel" style={{ padding: '20px', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+        <h2 style={{ fontSize: '18px', marginTop: 0, marginBottom: '16px' }}>Upload History</h2>
+
+        {loadingHistory ? (
+          <div style={{ padding: '20px', textAlign: 'center' }}>Loading upload history...</div>
+        ) : historyError ? (
+          <div className="error" style={{ padding: '12px' }}>Error: {historyError}</div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+              <thead>
+                <tr style={{ background: '#f8fafc', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>
+                  <th style={{ padding: '10px 12px' }}>Session</th>
+                  <th style={{ padding: '10px 12px' }}>Date</th>
+                  <th style={{ padding: '10px 12px' }}>Attendance</th>
+                  <th style={{ padding: '10px 12px' }}>Poll</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map(item => (
+                  <tr key={item.sessionId} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <td style={{ padding: '10px 12px', fontWeight: 600 }}>{item.sessionLabel}</td>
+                    <td style={{ padding: '10px 12px' }}>{new Date(item.date).toLocaleDateString()}</td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{
+                        padding: '2px 8px',
+                        borderRadius: '12px',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        background: item.attendanceUploaded ? '#dcfce7' : '#fee2e2',
+                        color: item.attendanceUploaded ? '#166534' : '#991b1b'
+                      }}>
+                        {item.attendanceUploaded ? `Uploaded (${item.attendanceCount})` : 'Not uploaded'}
+                      </span>
+                    </td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{
+                        padding: '2px 8px',
+                        borderRadius: '12px',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        background: item.pollUploaded ? '#dcfce7' : '#fee2e2',
+                        color: item.pollUploaded ? '#166534' : '#991b1b'
+                      }}>
+                        {item.pollUploaded ? `Uploaded (${item.pollCount})` : 'Not uploaded'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* UPLOAD CARDS SIDE BY SIDE */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '24px' }}>
+        <UploadAttendanceCard sessions={history} onSuccess={handleUploadSuccess} />
+        <UploadPollCard sessions={history} onSuccess={handleUploadSuccess} />
+      </div>
+    </div>
+  );
+}
+
+function UploadAttendanceCard({ sessions, onSuccess }) {
+  const [sessionId, setSessionId] = useState('');
+  const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+  const [summary, setSummary] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSummary(null);
+
+    if (!sessionId) {
+      setError('Please select a session');
+      return;
+    }
+    if (!file) {
+      setError('Please select a CSV file');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('sessionId', sessionId);
+    formData.append('file', file);
+
+    try {
+      setUploading(true);
+      const res = await authFetch(`${API}/instructor/upload/attendance`, {
+        method: 'POST',
+        body: formData
+      });
+      if (!res.ok) {
+        let errorMsg = 'Failed to upload attendance file';
+        try { const d = await res.json(); errorMsg = d.error || errorMsg; } catch (_) {}
+        throw new Error(errorMsg);
+      }
+      const data = await res.json();
+
+      setSummary(data);
+      setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (onSuccess) onSuccess();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="panel" style={{ padding: '20px', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+      <h2 style={{ fontSize: '18px', marginTop: 0, marginBottom: '16px' }}>Upload Attendance CSV</h2>
+
+      <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '14px' }}>
+        <div>
+          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>Select Session</label>
+          <select
+            value={sessionId}
+            onChange={e => setSessionId(e.target.value)}
+            style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+            required
+          >
+            <option value="">-- Choose Session --</option>
+            {sessions.map(s => (
+              <option key={s.sessionId} value={s.sessionId}>
+                {s.sessionLabel} ({new Date(s.date).toLocaleDateString()})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>Attendance CSV File</label>
+          <input
+            type="file"
+            accept=".csv"
+            ref={fileInputRef}
+            onChange={e => {
+              setFile(e.target.files[0] || null);
+              setSummary(null);
+              setError('');
+            }}
+            style={{ width: '100%', padding: '6px' }}
+            required
+          />
+          {file && (
+            <div style={{ fontSize: '13px', color: '#475569', marginTop: '4px' }}>
+              Selected file: {file.name}
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <div style={{ padding: '10px', borderRadius: '6px', fontSize: '13px', background: '#fef2f2', color: '#dc2626', border: '1px solid #fee2e2' }}>
+            {error}
+          </div>
+        )}
+
+        <button type="submit" className="primary" disabled={uploading} style={{ cursor: uploading ? 'not-allowed' : 'pointer' }}>
+          {uploading ? 'Uploading...' : 'Upload Attendance'}
+        </button>
+      </form>
+
+      {summary && (
+        <div style={{ marginTop: '16px', padding: '14px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' }}>
+          <p style={{ margin: '0 0 8px 0', fontWeight: 600, fontSize: '14px' }}>
+            Inserted: {summary.inserted} | Skipped: {summary.skipped} | Not matched: {summary.notFound}
+          </p>
+          {summary.skippedEmails && summary.skippedEmails.length > 0 && (
+            <div>
+              <strong style={{ color: '#991b1b' }}>Unmatched Emails ({summary.skippedEmails.length}):</strong>
+              <ul style={{ margin: '4px 0 0 0', paddingLeft: '20px', color: '#64748b', maxHeight: '120px', overflowY: 'auto' }}>
+                {summary.skippedEmails.map(email => (
+                  <li key={email}>{email}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UploadPollCard({ sessions, onSuccess }) {
+  const [sessionId, setSessionId] = useState('');
+  const [file, setFile] = useState(null);
+  const [detectedQuestions, setDetectedQuestions] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+  const [summary, setSummary] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const handleFileChange = (e) => {
+    const selectedFile = e.target.files[0] || null;
+    setFile(selectedFile);
+    setSummary(null);
+    setError('');
+    setDetectedQuestions([]);
+
+    if (selectedFile) {
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const text = evt.target.result || '';
+        const firstLine = text.split(/\r\n|\n/)[0] || '';
+        const cols = firstLine.split(',').map(c => c.replace(/^["']|["']$/g, '').trim());
+        const qCols = cols.filter(c => /^Q\d+:/i.test(c));
+        setDetectedQuestions(qCols);
+      };
+      reader.readAsText(selectedFile.slice(0, 4096));
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSummary(null);
+
+    if (!sessionId) {
+      setError('Please select a session');
+      return;
+    }
+    if (!file) {
+      setError('Please select a CSV file');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('sessionId', sessionId);
+    formData.append('file', file);
+
+    try {
+      setUploading(true);
+      const res = await authFetch(`${API}/instructor/upload/poll`, {
+        method: 'POST',
+        body: formData
+      });
+      if (!res.ok) {
+        let errorMsg = 'Failed to upload poll file';
+        try { const d = await res.json(); errorMsg = d.error || errorMsg; } catch (_) {}
+        throw new Error(errorMsg);
+      }
+      const data = await res.json();
+
+      setSummary(data);
+      setFile(null);
+      setDetectedQuestions([]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (onSuccess) onSuccess();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="panel" style={{ padding: '20px', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+      <h2 style={{ fontSize: '18px', marginTop: 0, marginBottom: '16px' }}>Upload Poll CSV</h2>
+
+      <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '14px' }}>
+        <div>
+          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>Select Session</label>
+          <select
+            value={sessionId}
+            onChange={e => setSessionId(e.target.value)}
+            style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+            required
+          >
+            <option value="">-- Choose Session --</option>
+            {sessions.map(s => (
+              <option key={s.sessionId} value={s.sessionId}>
+                {s.sessionLabel} ({new Date(s.date).toLocaleDateString()})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>Poll CSV File</label>
+          <input
+            type="file"
+            accept=".csv"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            style={{ width: '100%', padding: '6px' }}
+            required
+          />
+          {file && (
+            <div style={{ fontSize: '13px', color: '#475569', marginTop: '4px' }}>
+              Selected file: {file.name}
+            </div>
+          )}
+        </div>
+
+        {detectedQuestions.length > 0 && (
+          <div style={{ padding: '10px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', fontSize: '13px', color: '#1e40af' }}>
+            Detected {detectedQuestions.length} poll question(s): {detectedQuestions.join(', ')}
+          </div>
+        )}
+
+        {error && (
+          <div style={{ padding: '10px', borderRadius: '6px', fontSize: '13px', background: '#fef2f2', color: '#dc2626', border: '1px solid #fee2e2' }}>
+            {error}
+          </div>
+        )}
+
+        <button type="submit" className="primary" disabled={uploading} style={{ cursor: uploading ? 'not-allowed' : 'pointer' }}>
+          {uploading ? 'Uploading...' : 'Upload Poll Results'}
+        </button>
+      </form>
+
+      {summary && (
+        <div style={{ marginTop: '16px', padding: '14px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' }}>
+          <p style={{ margin: '0 0 8px 0', fontWeight: 600, fontSize: '14px' }}>
+            Inserted: {summary.inserted} | Skipped: {summary.skipped} | Not matched: {summary.notFound}
+          </p>
+          {summary.skippedEmails && summary.skippedEmails.length > 0 && (
+            <div>
+              <strong style={{ color: '#991b1b' }}>Unmatched Emails ({summary.skippedEmails.length}):</strong>
+              <ul style={{ margin: '4px 0 0 0', paddingLeft: '20px', color: '#64748b', maxHeight: '120px', overflowY: 'auto' }}>
+                {summary.skippedEmails.map(email => (
+                  <li key={email}>{email}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

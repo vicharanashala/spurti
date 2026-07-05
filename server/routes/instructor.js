@@ -1,14 +1,40 @@
 import express from 'express';
 import mongoose from 'mongoose';
+import multer from 'multer';
+import Papa from 'papaparse';
 import Student from '../models/Student.js';
 import Session from '../models/Session.js';
 import Cohort from '../models/Cohort.js';
 import SPTransaction from '../models/SPTransaction.js';
 import AttendanceRecord from '../models/AttendanceRecord.js';
+import PollRecord from '../models/PollRecord.js';
 import { requireInstructor } from '../middleware/requireInstructor.js';
 
 const router = express.Router();
 router.use(requireInstructor);
+
+// Multer setup for CSV uploads (in-memory storage, 5 MB max)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }
+});
+
+function isCsvFile(file) {
+  if (!file) return false;
+  const mimeTypes = ['text/csv', 'text/comma-separated-values', 'application/csv'];
+  const ext = file.originalname ? file.originalname.toLowerCase().split('.').pop() : '';
+  return mimeTypes.includes(file.mimetype) || ext === 'csv';
+}
+
+/**
+ * Extracts and normalises the student email from a CSV row.
+ * Zoom attendance CSVs use "Email"; poll CSVs use "User Email".
+ * Strips surrounding quotes produced by some CSV exporters.
+ */
+function extractEmail(row) {
+  const raw = row['User Email'] || row.Email || row.email || row.EmailAddress || '';
+  return String(raw).replace(/^["']|["']$/g, '').trim().toLowerCase();
+}
 
 // GET /api/instructor/overview
 router.get('/overview', async (req, res) => {
@@ -513,6 +539,322 @@ router.get('/sp/transactions', async (req, res) => {
   } catch (err) {
     console.error('Fetch instructor transactions error:', err?.message);
     return res.status(500).json({ error: 'Failed to fetch transactions' });
+  }
+});
+
+// POST /api/instructor/upload/attendance
+router.post('/upload/attendance', upload.single('file'), async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    const file = req.file;
+
+    if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+      return res.status(400).json({ error: 'Valid sessionId is required' });
+    }
+
+    if (!file || !isCsvFile(file)) {
+      return res.status(400).json({ error: 'Please upload a valid CSV file' });
+    }
+
+    const cohortId = new mongoose.Types.ObjectId(req.instructor.cohortId);
+    const session = await Session.findOne({ _id: sessionId, cohortId });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found or does not belong to your cohort' });
+    }
+
+    const csvText = file.buffer.toString('utf8');
+    const parsed = Papa.parse(csvText, {
+      header: true,
+      skipEmptyLines: true,
+      transformHeader: h => h.trim()
+    });
+
+    if (parsed.errors && parsed.errors.length > 0 && (!parsed.data || parsed.data.length === 0)) {
+      const firstErr = parsed.errors.find(e => e.type !== 'Delimiter');
+      return res.status(400).json({ error: `Failed to parse CSV: ${firstErr?.message || 'unknown error'}` });
+    }
+
+    const rows = parsed.data || [];
+    let inserted = 0;
+    let skipped = 0;
+    let notFound = 0;
+    const skippedEmailSet = new Set();
+    // Start with row-level parse errors; missing-email errors are pushed into this array below
+    const errors = [
+      ...(parsed.errors || [])
+        .filter(e => e.type !== 'Delimiter')
+        .map(e => `Parse error at row ${(e.row ?? 0) + 1}: ${e.message}`)
+    ];
+
+    // Only load students whose emails appear in the CSV (avoids a full cohort scan)
+    const csvEmailsAtt = new Set(rows.map(r => extractEmail(r)).filter(Boolean));
+    const students = csvEmailsAtt.size > 0
+      ? await Student.find({
+          cohortId,
+          $or: [
+            { email: { $in: [...csvEmailsAtt] } },
+            { alternateEmail: { $in: [...csvEmailsAtt] } }
+          ]
+        }).lean()
+      : [];
+    const studentMap = new Map();
+    for (const student of students) {
+      if (student.email) studentMap.set(student.email.toLowerCase(), student);
+      if (student.alternateEmail) studentMap.set(student.alternateEmail.toLowerCase(), student);
+    }
+
+    const existingRecords = await AttendanceRecord.find({ sessionLabel: session.label }).select('studentId email').lean();
+    const existingStudentIds = new Set(existingRecords.map(r => String(r.studentId)));
+
+    const bulkOps = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const email = extractEmail(row);
+
+      if (!email) {
+        errors.push(`Row ${i + 1}: Missing email`);
+        continue;
+      }
+
+      const student = studentMap.get(email);
+      if (!student) {
+        notFound++;
+        skippedEmailSet.add(email);
+        continue;
+      }
+
+      if (existingStudentIds.has(String(student._id))) {
+        skipped++;
+        continue;
+      }
+
+      const rawDuration = row['Duration (Minutes)'] || row.Duration || row.duration || '0';
+      const attendedMinutes = parseInt(rawDuration, 10) || 0;
+      const totalSessionMinutes = session.totalMinutes || 1;
+      const attendancePercentage = Math.round((attendedMinutes / totalSessionMinutes) * 100 * 10) / 10;
+      const qualified = attendancePercentage >= 75;
+
+      bulkOps.push({
+        insertOne: {
+          document: {
+            email: email || student.email,
+            studentId: student._id,
+            sessionLabel: session.label,
+            attendedMinutes,
+            totalSessionMinutes,
+            attendancePercentage,
+            qualified,
+            transactionId: null
+          }
+        }
+      });
+      existingStudentIds.add(String(student._id));
+      inserted++;
+    }
+
+    if (bulkOps.length > 0) {
+      await AttendanceRecord.bulkWrite(bulkOps);
+    }
+
+    return res.status(200).json({
+      sessionLabel: session.label,
+      totalRows: rows.length,
+      inserted,
+      skipped,
+      notFound,
+      skippedEmails: [...skippedEmailSet],
+      errors
+    });
+  } catch (err) {
+    console.error('Attendance upload error:', err?.message);
+    return res.status(500).json({ error: 'Failed to process attendance upload' });
+  }
+});
+
+// POST /api/instructor/upload/poll
+router.post('/upload/poll', upload.single('file'), async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    const file = req.file;
+
+    if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+      return res.status(400).json({ error: 'Valid sessionId is required' });
+    }
+
+    if (!file || !isCsvFile(file)) {
+      return res.status(400).json({ error: 'Please upload a valid CSV file' });
+    }
+
+    const cohortId = new mongoose.Types.ObjectId(req.instructor.cohortId);
+    const session = await Session.findOne({ _id: sessionId, cohortId });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found or does not belong to your cohort' });
+    }
+
+    const csvText = file.buffer.toString('utf8');
+    const parsed = Papa.parse(csvText, {
+      header: true,
+      skipEmptyLines: true,
+      transformHeader: h => h.trim()
+    });
+
+    if (parsed.errors && parsed.errors.length > 0 && (!parsed.data || parsed.data.length === 0)) {
+      const firstErr = parsed.errors.find(e => e.type !== 'Delimiter');
+      return res.status(400).json({ error: `Failed to parse CSV: ${firstErr?.message || 'unknown error'}` });
+    }
+
+    const rows = parsed.data || [];
+    const metaHeaders = parsed.meta && parsed.meta.fields ? parsed.meta.fields : (rows[0] ? Object.keys(rows[0]) : []);
+
+    // Detect question columns dynamically: Any header starting with "Q" followed by number and colon (e.g. Q1: ...)
+    const qColumns = metaHeaders.filter(h => /^Q\d+:/i.test(h.trim()));
+
+    let inserted = 0;
+    let skipped = 0;
+    let notFound = 0;
+    const skippedEmailSet = new Set();
+    // Start with row-level parse errors; missing-email errors are pushed into this array below
+    const errors = [
+      ...(parsed.errors || [])
+        .filter(e => e.type !== 'Delimiter')
+        .map(e => `Parse error at row ${(e.row ?? 0) + 1}: ${e.message}`)
+    ];
+
+    // Only load students whose emails appear in the CSV (avoids a full cohort scan)
+    const csvEmailsPoll = new Set(rows.map(r => extractEmail(r)).filter(Boolean));
+    const students = csvEmailsPoll.size > 0
+      ? await Student.find({
+          cohortId,
+          $or: [
+            { email: { $in: [...csvEmailsPoll] } },
+            { alternateEmail: { $in: [...csvEmailsPoll] } }
+          ]
+        }).lean()
+      : [];
+    const studentMap = new Map();
+    for (const student of students) {
+      if (student.email) studentMap.set(student.email.toLowerCase(), student);
+      if (student.alternateEmail) studentMap.set(student.alternateEmail.toLowerCase(), student);
+    }
+
+    const existingRecords = await PollRecord.find({ sessionLabel: session.label }).select('studentId').lean();
+    const existingStudentIds = new Set(existingRecords.map(r => String(r.studentId)));
+
+    const bulkOps = [];
+    const now = new Date();
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const email = extractEmail(row);
+
+      if (!email) {
+        errors.push(`Row ${i + 1}: Missing email`);
+        continue;
+      }
+
+      const student = studentMap.get(email);
+      if (!student) {
+        notFound++;
+        skippedEmailSet.add(email);
+        continue;
+      }
+
+      if (existingStudentIds.has(String(student._id))) {
+        skipped++;
+        continue;
+      }
+
+      const responses = qColumns.map(qCol => {
+        const answer = row[qCol] != null ? String(row[qCol]).trim() : '';
+        return {
+          question: qCol.trim(),
+          answer
+        };
+      });
+
+      const totalQuestions = qColumns.length;
+      const answeredCount = responses.filter(r => r.answer.length > 0).length;
+      const participatedFully = totalQuestions > 0 && answeredCount === totalQuestions;
+
+      bulkOps.push({
+        insertOne: {
+          document: {
+            email: email || student.email,
+            studentId: student._id,
+            sessionLabel: session.label,
+            responses,
+            totalQuestions,
+            answeredCount,
+            participatedFully,
+            // Note: mongoose timestamps:true does not apply to bulkWrite; set createdAt explicitly
+            createdAt: now
+          }
+        }
+      });
+      existingStudentIds.add(String(student._id));
+      inserted++;
+    }
+
+    if (bulkOps.length > 0) {
+      await PollRecord.bulkWrite(bulkOps);
+    }
+
+    return res.status(200).json({
+      sessionLabel: session.label,
+      totalRows: rows.length,
+      inserted,
+      skipped,
+      notFound,
+      skippedEmails: [...skippedEmailSet],
+      errors
+    });
+  } catch (err) {
+    console.error('Poll upload error:', err?.message);
+    return res.status(500).json({ error: 'Failed to process poll upload' });
+  }
+});
+
+// GET /api/instructor/upload/history
+router.get('/upload/history', async (req, res) => {
+  try {
+    const cohortId = new mongoose.Types.ObjectId(req.instructor.cohortId);
+    const sessions = await Session.find({ cohortId }).sort({ date: -1 }).lean();
+
+    // Two aggregations replace N×2 countDocuments: 2 DB round-trips regardless of session count
+    const sessionLabels = sessions.map(s => s.label);
+    const [attAgg, pollAgg] = await Promise.all([
+      AttendanceRecord.aggregate([
+        { $match: { sessionLabel: { $in: sessionLabels } } },
+        { $group: { _id: '$sessionLabel', count: { $sum: 1 } } }
+      ]),
+      PollRecord.aggregate([
+        { $match: { sessionLabel: { $in: sessionLabels } } },
+        { $group: { _id: '$sessionLabel', count: { $sum: 1 } } }
+      ])
+    ]);
+    const attCountMap = new Map(attAgg.map(a => [a._id, a.count]));
+    const pollCountMap = new Map(pollAgg.map(a => [a._id, a.count]));
+    const historyList = sessions.map(session => {
+      const attendanceCount = attCountMap.get(session.label) || 0;
+      const pollCount = pollCountMap.get(session.label) || 0;
+      return {
+        sessionId: session._id,
+        sessionLabel: session.label,
+        date: session.date,
+        attendanceUploaded: attendanceCount > 0,
+        attendanceCount,
+        pollUploaded: pollCount > 0,
+        pollCount
+      };
+    });
+
+    return res.status(200).json(historyList);
+  } catch (err) {
+    console.error('Fetch upload history error:', err?.message);
+    return res.status(500).json({ error: 'Failed to fetch upload history' });
   }
 });
 

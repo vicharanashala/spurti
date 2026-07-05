@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
-import LeaderboardPage from './pages/LeaderboardPage.jsx';
 import InstructorLogin from './views/InstructorLogin.jsx';
 import InstructorDashboard from './views/InstructorDashboard.jsx';
 
