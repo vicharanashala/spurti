@@ -145,6 +145,17 @@ To counteract the "demotivation effect" of a drop in points, Spurti introduces *
 
 ---
 
+### 5.5 Weekly Self-Regulation Goal & Reflection Planner
+
+To reinforce positive learning habits, Spurti integrates an interactive **Weekly Self-Regulation Goal Planner** on the student dashboard:
+- **Mechanics**:
+  - *Commitment Setting*: Students set a target Trophy League (e.g. `Gold I`) and designate a focus area (`Attendance & Polls`, `Attendance Only`, `Polls Only`, `None`).
+  - *Strategy Reflection*: Students write a short strategy detailing *how* they plan to achieve this goal (e.g., "I will join 5 minutes early to avoid missing the start of meetings").
+  - *Real-time Progress Tracker*: Queries the student's transaction log for the active calendar week and displays a progress fill bar representing completed vs. qualified sessions.
+- **Pedagogical Impact**: Directly implements Pintrich and Zimmerman's SRL cycles of Goal Setting, Strategic Planning, and Self-Monitoring.
+
+---
+
 ## 6. Dashboard Specifications
 
 - **Student Dashboard**: Focuses on self-monitoring. Shows current SP balance, rank, standing relative to comparison cohorts (Onboarding Group), permanent Level, Trophy League, sparkline of SP trends over time, and explicit "What to do next" action nudges.

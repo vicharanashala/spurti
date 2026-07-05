@@ -41,6 +41,15 @@ Accessed by authenticated students at the portal root. Focuses on self-monitorin
 |  | lifetime accum | | current performance| (reach 1500 SP) | (cohort)    |  |
 |  +----------------+ +------------------+ +---------------+ +-------------+  |
 |                                                                             |
+|  WEEKLY SELF-REGULATION GOAL PLANNER:                                       |
+|  +-----------------------------------------------------------------------+  |
+|  | Week: 2026-W27    [ Target League: Gold I ]   [ Focus: Both ]         |  |
+|  | Reflection: "I will join by 09:00 IST to ensure my attendance is OK." |  |
+|  | Progress:                                                             |  |
+|  | - Attendance Qualified: [==================       ] 2/3 sessions      |  |
+|  | - Polls Attempted:      [=========================] 3/3 sessions      |  |
+|  +-----------------------------------------------------------------------+  |
+|                                                                             |
 |  SPURTI PULSE (STATS):                                                      |
 |  +--------------------------+ +-------------------------+ +---------------+  |
 |  | Standing                 | | Cohort Comparison       | | Session Health|  |

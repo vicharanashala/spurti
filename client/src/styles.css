@@ -514,3 +514,150 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* --- Weekly Self-Regulation Goal Planner ------------------------------- */
+.weekly-goal-card {
+  padding: 24px;
+  margin-bottom: 18px;
+}
+.goal-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+.goal-card-header h2 {
+  margin: 4px 0 0;
+}
+.week-tag {
+  background: var(--primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 850;
+  padding: 6px 12px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+.goal-form {
+  display: grid;
+  gap: 16px;
+}
+.goal-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.form-field {
+  display: grid;
+  gap: 8px;
+}
+.form-field label {
+  font-size: 13px;
+  font-weight: 750;
+  color: var(--muted);
+}
+.form-field textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: #fff;
+  resize: vertical;
+  font-family: inherit;
+}
+.form-field select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: #fff;
+  height: 42px;
+}
+.goal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 10px;
+}
+.goal-details {
+  display: grid;
+  gap: 16px;
+}
+.goal-details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.goal-details-header h3 {
+  margin: 0 0 6px;
+  font-size: 1.15rem;
+}
+.highlight-text {
+  color: var(--primary);
+  font-weight: 850;
+}
+.focus-desc {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.reflection-quote {
+  margin: 0;
+  padding: 14px;
+  background: #edf8fb;
+  border-left: 4px solid var(--primary);
+  border-radius: 0 8px 8px 0;
+  font-style: italic;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #334155;
+}
+.weekly-tracker-section h4 {
+  margin: 0 0 14px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.tracker-bars {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.tracker-bar-item {
+  display: grid;
+  gap: 8px;
+}
+.bar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+.bar-labels span {
+  font-weight: 750;
+}
+.bar-labels b {
+  color: var(--primary);
+}
+.bar-track {
+  height: 10px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), #3b82c4);
+  border-radius: 999px;
+  transition: width 0.4s ease-out;
+}
+@media (max-width: 640px) {
+  .goal-form-row, .tracker-bars {
+    grid-template-columns: 1fr;
+  }
+}
+

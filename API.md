@@ -229,6 +229,43 @@ Telemetry heartbeat endpoint. Records user activity and populates the active use
 
 ---
 
+### 2.7 POST /api/goals
+Saves or updates the student's learning goal commitment and self-reflection strategy for the current calendar week.
+
+- **Headers**: Requires a valid `Cookie: chatengine_token=<token_value>`
+- **Request**: `POST /api/goals`
+```json
+{
+  "targetLeague": "Gold I",
+  "focusArea": "both",
+  "reflection": "I will attend all sessions and actively solve polls to avoid debits."
+}
+```
+- **Response (Success)**: `200 OK` (returns the updated student profile)
+```json
+{
+  "success": true,
+  "profile": {
+    "student": {
+      "_id": "603d7c5fbb4e2d4e78a6de30",
+      "name": "Lakshya Aran",
+      "email": "lakshya.aran@example.com",
+      "weeklyGoals": [
+        {
+          "weekLabel": "2026-W27",
+          "targetLeague": "Gold I",
+          "focusArea": "both",
+          "reflection": "I will attend all sessions and actively solve polls to avoid debits.",
+          "createdAt": "2026-07-05T14:00:00.000Z"
+        }
+      ]
+    }
+  }
+}
+```
+
+---
+
 ## 3. Survey Triangulation Endpoints
 
 ### 3.1 GET /api/survey/status

@@ -31,6 +31,7 @@ Rather than serving as an academic grading system, Spurti acts as a gamified sel
 ## Core Features
 
 - **Gamified Progression**: Features a dual-loop design separating permanent lifetime effort (**Levels**) from dynamic consistency rankings (**Trophy Leagues**).
+- **Weekly Self-Regulation Goal Planner**: Empowers students to commit to weekly targets, document focus strategies, and monitor progress metrics in real-time.
 - **Automated Processing**: Background pipeline triggers fetch participant logs and calculate attendance/poll bands without manual intervention.
 - **Privacy-First Directory**: Incorporates wildcard-masked student searches to protect candidate data from public exposure.
 - **Survey Webhook Triangulation**: Prevents survey skips by locking the student dashboard behind Google Forms check-in webhooks.

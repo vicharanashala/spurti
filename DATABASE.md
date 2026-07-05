@@ -182,7 +182,14 @@ Stores candidate demographics, lifecycle states, and dynamic gamification progre
   surveyCompleted: { type: Boolean, default: false, index: true },
   surveyCompletedAt: { type: Date, default: null },
   poll2Completed: { type: Boolean, default: false, index: true },
-  poll2CompletedAt: { type: Date, default: null }
+  poll2CompletedAt: { type: Date, default: null },
+  weeklyGoals: [{
+    weekLabel: { type: String, required: true },
+    targetLeague: { type: String, default: '' },
+    focusArea: { type: String, enum: ['attendance', 'polls', 'both', 'none'], default: 'both' },
+    reflection: { type: String, trim: true, default: '' },
+    createdAt: { type: Date, default: Date.now }
+  }]
 }
 ```
 
