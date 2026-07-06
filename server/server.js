@@ -262,12 +262,17 @@ api.get('/me', async (req, res) => {
   const profile = await studentPayload(student);
   const { streak } = profile;
   
-  if (!streak.isActive && streak.streakBrokenAt && streak.streakBrokenAt !== student.lastNotifiedStreakBreak) {
-    notify(email, 'streakReminders', {
-      title: 'Streak broken',
-      message: `Your attendance streak ended after session ${streak.streakBrokenAt}. Time for a comeback!`
-    }).catch(() => {});
-    Student.updateOne({ _id: student._id }, { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }).catch(() => {});
+  if (!streak.isActive && streak.streakBrokenAt) {
+    const claimed = await Student.findOneAndUpdate(
+      { _id: student._id, lastNotifiedStreakBreak: { $ne: streak.streakBrokenAt } },
+      { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }
+    );
+    if (claimed) {
+      notify(email, 'streakReminders', {
+        title: 'Streak broken',
+        message: `Your attendance streak ended after session ${streak.streakBrokenAt}. Time for a comeback!`
+      }).catch(() => {});
+    }
   }
 
   res.json({ authenticated: true, profile });
