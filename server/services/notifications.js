@@ -2,11 +2,11 @@ import NotificationPreference from '../models/NotificationPreference.js';
 import Notification from '../models/Notification.js';
 
 export async function getOrCreatePreferences(email) {
-  let prefs = await NotificationPreference.findOne({ email });
-  if (!prefs) {
-    prefs = await NotificationPreference.create({ email });
-  }
-  return prefs;
+  return NotificationPreference.findOneAndUpdate(
+    { email },
+    { $setOnInsert: { email } },
+    { new: true, upsert: true }
+  );
 }
 
 export async function notify(email, category, { title, message }) {
