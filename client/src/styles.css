@@ -634,3 +634,41 @@ input {
   display: flex;
   justify-content: flex-end;
 }
+
+/* --- Streak feature ---------------------------------------------------- */
+.streak-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.streak-main {
+  margin-bottom: 8px;
+}
+.streak-active {
+  background: linear-gradient(135deg, #ffffff 40%, #eaf6fa 100%);
+}
+.streak-flame {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #e9f2f5;
+  color: var(--primary-dark);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 850;
+  animation: flame-pulse 2s infinite ease-in-out;
+}
+.streak-flame svg {
+  color: #d97706;
+}
+@keyframes flame-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(23, 107, 135, 0.2); }
+  50% { box-shadow: 0 0 0 5px rgba(23, 107, 135, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(23, 107, 135, 0); }
+}
+.streak-ended {
+  font-size: 12px;
+  margin: 0;
+  line-height: 1.4;
+}

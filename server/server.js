@@ -16,6 +16,7 @@ import NotificationPreference from './models/NotificationPreference.js';
 import Notification from './models/Notification.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import { getOrCreatePreferences, notify } from './services/notifications.js';
+import { computeStreak } from './services/streaks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -167,6 +168,7 @@ async function studentPayload(student) {
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
+  const streak = computeStreak(attendance);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
@@ -210,6 +212,7 @@ async function studentPayload(student) {
     transactions,
     polls,
     attendance,
+    streak,
     cohort: {
       averageSp,
       top10Cutoff,
@@ -255,7 +258,19 @@ api.get('/me', async (req, res) => {
   await getOrCreatePreferences(email);
 
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
-  res.json({ authenticated: true, profile: await studentPayload(student) });
+  
+  const profile = await studentPayload(student);
+  const { streak } = profile;
+  
+  if (!streak.isActive && streak.streakBrokenAt && streak.streakBrokenAt !== student.lastNotifiedStreakBreak) {
+    notify(email, 'streakReminders', {
+      title: 'Streak broken',
+      message: `Your attendance streak ended after session ${streak.streakBrokenAt}. Time for a comeback!`
+    }).catch(() => {});
+    Student.updateOne({ _id: student._id }, { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }).catch(() => {});
+  }
+
+  res.json({ authenticated: true, profile });
 });
 
 api.get('/notifications/preferences', async (req, res) => {

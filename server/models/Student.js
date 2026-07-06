@@ -20,7 +20,8 @@ const studentSchema = new mongoose.Schema({
   // the dashboard pop-up Google Form — via the Apps Script webhook or the
   // "I've submitted" button. Drives whether the survey modal still shows.
   surveyCompleted: { type: Boolean, default: false, index: true },
-  surveyCompletedAt: { type: Date, default: null }
+  surveyCompletedAt: { type: Date, default: null },
+  lastNotifiedStreakBreak: { type: String, default: null }
 }, { timestamps: true });
 
 studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });
