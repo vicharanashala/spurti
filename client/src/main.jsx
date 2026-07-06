@@ -878,8 +878,8 @@ function NotificationBell({ onSettings }) {
   };
 
   return (
-    <div style={{ position: 'relative' }}>
-      <button className="secondary" onClick={() => setOpen(!open)} style={{ position: 'relative' }}>
+    <div className="notification-bell-wrapper">
+      <button className="secondary notification-bell-button" onClick={() => setOpen(!open)}>
         🔔 {unreadCount > 0 && <span className="notification-bell-badge">{unreadCount}</span>}
       </button>
       {open && (
@@ -888,7 +888,7 @@ function NotificationBell({ onSettings }) {
             <h3 className="notification-dropdown-title">Notifications</h3>
             <button className="secondary notification-settings-button" onClick={() => { setOpen(false); onSettings(); }}>⚙️ Settings</button>
           </div>
-          {notifications.length === 0 ? <p className="muted" style={{ margin: 0, fontSize: '0.9rem' }}>No notifications</p> : (
+          {notifications.length === 0 ? <p className="muted notification-empty-state">No notifications</p> : (
             <div className="notification-item-container">
               {notifications.map(n => (
                 <div key={n._id} onClick={() => markRead(n._id)} className={`notification-item ${n.read ? '' : 'unread'}`}>

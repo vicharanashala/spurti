@@ -516,6 +516,16 @@ input {
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
 
 /* Notification Components */
+.notification-bell-wrapper {
+  position: relative;
+}
+.notification-bell-button {
+  position: relative;
+}
+.notification-empty-state {
+  margin: 0;
+  font-size: 0.9rem;
+}
 .notification-bell-badge {
   background: var(--primary);
   color: white;
