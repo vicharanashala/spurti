@@ -12,6 +12,7 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import Question from './models/Question.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -153,8 +154,158 @@ function excusedPayload(student) {
   };
 }
 
+async function awardSp(student, delta, category, reason, sessionLabel = '', dateTime = new Date()) {
+  const email = student.email.toLowerCase();
+  const updatedStudent = await Student.findOneAndUpdate(
+    { _id: student._id },
+    { $inc: { totalSp: delta } },
+    { new: true }
+  );
+  if (!updatedStudent) {
+    throw new Error('Student not found for SP update');
+  }
+  if (updatedStudent.totalSp > (updatedStudent.highestSpEver || 0)) {
+    updatedStudent.highestSpEver = updatedStudent.totalSp;
+    await updatedStudent.save();
+  }
+  const txn = await SPTransaction.create({
+    email,
+    studentId: student._id,
+    category,
+    sessionLabel,
+    deltaMode: 'absolute',
+    deltaValue: delta,
+    appliedDelta: delta,
+    balanceAfter: updatedStudent.totalSp,
+    reason,
+    dateTime
+  });
+  return txn;
+}
+
+async function checkAndAwardPerfectWeekBonus(student) {
+  const emails = [student.email];
+  if (student.alternateEmail) {
+    emails.push(student.alternateEmail);
+  }
+  const transactions = await SPTransaction.find({
+    email: { $in: emails.map(e => e.toLowerCase()) }
+  }).sort({ dateTime: 1, createdAt: 1 }).lean();
+
+  const dailySp = {};
+  const existingBonusDates = new Set();
+
+  for (const tx of transactions) {
+    const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+    if (isPerfectWeekBonus) {
+      const match = tx.reason.match(/ending (\d{4}-\d{2}-\d{2})/);
+      if (match) {
+        existingBonusDates.add(match[1]);
+      }
+      continue;
+    }
+    if (tx.category === 'initial') {
+      continue;
+    }
+    const dateStr = getISTDateStr(tx.dateTime);
+    if (dateStr) {
+      dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
+    }
+  }
+
+  const startDateStr = getISTDateStr(student.internshipStartDate);
+  const todayStr = getISTDateStr(new Date());
+
+  if (!startDateStr || !todayStr) return { currentStreak: 0, bonusesAwarded: 0 };
+
+  const start = new Date(startDateStr);
+  const end = new Date(todayStr);
+
+  const days = [];
+  let curr = new Date(start);
+  while (curr <= end) {
+    const dateStr = curr.toISOString().split('T')[0];
+    const spEarned = dailySp[dateStr] || 0;
+    days.push({
+      dateStr,
+      success: spEarned >= 20
+    });
+    curr.setDate(curr.getDate() + 1);
+  }
+
+  let currentStreak = 0;
+  let activeRuns = [];
+  let currentRun = [];
+
+  for (const day of days) {
+    if (day.success) {
+      currentRun.push(day.dateStr);
+    } else {
+      if (currentRun.length > 0) {
+        activeRuns.push(currentRun);
+        currentRun = [];
+      }
+    }
+  }
+  if (currentRun.length > 0) {
+    activeRuns.push(currentRun);
+  }
+
+  let newlyAwardedCount = 0;
+  for (const run of activeRuns) {
+    const runLength = run.length;
+    const numBonuses = Math.floor(runLength / 7);
+    for (let i = 1; i <= numBonuses; i++) {
+      const bonusDayIndex = i * 7 - 1;
+      const bonusEndDateStr = run[bonusDayIndex];
+
+      if (!existingBonusDates.has(bonusEndDateStr)) {
+        await awardSp(
+          student,
+          5, // +5 SP Perfect Week Bonus
+          'manual',
+          `Perfect Week Bonus: 7 consecutive days ending ${bonusEndDateStr}`,
+          '',
+          new Date(bonusEndDateStr + 'T12:00:00Z')
+        );
+        existingBonusDates.add(bonusEndDateStr);
+        newlyAwardedCount++;
+      }
+    }
+  }
+
+  if (days.length > 0) {
+    const lastDay = days[days.length - 1];
+    if (lastDay.success) {
+      const lastRun = activeRuns[activeRuns.length - 1] || [];
+      currentStreak = lastRun.length;
+    } else if (days.length > 1) {
+      const yesterday = days[days.length - 2];
+      if (yesterday.success) {
+        const lastRun = activeRuns.find(run => run.includes(yesterday.dateStr)) || [];
+        currentStreak = lastRun.length;
+      } else {
+        currentStreak = 0;
+      }
+    } else {
+      currentStreak = 0;
+    }
+  }
+
+  const totalBonusesCount = existingBonusDates.size;
+
+  return {
+    currentStreak,
+    bonusesAwarded: totalBonusesCount,
+    newlyAwardedCount
+  };
+}
+
 async function studentPayload(student) {
-  const email = student.email;
+  const streakInfo = await checkAndAwardPerfectWeekBonus(student);
+  const freshStudent = await Student.findById(student._id).lean();
+
+  const email = freshStudent.email;
   const activeFilter = { status: { $ne: 'excused' } };
   const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
@@ -171,8 +322,8 @@ async function studentPayload(student) {
   const currentIndex = allStudents.findIndex(s => s.email === email);
   const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
   // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
-  const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
-  const myGroup = leaderboardGroup(student.internshipStartDate);
+  const highestSpEver = Math.max(Number(freshStudent.highestSpEver) || 0, Number(freshStudent.totalSp) || 0);
+  const myGroup = leaderboardGroup(freshStudent.internshipStartDate);
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
   const mapRow = (row, index) => ({
     rank: index + 1,
@@ -184,25 +335,27 @@ async function studentPayload(student) {
   });
   return {
     student: {
-      _id: String(student._id),
-      name: student.name,
-      email: student.email,
-      alternateEmail: student.alternateEmail,
-      internshipStartDate: student.internshipStartDate,
-      internshipEndDate: student.internshipEndDate,
-      status: student.status || 'active',
-      excusedAt: student.excusedAt,
-      excusedReason: student.excusedReason,
-      totalSp: student.totalSp,
+      _id: String(freshStudent._id),
+      name: freshStudent.name,
+      email: freshStudent.email,
+      alternateEmail: freshStudent.alternateEmail,
+      internshipStartDate: freshStudent.internshipStartDate,
+      internshipEndDate: freshStudent.internshipEndDate,
+      status: freshStudent.status || 'active',
+      excusedAt: freshStudent.excusedAt,
+      excusedReason: freshStudent.excusedReason,
+      totalSp: freshStudent.totalSp,
       rank: rankInfo?.rank || null,
       cohortSize: rankInfo?.cohortSize || null,
       highestSpEver,
       level: levelFor(highestSpEver),
-      trophyLeague: leagueBand(student.totalSp),
+      trophyLeague: leagueBand(freshStudent.totalSp),
       legendBadgeUnlocked: legendBadge(highestSpEver),
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
-      surveyCompleted: Boolean(student.surveyCompleted)
+      surveyCompleted: Boolean(freshStudent.surveyCompleted),
+      streak: streakInfo.currentStreak,
+      bonusesAwarded: streakInfo.bonusesAwarded
     },
     transactions,
     polls,
@@ -211,8 +364,8 @@ async function studentPayload(student) {
       averageSp,
       top10Cutoff,
       top50Cutoff,
-      pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - student.totalSp + 1),
-      pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
+      pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - freshStudent.totalSp + 1),
+      pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - freshStudent.totalSp + 1) : 0
     },
     leaderboard: leaderboard.map(mapRow),
     groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
@@ -333,8 +486,10 @@ function getISTDateStr(dateInput) {
 
 api.get('/growth-tree/:studentId', async (req, res) => {
   try {
-    const student = await Student.findById(req.params.studentId).lean();
+    const student = await Student.findById(req.params.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const streakInfo = await checkAndAwardPerfectWeekBonus(student);
 
     const emails = [student.email];
     if (student.alternateEmail) {
@@ -346,6 +501,10 @@ api.get('/growth-tree/:studentId', async (req, res) => {
 
     const dailySp = {};
     for (const tx of transactions) {
+      const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+      if (isPerfectWeekBonus || tx.category === 'initial') {
+        continue;
+      }
       const dateStr = getISTDateStr(tx.dateTime);
       if (dateStr) {
         dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
@@ -381,7 +540,9 @@ api.get('/growth-tree/:studentId', async (req, res) => {
       totalDays,
       growthStage: successfulDays,
       hasFlowers: successfulDays >= 7,
-      hasFruits: successfulDays >= 30
+      hasFruits: successfulDays >= 30,
+      streak: streakInfo.currentStreak,
+      bonusesAwarded: streakInfo.bonusesAwarded
     });
   } catch (err) {
     console.error('growth-tree error:', err);
@@ -391,8 +552,10 @@ api.get('/growth-tree/:studentId', async (req, res) => {
 
 api.get('/chain-calendar/:studentId', async (req, res) => {
   try {
-    const student = await Student.findById(req.params.studentId).lean();
+    const student = await Student.findById(req.params.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const streakInfo = await checkAndAwardPerfectWeekBonus(student);
 
     const emails = [student.email];
     if (student.alternateEmail) {
@@ -404,6 +567,10 @@ api.get('/chain-calendar/:studentId', async (req, res) => {
 
     const dailySp = {};
     for (const tx of transactions) {
+      const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+      if (isPerfectWeekBonus || tx.category === 'initial') {
+        continue;
+      }
       const dateStr = getISTDateStr(tx.dateTime);
       if (dateStr) {
         dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
@@ -435,7 +602,9 @@ api.get('/chain-calendar/:studentId', async (req, res) => {
 
     res.json({
       studentId: student._id,
-      calendarDays
+      calendarDays,
+      streak: streakInfo.currentStreak,
+      bonusesAwarded: streakInfo.bonusesAwarded
     });
   } catch (err) {
     console.error('chain-calendar error:', err);
@@ -493,6 +662,359 @@ api.post('/survey/webhook', async (req, res) => {
   const student = await markSurveyComplete(req.body?.email);
   if (!student) return res.status(404).json({ ok: false, error: 'no match', email: normalizeEmail(req.body?.email) });
   res.json({ ok: true, email: student.email });
+});
+
+// --- Doubt Discussion Endpoints ---
+async function authGuard(req, res, next) {
+  try {
+    const adminOk = isAdmin(req);
+    if (adminOk) {
+      req.isAdmin = true;
+      return next();
+    }
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Unauthorized' });
+    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    if (student.status === 'excused') return res.status(403).json({ error: 'Account excused' });
+    req.student = student;
+    req.isAdmin = false;
+    next();
+  } catch (err) {
+    console.error('authGuard error:', err);
+    res.status(500).json({ error: 'Authentication internal error' });
+  }
+}
+
+api.get('/doubts', authGuard, async (req, res) => {
+  try {
+    const { q, tag, showSpam } = req.query;
+    const filter = {};
+    if (!req.isAdmin || showSpam !== 'true') {
+      filter.isSpam = false;
+    }
+    if (tag) {
+      filter.tags = tag;
+    }
+    if (q) {
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.$or = [
+        { title: { $regex: escaped, $options: 'i' } },
+        { description: { $regex: escaped, $options: 'i' } },
+        { tags: { $regex: escaped, $options: 'i' } }
+      ];
+    }
+    const questions = await Question.find(filter).sort({ pinned: -1, createdAt: -1 }).lean();
+    res.json(questions);
+  } catch (err) {
+    console.error('get doubts error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.get('/doubts/:id', authGuard, async (req, res) => {
+  try {
+    const question = await Question.findById(req.params.id).lean();
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+    if (question.isSpam && !req.isAdmin) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.json(question);
+  } catch (err) {
+    console.error('get doubt detail error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.post('/doubts', authGuard, async (req, res) => {
+  try {
+    if (!req.student) return res.status(403).json({ error: 'Only students can ask questions' });
+    const { title, description, tags } = req.body || {};
+    if (!title || !description) return res.status(400).json({ error: 'Title and description required' });
+
+    const question = await Question.create({
+      title,
+      description,
+      tags: tags || [],
+      author: {
+        email: req.student.email,
+        name: req.student.name
+      }
+    });
+
+    const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+    await awardSp(
+      req.student,
+      1,
+      'manual',
+      `Doubt Discussion: Asked a question (Title: "${shortTitle}")`
+    );
+
+    res.status(201).json(question);
+  } catch (err) {
+    console.error('create doubt error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.post('/doubts/:id/answers', authGuard, async (req, res) => {
+  try {
+    if (!req.student) return res.status(403).json({ error: 'Only students can answer questions' });
+    const { body } = req.body || {};
+    if (!body) return res.status(400).json({ error: 'Answer body is required' });
+
+    const question = await Question.findById(req.params.id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+    if (question.isSpam) return res.status(400).json({ error: 'Cannot answer spam question' });
+
+    question.answers.push({
+      body,
+      author: {
+        email: req.student.email,
+        name: req.student.name
+      }
+    });
+
+    await question.save();
+    res.status(201).json(question);
+  } catch (err) {
+    console.error('add answer error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.put('/doubts/:id/answers/:answerId', authGuard, async (req, res) => {
+  try {
+    if (!req.student) return res.status(403).json({ error: 'Only students can edit answers' });
+    const { body } = req.body || {};
+    if (!body) return res.status(400).json({ error: 'Answer body is required' });
+
+    const question = await Question.findById(req.params.id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    const answer = question.answers.id(req.params.answerId);
+    if (!answer) return res.status(404).json({ error: 'Answer not found' });
+
+    const emailMatch = answer.author.email === req.student.email.toLowerCase() ||
+                       (req.student.alternateEmail && answer.author.email === req.student.alternateEmail.toLowerCase());
+    if (!emailMatch) {
+      return res.status(403).json({ error: 'Cannot edit someone else\'s answer' });
+    }
+
+    answer.body = body;
+    await question.save();
+    res.json(question);
+  } catch (err) {
+    console.error('edit answer error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.post('/doubts/:id/answers/:answerId/comments', authGuard, async (req, res) => {
+  try {
+    if (!req.student) return res.status(403).json({ error: 'Only students can comment' });
+    const { body } = req.body || {};
+    if (!body) return res.status(400).json({ error: 'Comment body is required' });
+
+    const question = await Question.findById(req.params.id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    const answer = question.answers.id(req.params.answerId);
+    if (!answer) return res.status(404).json({ error: 'Answer not found' });
+
+    answer.comments.push({
+      body,
+      author: {
+        email: req.student.email,
+        name: req.student.name
+      }
+    });
+
+    await question.save();
+    res.status(201).json(question);
+  } catch (err) {
+    console.error('add comment error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.post('/doubts/:id/answers/:answerId/accept', authGuard, async (req, res) => {
+  try {
+    if (!req.student) return res.status(403).json({ error: 'Only students can accept answers' });
+
+    const question = await Question.findById(req.params.id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    const emailMatch = question.author.email === req.student.email.toLowerCase() ||
+                       (req.student.alternateEmail && question.author.email === req.student.alternateEmail.toLowerCase());
+    if (!emailMatch) {
+      return res.status(403).json({ error: 'Only the question author can accept answers' });
+    }
+
+    const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+
+    const prevAccepted = question.answers.find(a => a.isAccepted);
+    if (prevAccepted) {
+      if (prevAccepted._id.toString() === req.params.answerId) {
+        return res.json(question);
+      }
+      prevAccepted.isAccepted = false;
+      const prevContributor = await Student.findOne({
+        $or: [{ email: prevAccepted.author.email }, { alternateEmail: prevAccepted.author.email }]
+      });
+      if (prevContributor) {
+        await awardSp(
+          prevContributor,
+          -3,
+          'manual',
+          `Doubt Discussion: Answer unaccepted (Title: "${shortTitle}")`
+        );
+      }
+    }
+
+    const answer = question.answers.id(req.params.answerId);
+    if (!answer) return res.status(404).json({ error: 'Answer not found' });
+    answer.isAccepted = true;
+    await question.save();
+
+    const contributor = await Student.findOne({
+      $or: [{ email: answer.author.email }, { alternateEmail: answer.author.email }]
+    });
+    if (contributor) {
+      await awardSp(
+        contributor,
+        3,
+        'manual',
+        `Doubt Discussion: Answer accepted (Title: "${shortTitle}")`
+      );
+    }
+
+    res.json(question);
+  } catch (err) {
+    console.error('accept answer error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.post('/doubts/:id/answers/:answerId/unaccept', authGuard, async (req, res) => {
+  try {
+    if (!req.student) return res.status(403).json({ error: 'Only students can unaccept answers' });
+
+    const question = await Question.findById(req.params.id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    const emailMatch = question.author.email === req.student.email.toLowerCase() ||
+                       (req.student.alternateEmail && question.author.email === req.student.alternateEmail.toLowerCase());
+    if (!emailMatch) {
+      return res.status(403).json({ error: 'Only the question author can unaccept answers' });
+    }
+
+    const answer = question.answers.id(req.params.answerId);
+    if (!answer) return res.status(404).json({ error: 'Answer not found' });
+
+    if (answer.isAccepted) {
+      answer.isAccepted = false;
+      await question.save();
+
+      const contributor = await Student.findOne({
+        $or: [{ email: answer.author.email }, { alternateEmail: answer.author.email }]
+      });
+      if (contributor) {
+        const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+        await awardSp(
+          contributor,
+          -3,
+          'manual',
+          `Doubt Discussion: Answer unaccepted (Title: "${shortTitle}")`
+        );
+      }
+    }
+
+    res.json(question);
+  } catch (err) {
+    console.error('unaccept answer error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.post('/doubts/:id/pin', adminGuard, async (req, res) => {
+  try {
+    const question = await Question.findByIdAndUpdate(req.params.id, { pinned: true }, { new: true });
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+    res.json(question);
+  } catch (err) {
+    console.error('pin question error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.post('/doubts/:id/unpin', adminGuard, async (req, res) => {
+  try {
+    const question = await Question.findByIdAndUpdate(req.params.id, { pinned: false }, { new: true });
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+    res.json(question);
+  } catch (err) {
+    console.error('unpin question error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.post('/doubts/:id/spam', adminGuard, async (req, res) => {
+  try {
+    const question = await Question.findById(req.params.id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    if (!question.isSpam) {
+      question.isSpam = true;
+      await question.save();
+
+      const author = await Student.findOne({
+        $or: [{ email: question.author.email }, { alternateEmail: question.author.email }]
+      });
+      if (author) {
+        const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+        await awardSp(
+          author,
+          -2,
+          'manual',
+          `Doubt Discussion: Spam penalty (Title: "${shortTitle}")`
+        );
+      }
+    }
+    res.json(question);
+  } catch (err) {
+    console.error('spam question error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.post('/doubts/:id/unspam', adminGuard, async (req, res) => {
+  try {
+    const question = await Question.findById(req.params.id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    if (question.isSpam) {
+      question.isSpam = false;
+      await question.save();
+
+      const author = await Student.findOne({
+        $or: [{ email: question.author.email }, { alternateEmail: question.author.email }]
+      });
+      if (author) {
+        const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+        await awardSp(
+          author,
+          2,
+          'manual',
+          `Doubt Discussion: Spam penalty refunded (Title: "${shortTitle}")`
+        );
+      }
+    }
+    res.json(question);
+  } catch (err) {
+    console.error('unspam question error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 api.get('/admin/stats', adminGuard, async (_req, res) => {

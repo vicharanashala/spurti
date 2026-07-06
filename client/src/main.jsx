@@ -271,7 +271,7 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['doubts','Doubts']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && (
@@ -284,6 +284,7 @@ function StudentView({ profile, onBack }) {
           </div>
         </div>
       )}
+      {tab === 'doubts' && <Doubts student={student} />}
     </main>
   );
 }
@@ -574,7 +575,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students'], ['doubts','Doubts Moderation']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -594,6 +595,7 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
+      {tab === 'doubts' && <Doubts isAdmin={true} adminAuth={auth} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
   );
@@ -774,6 +776,541 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   );
 }
 
+
+function maskEmail(email) {
+  const value = String(email || '').trim();
+  const [name, domain] = value.split('@');
+  if (!name || !domain) return 'hidden email';
+  const visibleStart = name.slice(0, Math.min(2, name.length));
+  const visibleEnd = name.length > 4 ? name.slice(-2) : '';
+  return `${visibleStart}${'*'.repeat(Math.max(3, name.length - visibleStart.length - visibleEnd.length))}${visibleEnd}@${domain}`;
+}
+
+function Doubts({ student, isAdmin: isUserAdmin, adminAuth }) {
+  const [questions, setQuestions] = useState([]);
+  const [activeQuestion, setActiveQuestion] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTag, setSelectedTag] = useState('');
+  const [showSpam, setShowSpam] = useState(false);
+  const [askModalOpen, setAskModalOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const [newTitle, setNewTitle] = useState('');
+  const [newDesc, setNewDesc] = useState('');
+  const [newTags, setNewTags] = useState('');
+
+  const [answerBody, setAnswerBody] = useState('');
+  const [editingAnswerId, setEditingAnswerId] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [commentText, setCommentText] = useState({});
+
+  const headers = useMemo(() => {
+    if (isUserAdmin && adminAuth) {
+      return {
+        'X-Admin-Email': adminAuth.email,
+        'X-Admin-Token': adminAuth.token,
+        'Content-Type': 'application/json'
+      };
+    }
+    return { 'Content-Type': 'application/json' };
+  }, [isUserAdmin, adminAuth]);
+
+  const loadQuestions = async () => {
+    setLoading(true);
+    try {
+      let url = `${API}/doubts?`;
+      if (searchQuery) url += `q=${encodeURIComponent(searchQuery)}&`;
+      if (selectedTag) url += `tag=${encodeURIComponent(selectedTag)}&`;
+      if (isUserAdmin && showSpam) url += `showSpam=true&`;
+
+      const res = await fetch(url, { headers });
+      if (!res.ok) throw new Error('Failed to load questions');
+      setQuestions(await res.json());
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadQuestions();
+  }, [searchQuery, selectedTag, showSpam]);
+
+  const loadQuestionDetail = async (id) => {
+    try {
+      const res = await fetch(`${API}/doubts/${id}`, { headers });
+      if (!res.ok) throw new Error('Failed to load question details');
+      const data = await res.json();
+      setActiveQuestion(data);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleAskQuestion = async (e) => {
+    e.preventDefault();
+    if (!newTitle.trim() || !newDesc.trim()) return;
+
+    try {
+      const tagsArr = newTags.split(',').map(t => t.trim()).filter(Boolean);
+      const res = await fetch(`${API}/doubts`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          title: newTitle.trim(),
+          description: newDesc.trim(),
+          tags: tagsArr
+        })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to submit question');
+      }
+      setNewTitle('');
+      setNewDesc('');
+      setNewTags('');
+      setAskModalOpen(false);
+      loadQuestions();
+      alert('Question posted successfully! +1 SP credited.');
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handlePostAnswer = async (e) => {
+    e.preventDefault();
+    if (!answerBody.trim() || !activeQuestion) return;
+
+    try {
+      const res = await fetch(`${API}/doubts/${activeQuestion._id}/answers`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ body: answerBody.trim() })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to submit answer');
+      }
+      setAnswerBody('');
+      loadQuestionDetail(activeQuestion._id);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleEditAnswer = async (answerId) => {
+    if (!editText.trim() || !activeQuestion) return;
+    try {
+      const res = await fetch(`${API}/doubts/${activeQuestion._id}/answers/${answerId}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ body: editText.trim() })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to edit answer');
+      }
+      setEditingAnswerId(null);
+      setEditText('');
+      loadQuestionDetail(activeQuestion._id);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleAddComment = async (answerId) => {
+    const text = commentText[answerId];
+    if (!text || !text.trim() || !activeQuestion) return;
+
+    try {
+      const res = await fetch(`${API}/doubts/${activeQuestion._id}/answers/${answerId}/comments`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ body: text.trim() })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to submit comment');
+      }
+      setCommentText(prev => ({ ...prev, [answerId]: '' }));
+      loadQuestionDetail(activeQuestion._id);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleAcceptAnswer = async (answerId) => {
+    if (!activeQuestion) return;
+    try {
+      const res = await fetch(`${API}/doubts/${activeQuestion._id}/answers/${answerId}/accept`, {
+        method: 'POST',
+        headers
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to accept answer');
+      }
+      loadQuestionDetail(activeQuestion._id);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleUnacceptAnswer = async (answerId) => {
+    if (!activeQuestion) return;
+    try {
+      const res = await fetch(`${API}/doubts/${activeQuestion._id}/answers/${answerId}/unaccept`, {
+        method: 'POST',
+        headers
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to unaccept answer');
+      }
+      loadQuestionDetail(activeQuestion._id);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handlePin = async (id, currentPinned) => {
+    try {
+      const action = currentPinned ? 'unpin' : 'pin';
+      const res = await fetch(`${API}/doubts/${id}/${action}`, {
+        method: 'POST',
+        headers
+      });
+      if (!res.ok) throw new Error(`Failed to ${action} question`);
+      if (activeQuestion && activeQuestion._id === id) {
+        loadQuestionDetail(id);
+      }
+      loadQuestions();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleSpam = async (id, currentSpam) => {
+    try {
+      const action = currentSpam ? 'unspam' : 'spam';
+      const res = await fetch(`${API}/doubts/${id}/${action}`, {
+        method: 'POST',
+        headers
+      });
+      if (!res.ok) throw new Error(`Failed to ${action} question`);
+      if (activeQuestion && activeQuestion._id === id) {
+        if (action === 'spam' && !isUserAdmin) {
+          setActiveQuestion(null);
+        } else {
+          loadQuestionDetail(id);
+        }
+      }
+      loadQuestions();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const tagsList = ['internship', 'GitHub', 'React', 'assignments', 'general'];
+
+  if (activeQuestion) {
+    const isSolved = activeQuestion.answers.some(a => a.isAccepted);
+    const questionAuthorEmail = activeQuestion.author.email.toLowerCase();
+    const currentUserEmail = student ? student.email.toLowerCase() : '';
+    const currentUserAltEmail = student && student.alternateEmail ? student.alternateEmail.toLowerCase() : '';
+    const isQuestionAuthor = currentUserEmail === questionAuthorEmail || currentUserAltEmail === questionAuthorEmail;
+
+    return (
+      <div className="doubts-container">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          <button className="secondary" onClick={() => { setActiveQuestion(null); loadQuestions(); }}>
+            &larr; Back to list
+          </button>
+          {isUserAdmin && (
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button className="secondary" onClick={() => handlePin(activeQuestion._id, activeQuestion.pinned)}>
+                {activeQuestion.pinned ? '📌 Unpin' : '📌 Pin'}
+              </button>
+              <button className="secondary" style={{ color: 'var(--red)' }} onClick={() => handleSpam(activeQuestion._id, activeQuestion.isSpam)}>
+                {activeQuestion.isSpam ? '♻️ Unmark Spam' : '🚫 Mark Spam'}
+              </button>
+            </div>
+          )}
+        </div>
+
+        <article className="question-body-panel">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '10px' }}>
+            <div>
+              <h1 style={{ fontSize: '24px', margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {activeQuestion.pinned && <span>📌</span>}
+                {activeQuestion.title}
+              </h1>
+              <div className="question-tags">
+                {activeQuestion.tags.map(t => (
+                  <span key={t} className="tag-pill active" style={{ cursor: 'default' }}>{t}</span>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+              {isSolved && <span className="solved-badge">Solved ✅</span>}
+              {activeQuestion.isSpam && <span className="debit" style={{ fontSize: '12px', fontWeight: 'bold' }}>🚫 Spam Penalty Applied (-2 SP)</span>}
+            </div>
+          </div>
+
+          <p style={{ whiteSpace: 'pre-wrap', marginTop: '16px', lineHeight: '1.6', fontSize: '15px', color: '#334155' }}>
+            {activeQuestion.description}
+          </p>
+
+          <div style={{ marginTop: '20px', borderTop: '1px solid var(--line)', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--muted)' }}>
+            <span>Asked by <strong>{activeQuestion.author.name}</strong> ({maskEmail(activeQuestion.author.email)})</span>
+            <span>{new Date(activeQuestion.createdAt).toLocaleString()}</span>
+          </div>
+        </article>
+
+        <section style={{ marginTop: '20px' }}>
+          <h3 style={{ fontSize: '18px', marginBottom: '12px' }}>
+            Answers ({activeQuestion.answers.length})
+          </h3>
+          <div className="cards">
+            {activeQuestion.answers.length === 0 ? (
+              <p className="empty" style={{ padding: '20px', textAlign: 'center' }}>No answers posted yet. Be the first to answer!</p>
+            ) : (
+              activeQuestion.answers.map(answer => {
+                const isAnswerAuthor = student && (answer.author.email === currentUserEmail || answer.author.email === currentUserAltEmail);
+                const isAccepted = answer.isAccepted;
+
+                return (
+                  <div key={answer._id} className={`answer-panel ${isAccepted ? 'accepted' : ''}`}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1 }}>
+                        {editingAnswerId === answer._id ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
+                            <textarea
+                              value={editText}
+                              onChange={e => setEditText(e.target.value)}
+                              rows="3"
+                              style={{ width: '100%', padding: '8px', border: '1px solid var(--line)', borderRadius: '6px' }}
+                            />
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button className="primary" onClick={() => handleEditAnswer(answer._id)}>Save</button>
+                              <button className="secondary" onClick={() => setEditingAnswerId(null)}>Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <p style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: '14px', lineHeight: '1.5' }}>{answer.body}</p>
+                        )}
+                        <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '8px' }}>
+                          Answered by <strong>{answer.author.name}</strong> ({maskEmail(answer.author.email)}) &bull; {new Date(answer.createdAt).toLocaleString()}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {isAccepted && <span className="solved-badge" style={{ fontSize: '10px' }}>Solved ✅ (+3 SP)</span>}
+                        {isQuestionAuthor && !isUserAdmin && (
+                          isAccepted ? (
+                            <button className="secondary" style={{ padding: '4px 8px', minHeight: 'auto', fontSize: '11px' }} onClick={() => handleUnacceptAnswer(answer._id)}>
+                              Unsolve
+                            </button>
+                          ) : (
+                            <button className="primary" style={{ padding: '4px 8px', minHeight: 'auto', fontSize: '11px' }} onClick={() => handleAcceptAnswer(answer._id)}>
+                              Accept ✅
+                            </button>
+                          )
+                        )}
+                        {isAnswerAuthor && editingAnswerId !== answer._id && (
+                          <button className="secondary" style={{ padding: '4px 8px', minHeight: 'auto', fontSize: '11px' }} onClick={() => { setEditingAnswerId(answer._id); setEditText(answer.body); }}>
+                            Edit
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="comments-section">
+                      <strong style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--muted)', display: 'block', marginBottom: '4px' }}>Comments & Replies</strong>
+                      {answer.comments && answer.comments.map(c => (
+                        <div key={c._id} className="comment-item">
+                          <span>{c.body}</span>
+                          <div className="comment-meta">
+                            by <strong>{c.author.name}</strong> &bull; {new Date(c.createdAt).toLocaleTimeString()}
+                          </div>
+                        </div>
+                      ))}
+
+                      {student && (
+                        <div className="comment-input-row">
+                          <input
+                            type="text"
+                            placeholder="Write a comment or reply..."
+                            value={commentText[answer._id] || ''}
+                            onChange={e => setCommentText(prev => ({ ...prev, [answer._id]: e.target.value }))}
+                            onKeyDown={e => e.key === 'Enter' && handleAddComment(answer._id)}
+                          />
+                          <button className="secondary" onClick={() => handleAddComment(answer._id)}>Reply</button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </section>
+
+        {student && (
+          <section className="panel" style={{ marginTop: '20px' }}>
+            <h3>Your Answer</h3>
+            <form onSubmit={handlePostAnswer} style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
+              <textarea
+                value={answerBody}
+                onChange={e => setAnswerBody(e.target.value)}
+                placeholder="Share your explanation, codebase insights, or solution here..."
+                rows="4"
+                required
+                style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', borderRadius: '6px' }}
+              />
+              <button className="primary" type="submit" style={{ alignSelf: 'flex-start' }}>
+                Post Answer
+              </button>
+            </form>
+          </section>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="doubts-container">
+      <div className="doubts-header">
+        <div className="doubts-search-bar">
+          <input
+            type="text"
+            placeholder="Search questions, descriptions, or tags..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+          <button className="primary" onClick={loadQuestions}>Search</button>
+        </div>
+
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {isUserAdmin && (
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer' }}>
+              <input type="checkbox" checked={showSpam} onChange={e => setShowSpam(e.target.checked)} />
+              Show Spam
+            </label>
+          )}
+          {student && (
+            <button className="primary" onClick={() => setAskModalOpen(true)}>
+              Ask a Question (+1 SP)
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="tag-filters">
+        <button className={`tag-pill ${selectedTag === '' ? 'active' : ''}`} onClick={() => setSelectedTag('')}>
+          All Topics
+        </button>
+        {tagsList.map(t => (
+          <button key={t} className={`tag-pill ${selectedTag === t ? 'active' : ''}`} onClick={() => setSelectedTag(t)}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      <div className="cards" style={{ marginTop: '10px' }}>
+        {loading ? (
+          <p style={{ textAlign: 'center', padding: '40px' }}>Loading questions...</p>
+        ) : questions.length === 0 ? (
+          <p className="empty" style={{ padding: '40px', textAlign: 'center' }}>No questions found in this category.</p>
+        ) : (
+          questions.map(q => {
+            const hasSolved = q.answers.some(a => a.isAccepted);
+            return (
+              <article key={q._id} className={`question-card ${q.pinned ? 'pinned' : ''}`} onClick={() => loadQuestionDetail(q._id)}>
+                <div className="question-card-head">
+                  <h3 className="question-title">
+                    {q.pinned && <span>📌</span>}
+                    {q.title}
+                  </h3>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    {hasSolved && <span className="solved-badge">Solved ✅</span>}
+                    {q.isSpam && <span className="debit" style={{ fontSize: '10px', fontWeight: 'bold' }}>🚫 Spam</span>}
+                    <span className="answer-count-badge">{q.answers.length} {q.answers.length === 1 ? 'answer' : 'answers'}</span>
+                  </div>
+                </div>
+
+                <p style={{ color: 'var(--muted)', fontSize: '13px', margin: '4px 0', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                  {q.description}
+                </p>
+
+                <div className="question-tags">
+                  {q.tags.map(t => (
+                    <span key={t} className="tag-pill" style={{ pointerEvents: 'none' }}>{t}</span>
+                  ))}
+                </div>
+
+                <div className="question-meta">
+                  <span>by <strong>{q.author.name}</strong></span>
+                  <span>{new Date(q.createdAt).toLocaleDateString()}</span>
+                </div>
+              </article>
+            );
+          })
+        )}
+      </div>
+
+      {askModalOpen && (
+        <div className="overlay" onClick={e => e.target === e.currentTarget && setAskModalOpen(false)}>
+          <section className="modal" style={{ padding: '24px' }}>
+            <div className="modal-head" style={{ marginBottom: '16px' }}>
+              <h2>Ask a New Question</h2>
+              <button className="icon" onClick={() => setAskModalOpen(false)}>x</button>
+            </div>
+            <form onSubmit={handleAskQuestion} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '4px', textTransform: 'uppercase', color: 'var(--muted)' }}>Question Title</label>
+                <input
+                  type="text"
+                  placeholder="e.g. How to resolve merge conflict in git?"
+                  value={newTitle}
+                  onChange={e => setNewTitle(e.target.value)}
+                  required
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '4px', textTransform: 'uppercase', color: 'var(--muted)' }}>Detailed Description</label>
+                <textarea
+                  placeholder="Explain what problem you are facing, what you have tried, and copy-paste any relevant error messages..."
+                  value={newDesc}
+                  onChange={e => setNewDesc(e.target.value)}
+                  rows="5"
+                  required
+                  style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', borderRadius: '6px' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '4px', textTransform: 'uppercase', color: 'var(--muted)' }}>Tags (comma-separated)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. React, GitHub, assignments"
+                  value={newTags}
+                  onChange={e => setNewTags(e.target.value)}
+                />
+                <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Available recommended tags: internship, GitHub, React, assignments, general</span>
+              </div>
+              <button className="primary" type="submit" style={{ marginTop: '10px' }}>
+                Post Question (+1 SP)
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function SurveyModal({ survey, student, onDone }) {
   const [checking, setChecking] = useState(false);

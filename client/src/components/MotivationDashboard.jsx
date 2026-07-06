@@ -121,6 +121,17 @@ export default function MotivationDashboard({ student }) {
 
   return (
     <section className="motivation-dashboard">
+      {/* Perfect Week Bonus Banner/Notification */}
+      {treeData.bonusesAwarded > 0 && (
+        <div className="perfect-week-banner" style={{ background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', padding: '12px 16px', borderRadius: '8px', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
+          <span style={{ fontSize: '24px' }}>🏆</span>
+          <div>
+            <strong style={{ display: 'block', fontSize: '13px' }}>Perfect Week Streak Active!</strong>
+            <span style={{ fontSize: '11px', opacity: 0.95 }}>You have earned {treeData.bonusesAwarded} Perfect Week {treeData.bonusesAwarded === 1 ? 'Bonus' : 'Bonuses'} (+5 SP each) by staying active for {treeData.streak} consecutive days!</span>
+          </div>
+        </div>
+      )}
+
       {/* 1. Growth Tree Section */}
       <div className="panel growth-tree-panel">
         <div className="panel-head">
@@ -134,6 +145,18 @@ export default function MotivationDashboard({ student }) {
             <p className="tree-status-text">
               Stage: <strong>{treeData.successfulDays} Successful Days</strong>
             </p>
+
+            {/* Streak and Payout Badges */}
+            <div className="streak-badges-row" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '4px 0 8px 0' }}>
+              <span className="streak-badge" style={{ background: '#fff1f2', color: '#e11d48', padding: '3px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                🔥 Streak: {treeData.streak || 0} {treeData.streak === 1 ? 'Day' : 'Days'}
+              </span>
+              {treeData.bonusesAwarded > 0 && (
+                <span className="bonus-badge" style={{ background: '#ecfdf5', color: '#059669', padding: '3px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                  🎉 {treeData.bonusesAwarded}x Perfect Week
+                </span>
+              )}
+            </div>
             
             {/* Growth Progress Bar */}
             <div className="tree-progress-container">
