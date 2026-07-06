@@ -69,7 +69,11 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView 
+          profile={profile} 
+          onBack={config.allowStudentSearch ? () => setView('landing') : null} 
+          onSettings={() => setView('notification-settings')}
+        />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -77,6 +81,9 @@ function App() {
         />
       </>
     );
+  }
+  if (view === 'notification-settings' && profile) {
+    return <NotificationSettings onBack={() => setView('student')} />;
   }
   if (view === 'excused' && excused) {
     return <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />;
@@ -253,7 +260,7 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onBack, onSettings }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -261,7 +268,10 @@ function StudentView({ profile, onBack }) {
   return (
     <main className="page compact">
       <header className="topbar">
-        {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
+          <NotificationBell onSettings={onSettings} />
+        </div>
         <div>
           <p className="eyebrow">Student Spurti Bank</p>
           <h1>{student.name}</h1>
@@ -837,5 +847,143 @@ function SurveyModal({ survey, student, onDone }) {
   );
 }
 
+
+function NotificationBell({ onSettings }) {
+  const [notifications, setNotifications] = useState([]);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const fetchNotifs = async () => {
+      try {
+        const res = await fetch(`${API}/notifications`);
+        if (res.ok && active) setNotifications(await res.json());
+      } catch (err) {}
+    };
+    fetchNotifs();
+    const id = setInterval(fetchNotifs, 45000);
+    return () => { active = false; clearInterval(id); };
+  }, []);
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  const markAllRead = async () => {
+    await fetch(`${API}/notifications/read-all`, { method: 'POST' });
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
+
+  const markRead = async (id) => {
+    await fetch(`${API}/notifications/${id}/read`, { method: 'POST' });
+    setNotifications(prev => prev.map(n => n._id === id ? { ...n, read: true } : n));
+  };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button className="secondary" onClick={() => setOpen(!open)} style={{ position: 'relative' }}>
+        🔔 {unreadCount > 0 && <span style={{ background: 'var(--color-primary, #6366f1)', color: 'white', borderRadius: '50%', padding: '2px 6px', fontSize: '12px', marginLeft: '4px' }}>{unreadCount}</span>}
+      </button>
+      {open && (
+        <div className="panel" style={{ position: 'absolute', top: '100%', left: 0, width: '320px', zIndex: 10, marginTop: '8px', padding: '1rem', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h3 style={{ margin: 0, fontSize: '1rem' }}>Notifications</h3>
+            <button className="secondary" onClick={() => { setOpen(false); onSettings(); }} style={{ fontSize: '0.8rem', padding: '4px 8px' }}>⚙️ Settings</button>
+          </div>
+          {notifications.length === 0 ? <p className="muted" style={{ margin: 0, fontSize: '0.9rem' }}>No notifications</p> : (
+            <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+              {notifications.map(n => (
+                <div key={n._id} onClick={() => markRead(n._id)} style={{ padding: '0.75rem 0', borderBottom: '1px solid #eee', cursor: 'pointer', opacity: n.read ? 0.6 : 1 }}>
+                  <p style={{ margin: '0 0 0.25rem 0', fontWeight: n.read ? 'normal' : 'bold', fontSize: '0.9rem' }}>{n.title}</p>
+                  <p style={{ margin: 0, fontSize: '0.8rem', color: '#666' }}>{n.message}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {unreadCount > 0 && <button className="primary" style={{ width: '100%', marginTop: '1rem' }} onClick={markAllRead}>Mark all as read</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificationSettings({ onBack }) {
+  const [prefs, setPrefs] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/notifications/preferences`)
+      .then(r => r.json())
+      .then(setPrefs)
+      .catch(() => {});
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    await fetch(`${API}/notifications/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categories: prefs.categories })
+    });
+    setSaving(false);
+    onBack();
+  };
+
+  const toggle = (cat, type) => {
+    setPrefs(p => ({
+      ...p,
+      categories: {
+        ...p.categories,
+        [cat]: { ...p.categories[cat], [type]: !p.categories[cat][type] }
+      }
+    }));
+  };
+
+  if (!prefs) return <main className="page"><section className="panel"><p>Loading preferences...</p></section></main>;
+
+  const labels = {
+    weeklyDigest: 'Weekly Digest',
+    streakReminders: 'Streak Reminders',
+    peerActivity: 'Peer Activity',
+    announcements: 'Announcements'
+  };
+
+  return (
+    <main className="page compact">
+      <section className="panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+          <div>
+            <p className="eyebrow">Settings</p>
+            <h1 style={{ margin: 0 }}>Notification Preferences</h1>
+          </div>
+          <button className="secondary" onClick={onBack}>Back</button>
+        </div>
+        <p className="lead" style={{ marginBottom: '2rem' }}>Control how you want to be notified for each type of activity.</p>
+        
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          {Object.keys(labels).map(cat => (
+            <div key={cat} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '1.25rem', borderBottom: '1px solid #eee' }}>
+              <strong style={{ fontSize: '1.05rem' }}>{labels[cat]}</strong>
+              <div style={{ display: 'flex', gap: '1.5rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none' }}>
+                  <input type="checkbox" checked={prefs.categories[cat]?.inApp ?? true} onChange={() => toggle(cat, 'inApp')} />
+                  In-App
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none' }}>
+                  <input type="checkbox" checked={prefs.categories[cat]?.email ?? false} onChange={() => toggle(cat, 'email')} />
+                  Email
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+        
+        <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'flex-end' }}>
+          <button className="primary" onClick={save} disabled={saving}>
+            {saving ? 'Saving...' : 'Save Preferences'}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);
