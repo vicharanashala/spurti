@@ -1,14 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import WrappedStory from './WrappedStory.jsx';
+import WeeklyLeaderboard from './WeeklyLeaderboard.jsx';
+import GhostRace from './GhostRace.jsx';
 import { createRoot } from 'react-dom/client';
+import { getDevAsEmail } from './devAsEmail.js';
 import './styles.css';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
-// Dev override: when ?asEmail= is on the URL, forward it to /api/me so we can
-// preview the UI for a specific student (e.g. the DUMMY seed records).
-const DEV_AS_EMAIL = (() => {
-  if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') return '';
-  return new URLSearchParams(window.location.search).get('asEmail') || '';
-})();
+// Dev override: on localhost / 127.0.0.1, forward `?asEmail=...` to /api/me so
+// we can preview the UI for a specific student (e.g. the DUMMY seed records).
+// If no `?asEmail=` is provided, default to dummy1 so the dev experience
+// works out of the box without any URL params.
+const DEV_AS_EMAIL = getDevAsEmail();
 const API = `${APP_BASE}/api`;
 
 function App() {
@@ -58,7 +61,22 @@ function App() {
               setExcused(data);
               setProfile(null);
               setView('excused');
+            } else if (active) {
+              // Not authenticated, or stale dev cookie pointing at a deleted
+              // student: fall through to the landing view so the user sees
+              // the "Find your Spurti points" entry point rather than a
+              // silently blank page.
+              setProfile(null);
+              setExcused(null);
+              setView('landing');
             }
+          } else if (active) {
+            // /api/me returned 4xx/5xx (e.g. stale devStudentEmail cookie
+            // pointing at a now-deleted student). Don't leave the user
+            // stuck on the loading screen — show the landing view.
+            setProfile(null);
+            setExcused(null);
+            setView('landing');
           }
         }
       } finally {
@@ -270,6 +288,10 @@ function SearchModal({ onClose, onStudent }) {
 
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
+  const [showWrapped, setShowWrapped] = useState(false);
+  const [showWeekly, setShowWeekly] = useState(false);
+  const [showGhost, setShowGhost] = useState(false);
+
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
@@ -282,13 +304,47 @@ function StudentView({ profile, onBack }) {
           <h1>{student.name}</h1>
         </div>
         <div className="score-card"><span className="sp-label"><SpCoinIcon /> SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
+        
       </header>
       <LevelStatus student={student} />
+      <button
+        className="wrapped-entry-btn"
+        onClick={() => setShowWrapped(true)}
+      >
+        ✨ Your Monthly Wrapped
+      </button>
+      <button
+        className="wlb-entry-btn"
+        onClick={() => setShowWeekly(true)}
+      >
+        🏆 This Week's Leaderboard
+      </button>
+      <button
+        className="gr-entry-btn"
+        onClick={() => setShowGhost(true)}
+      >
+        👻 Race Your Ghost
+      </button>
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {showWrapped && (
+        <WrappedStory onClose={() => setShowWrapped(false)} />
+      )}
+      {showWeekly && (
+        <div className="wlb-overlay">
+          <WeeklyLeaderboard
+            onClose={() => setShowWeekly(false)}
+          />
+        </div>
+      )}
+      {showGhost && (
+        <div className="gr-overlay">
+          <GhostRace onClose={() => setShowGhost(false)} />
+        </div>
+      )}
     </main>
   );
 }
