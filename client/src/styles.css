@@ -514,3 +514,19 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+.certificate-panel {
+  margin-top: 16px;
+  text-align: center;
+}
+.certificate-canvas {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 16px 0;
+}
+.certificate-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}

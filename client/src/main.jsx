@@ -317,6 +317,89 @@ function LevelStatus({ student }) {
         Level shows your highest achievement and never decreases. Trophy League shows your current performance and can move up or down with your current Spurti Points.
         {student.legendBadgeUnlocked ? ' You have unlocked the Legend Badge by reaching 1500 Spurti Points at least once.' : ''}
       </p>
+      <MilestoneCertificate student={student} />
+    </section>
+  );
+}
+
+function MilestoneCertificate({ student }) {
+  const canvasRef = useRef(null);
+  const milestone = student.legendBadgeUnlocked
+    ? 'Legend Badge'
+    : student.rank <= 10
+    ? 'Top 10 Finisher'
+    : null;
+
+  if (!milestone) return null;
+
+  const drawCertificate = () => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    canvas.width = 1000;
+    canvas.height = 700;
+
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = '#facc15';
+    ctx.lineWidth = 8;
+    ctx.strokeRect(30, 30, canvas.width - 60, canvas.height - 60);
+
+    ctx.fillStyle = '#facc15';
+    ctx.font = 'bold 48px Georgia';
+    ctx.textAlign = 'center';
+    ctx.fillText('Certificate of Achievement', canvas.width / 2, 160);
+
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '28px Georgia';
+    ctx.fillText('This certifies that', canvas.width / 2, 240);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 44px Georgia';
+    ctx.fillText(student.name, canvas.width / 2, 310);
+
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '28px Georgia';
+    ctx.fillText('has achieved', canvas.width / 2, 380);
+
+    ctx.fillStyle = '#facc15';
+    ctx.font = 'bold 40px Georgia';
+    ctx.fillText(milestone, canvas.width / 2, 440);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '22px Georgia';
+    ctx.fillText(`Spurti Points: ${student.totalSp}`, canvas.width / 2, 500);
+    ctx.fillText(new Date().toLocaleDateString(), canvas.width / 2, 540);
+
+    ctx.fillStyle = '#64748b';
+    ctx.font = 'italic 20px Georgia';
+    ctx.fillText('Spurti Motivation Engine', canvas.width / 2, 620);
+  };
+
+  useEffect(() => { drawCertificate(); }, [student]);
+
+  const downloadCertificate = () => {
+    const canvas = canvasRef.current;
+    const link = document.createElement('a');
+    link.download = `spurti-certificate-${student.name.replace(/\s+/g, '-')}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  };
+
+  const shareOnLinkedIn = () => {
+    const text = encodeURIComponent(`I just earned the ${milestone} on Spurti! 🎉`);
+    const url = encodeURIComponent(window.location.href);
+    window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${url}&text=${text}`, '_blank');
+  };
+
+  return (
+    <section className="panel certificate-panel">
+      <h2>Your Milestone Certificate</h2>
+      <canvas ref={canvasRef} className="certificate-canvas" />
+      <div className="certificate-actions">
+        <button className="primary" onClick={downloadCertificate}>Download Certificate</button>
+        <button className="secondary" onClick={shareOnLinkedIn}>Share on LinkedIn</button>
+      </div>
     </section>
   );
 }
