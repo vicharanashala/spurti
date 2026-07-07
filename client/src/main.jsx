@@ -357,11 +357,36 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   );
 }
 
-function StreakCard({ streak }) {
+function StreakCard({ streak, student }) {
+  const [freezes, setFreezes] = useState(student?.streakFreezesAvailable || 0);
+  const [buying, setBuying] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setFreezes(student?.streakFreezesAvailable || 0);
+  }, [student?.streakFreezesAvailable]);
+
+  const buyFreeze = async () => {
+    setBuying(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API}/streak-freeze/buy`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to buy');
+      setFreezes(data.streakFreezesAvailable);
+    } catch (err) {
+      setError(err.message);
+    }
+    setBuying(false);
+  };
+
   if (!streak) {
     return (
       <div className="pulse-card streak-card">
-        <span>Streak & Momentum</span>
+        <div className="streak-card-header">
+          <span>Streak & Momentum</span>
+          {freezes > 0 && <span className="streak-freeze-badge">🛡️ {freezes} freeze(s) available</span>}
+        </div>
         <div className="streak-main">
           <p className="muted">No sessions yet</p>
         </div>
@@ -373,7 +398,10 @@ function StreakCard({ streak }) {
 
   return (
     <div className={`pulse-card streak-card ${isActive ? 'streak-active' : ''}`}>
-      <span>Streak & Momentum</span>
+      <div className="streak-card-header">
+        <span>Streak & Momentum</span>
+        {freezes > 0 && <span className="streak-freeze-badge">🛡️ {freezes} freeze(s) available</span>}
+      </div>
       <div className="streak-main">
         <strong>{currentStreak}</strong>
         <div className="compare-list">
@@ -393,6 +421,13 @@ function StreakCard({ streak }) {
           {streakBrokenAt ? `Streak ended after: ${streakBrokenAt}` : 'No active streak'}
         </p>
       )}
+
+      <div className="streak-freeze-action">
+        <button className="streak-freeze-buy" onClick={buyFreeze} disabled={buying}>
+          {buying ? 'Buying...' : 'Buy Freeze (20 SP)'}
+        </button>
+        {error && <span className="streak-freeze-error">{error}</span>}
+      </div>
     </div>
   );
 }
@@ -405,7 +440,7 @@ function StudentPulse({ profile, badges, nextActions }) {
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
   return (
     <section className="pulse-grid">
-      <StreakCard streak={streak} />
+      <StreakCard streak={streak} student={student} />
       <div className="pulse-card progress-card">
         <span>Standing</span>
         <strong>Rank {student.rank}</strong>

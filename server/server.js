@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
-import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
+import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL, STREAK_FREEZE_COST_SP } from './config.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
@@ -17,6 +17,7 @@ import Notification from './models/Notification.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import { getOrCreatePreferences, notify } from './services/notifications.js';
 import { computeStreak } from './services/streaks.js';
+import { appendTransaction } from './services/spLedger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -190,7 +191,7 @@ async function studentPayload(student) {
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
-  const streak = computeStreak(attendance);
+  const streak = computeStreak(attendance, student.streakProtectedSessions || []);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
@@ -230,7 +231,8 @@ async function studentPayload(student) {
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      poll2Completed: Boolean(student.poll2Completed),
+      streakFreezesAvailable: student.streakFreezesAvailable || 0
     },
     transactions,
     polls,
@@ -278,22 +280,75 @@ api.get('/me', async (req, res) => {
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
   
   const profile = await studentPayload(student);
-  const { streak } = profile;
+  let streak = profile.streak;
   
-  if (!streak.isActive && streak.streakBrokenAt) {
+  if (!streak.isActive && streak.streakBrokenAt &&
+      streak.streakBrokenAt !== student.lastNotifiedStreakBreak &&
+      !(student.streakProtectedSessions || []).includes(streak.streakBrokenAt)) {
+
     const claimed = await Student.findOneAndUpdate(
-      { _id: student._id, lastNotifiedStreakBreak: { $ne: streak.streakBrokenAt } },
-      { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }
+      {
+        _id: student._id,
+        streakFreezesAvailable: { $gt: 0 },
+        streakProtectedSessions: { $ne: streak.streakBrokenAt }
+      },
+      {
+        $inc: { streakFreezesAvailable: -1 },
+        $addToSet: { streakProtectedSessions: streak.streakBrokenAt }
+      },
+      { new: true }
     );
+
     if (claimed) {
+      streak = computeStreak(profile.attendance, claimed.streakProtectedSessions);
+      profile.streak = streak;
+      profile.student.streakFreezesAvailable = claimed.streakFreezesAvailable;
       notify(email, 'streakReminders', {
-        title: 'Streak broken',
-        message: `Your attendance streak ended after session ${streak.streakBrokenAt}. Time for a comeback!`
+        title: 'Streak freeze used',
+        message: `A streak freeze protected your streak after session ${streak.streakBrokenAt}. You have ${claimed.streakFreezesAvailable} left.`
       }).catch(() => {});
+    } else {
+      const breakClaimed = await Student.findOneAndUpdate(
+        { _id: student._id, lastNotifiedStreakBreak: { $ne: streak.streakBrokenAt } },
+        { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }
+      );
+      if (breakClaimed) {
+        notify(email, 'streakReminders', {
+          title: 'Streak broken',
+          message: `Your attendance streak ended after session ${streak.streakBrokenAt}. Time for a comeback!`
+        }).catch(() => {});
+      }
     }
   }
 
   res.json({ authenticated: true, profile });
+});
+
+api.post('/streak-freeze/buy', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+
+  const student = await Student.findOneAndUpdate(
+    { email, totalSp: { $gte: STREAK_FREEZE_COST_SP } },
+    { $inc: { totalSp: -STREAK_FREEZE_COST_SP, streakFreezesAvailable: 1 } },
+    { new: true }
+  );
+
+  if (!student) {
+    return res.status(400).json({ error: 'Not enough SP to buy a streak freeze' });
+  }
+
+  await appendTransaction(
+    email,
+    'streakFreeze',
+    '',
+    new Date(),
+    -STREAK_FREEZE_COST_SP,
+    'Purchased a streak freeze',
+    student.totalSp + STREAK_FREEZE_COST_SP
+  ).catch(() => {});
+
+  res.json({ streakFreezesAvailable: student.streakFreezesAvailable, totalSp: student.totalSp });
 });
 
 api.get('/notifications/preferences', async (req, res) => {
@@ -654,7 +709,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     };
   });
 
-  const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
+  const categoryTotals = ['initial', 'attendance', 'poll', 'manual', 'streakFreeze'].map(category => {
     const rows = activeTransactions.filter(t => t.category === category);
     return {
       category,

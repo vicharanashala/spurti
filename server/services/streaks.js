@@ -6,7 +6,7 @@
  * array of their attendance records.
  */
 
-export function computeStreak(attendanceRecords) {
+export function computeStreak(attendanceRecords, protectedSessionLabels = []) {
   if (!attendanceRecords || attendanceRecords.length === 0) {
     return {
       currentStreak: 0,
@@ -28,6 +28,8 @@ export function computeStreak(attendanceRecords) {
   let isActive = false;
   let streakBrokenAt = null;
 
+  const protectedSet = new Set(protectedSessionLabels);
+
   for (const record of sorted) {
     if (record.qualified) {
       currentStreak++;
@@ -36,6 +38,10 @@ export function computeStreak(attendanceRecords) {
       if (currentStreak > longestStreak) {
         longestStreak = currentStreak;
       }
+    } else if (protectedSet.has(record.sessionLabel)) {
+      // Frozen session — does not break the streak, does not extend it either.
+      // Skip entirely: currentStreak, isActive, longestStreak, streakBrokenAt unchanged.
+      continue;
     } else {
       currentStreak = 0;
       isActive = false;

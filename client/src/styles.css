@@ -672,3 +672,37 @@ input {
   margin: 0;
   line-height: 1.4;
 }
+
+.streak-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.streak-freeze-badge {
+  background: var(--panel-hover);
+  color: var(--text);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: bold;
+  border: 1px solid var(--line);
+}
+
+.streak-freeze-action {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.streak-freeze-buy {
+  font-size: 12px;
+  padding: 6px 12px;
+  align-self: flex-start;
+}
+
+.streak-freeze-error {
+  color: #dc2626;
+  font-size: 12px;
+}
