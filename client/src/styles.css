@@ -514,3 +514,138 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* --- Dual Performance Progress Graph ---------------------------------- */
+.performance-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+.performance-header > span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+.performance-tabs {
+  margin: 0;
+}
+.graph-wrapper {
+  padding: 16px 0 8px;
+  position: relative;
+}
+.performance-svg {
+  display: block;
+}
+.grid-line-group line {
+  stroke: var(--line);
+}
+.grid-line-group text {
+  fill: var(--muted);
+  font-family: inherit;
+}
+.graph-tooltip {
+  background: var(--panel);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  min-width: 175px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--line);
+  transition: left 0.15s ease, top 0.15s ease;
+  z-index: 10;
+}
+.tooltip-title {
+  font-weight: 800;
+  font-size: 13px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 4px;
+  color: var(--text);
+}
+.tooltip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 3px 0;
+  color: var(--muted);
+}
+.tooltip-row b {
+  color: var(--text);
+}
+.tooltip-row.divider {
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+  padding-top: 6px;
+  font-weight: 700;
+}
+.tooltip-achievements {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+.ach-title {
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: 4px;
+  letter-spacing: 0.05em;
+}
+.ach-item {
+  font-size: 11px;
+  color: var(--text);
+  margin: 2px 0;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+.dot.attendance { background: var(--primary); }
+.dot.poll { background: var(--amber); }
+.dot.bonus { background: var(--green); }
+
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 12px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.legend-line {
+  width: 20px;
+  height: 3px;
+  border-radius: 2px;
+}
+.legend-line.attendance-line { background: var(--primary); }
+.legend-line.poll-line { background: var(--amber); border-top: 1px dashed var(--amber); height: 1px; width: 20px; }
+.legend-line.bonus-line { background: var(--green); border-top: 1px dotted var(--green); height: 1px; width: 20px; }
+.legend-star {
+  color: var(--amber);
+  font-weight: bold;
+  font-size: 14px;
+}
+@media (max-width: 860px) {
+  .performance-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .performance-tabs {
+    width: 100%;
+  }
+}
+

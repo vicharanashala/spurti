@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { buildPerformanceSeries, aggregatePerformance } from './services/studentPerformance.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -149,8 +150,12 @@ async function studentEmailFromRequest(req) {
   // Samagama's /api/auth/me nests the user as { user: { email, ... } };
   // fall back to a top-level email in case the shape ever flattens.
   const email = data?.user?.email || data?.email;
-  if (!email) return null;
-  return normalizeEmail(email);
+  if (email) return normalizeEmail(email);
+
+  if (ALLOW_STUDENT_SEARCH && req.headers['x-student-email']) {
+    return normalizeEmail(req.headers['x-student-email']);
+  }
+  return null;
 }
 
 async function rankFor(email) {
@@ -238,7 +243,14 @@ async function studentPayload(student) {
       pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
     },
     leaderboard: leaderboard.map(mapRow),
-    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
+    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow),
+    performance: aggregatePerformance({
+      student,
+      transactions,
+      attendance,
+      polls,
+      cohort: { averageSp, top50Cutoff, top10Cutoff }
+    }, 'weekly')
   };
 }
 
@@ -268,6 +280,15 @@ api.get('/me', async (req, res) => {
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
   res.json({ authenticated: true, profile: await studentPayload(student) });
+});
+
+api.get('/me/performance', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ authenticated: false });
+  const granularity = ['daily','weekly','monthly'].includes(req.query.granularity) ? req.query.granularity : 'weekly';
+  const data = await buildPerformanceSeries(email, granularity);
+  if (!data) return res.status(404).json({ error: 'Student not found' });
+  res.json(data);
 });
 
 api.get('/search', async (req, res) => {
