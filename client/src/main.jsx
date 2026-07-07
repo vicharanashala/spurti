@@ -267,6 +267,7 @@ function StudentView({ profile, onBack }) {
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+  const latestBonus = [...(profile.transactions || [])].filter(tx => tx.category === 'sunday_bonus').slice(-1)[0];
   return (
     <main className="page compact">
       <header className="topbar">
@@ -278,7 +279,14 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
+      {latestBonus && (
+        <section className="panel" style={{ border: '1px solid #f4c542', background: '#fff8e1' }}>
+          <strong>🎉 Sunday Bonus awarded!</strong>
+          <p>{latestBonus.reason}</p>
+        </section>
+      )}
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
+      <SundayBonusCard profile={profile} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
@@ -343,6 +351,40 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
           </tr>
         ))}</tbody>
       </table>
+    </section>
+  );
+}
+
+function SundayBonusCard({ profile }) {
+  const bonusEntries = (profile?.attendance || []).filter(entry => entry.sundayBonusEligible || entry.sundayBonusPoints > 0).slice(-3);
+  if (!bonusEntries.length) {
+    return (
+      <section className="panel">
+        <h2>🎉 Sunday Bonus</h2>
+        <p className="muted">Optional Sunday classes can award extra SP for attendance and poll participation.</p>
+        <div className="info-grid">
+          <div className="info"><h3>Attendance</h3><p>Full 2h class: +10 SP</p><p>1h+ class: +5 SP</p><p>30m+ class: +3 SP</p></div>
+          <div className="info"><h3>Polls</h3><p>100% answered: +10 SP</p><p>75%+ answered: +5 SP</p></div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel">
+      <h2>🎉 Sunday Bonus</h2>
+      <div className="cards">
+        {bonusEntries.map(entry => (
+          <article className="card" key={entry.sessionLabel}>
+            <div className="card-head static">
+              <strong>{entry.sessionLabel}</strong>
+              <span>+{entry.sundayBonusPoints || 0} SP</span>
+            </div>
+            <p className="muted">Attendance: {entry.sundayBonusAttendanceMinutes || 0} min • +{entry.sundayBonusAttendancePoints || 0} SP</p>
+            <p className="muted">Polls: {entry.sundayBonusPollsAttempted || 0}/{entry.sundayBonusPollsTotal || 0} • +{entry.sundayBonusPollPoints || 0} SP</p>
+          </article>
+        ))}
+      </div>
     </section>
   );
 }
@@ -444,7 +486,7 @@ function SpBank({ transactions }) {
             <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
             <strong className="debit">{tx.appliedDelta < 0 ? tx.appliedDelta : ''}</strong>
             <b>{tx.balanceAfter}</b>
-            <p>{tx.reason}</p>
+            <p>{tx.reason}{tx.category === 'sunday_bonus' ? ' 🎉' : ''}</p>
           </div>
         ))}
       </div>
@@ -510,6 +552,7 @@ function AdminView({ admin, auth, onBack }) {
   const [leaderLimit, setLeaderLimit] = useState(50);
   const [leaderboard, setLeaderboard] = useState([]);
   const [attendance, setAttendance] = useState(null);
+  const [sundayBonus, setSundayBonus] = useState(null);
   const [active, setActive] = useState([]);
   const [analytics, setAnalytics] = useState(null);
   const [stats, setStats] = useState(null);
@@ -550,7 +593,21 @@ function AdminView({ admin, auth, onBack }) {
     setAnalytics(await res.json());
   };
 
-  useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
+  useEffect(() => { loadLeaderboard(50); fetchStats(); loadSundayBonus(); }, []);
+  const loadSundayBonus = async () => {
+    const res = await fetch(`${API}/admin/sunday-bonus`, { headers });
+    if (res.ok) setSundayBonus(await res.json());
+  };
+
+  const saveSundayBonus = async () => {
+    const res = await fetch(`${API}/admin/sunday-bonus`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(sundayBonus || {})
+    });
+    if (res.ok) setSundayBonus(await res.json());
+  };
+
   const fetchStats = async () => {
     const r = await fetch(`${API}/admin/stats`, headers);
     if (r.ok) setStats(await r.json());
@@ -573,7 +630,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students'], ['bonus','Sunday Bonus']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -593,6 +650,20 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
+      {tab === 'bonus' && sundayBonus && (
+        <section className="panel">
+          <h2>Sunday Class Attendance Bonus</h2>
+          <p className="muted">Adjust the Sunday attendance thresholds and reward values below.</p>
+          <div className="login-form">
+            <label>Enabled<input type="checkbox" checked={Boolean(sundayBonus.enabled)} onChange={e => setSundayBonus({ ...sundayBonus, enabled: e.target.checked })} /></label>
+            <input value={sundayBonus.thresholdMinutes ?? ''} onChange={e => setSundayBonus({ ...sundayBonus, thresholdMinutes: Number(e.target.value) })} placeholder="1 hour threshold in minutes" />
+            <input value={sundayBonus.fullClassMinutes ?? ''} onChange={e => setSundayBonus({ ...sundayBonus, fullClassMinutes: Number(e.target.value) })} placeholder="2 hour threshold in minutes" />
+            <input value={sundayBonus.partialBonusSp ?? ''} onChange={e => setSundayBonus({ ...sundayBonus, partialBonusSp: Number(e.target.value) })} placeholder="Partial bonus SP" />
+            <input value={sundayBonus.fullBonusSp ?? ''} onChange={e => setSundayBonus({ ...sundayBonus, fullBonusSp: Number(e.target.value) })} placeholder="Full bonus SP" />
+            <button className="primary" onClick={saveSundayBonus}>Save bonus settings</button>
+          </div>
+        </section>
+      )}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
   );
