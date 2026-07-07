@@ -12,7 +12,52 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
-import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel, legendTiers } from './services/levels.js';
+import {
+  computeStreak,
+  computeProgressBand,
+  computeWeeklyXp,
+  buildTimelineDots,
+} from './services/progress.js';
+import { buildWrappedStory } from './services/wrapped.js';
+import weeklyLeaderboardRouter from './routes/weeklyLeaderboard.js';
+import ghostRaceRouter from './routes/ghostRace.js';
+import { normalizeEmail, studentEmailFromRequest, resolveStudentEmail, setDevStudentCookie, clearDevStudentCookie } from './auth.js';
+
+
+function maskEmail(email = '') {
+  const [local, domain] = String(email).split('@');
+  if (!local) return email;
+  return local.slice(0, 2) + '***@' + (domain || '');
+}
+
+function publicStudent(student) {
+  return {
+    _id: String(student._id),
+    name: student.name,
+    maskedEmail: maskEmail(student.email),
+    maskedAlternateEmail: student.alternateEmail ? maskEmail(student.alternateEmail) : '',
+    status: student.status || 'active',
+    totalSp: student.totalSp
+  };
+}
+
+function monthRange(yyyyMM) {
+  const [y, m] = yyyyMM.split('-').map(Number);
+  return {
+    start: new Date(y, m - 1, 1),
+    end: new Date(y, m, 1),
+  };
+}
+
+function prevCompletedMonth() {
+  const now = new Date();
+  const y = now.getMonth() === 0
+    ? now.getFullYear() - 1 : now.getFullYear();
+  const m = now.getMonth() === 0
+    ? 12 : now.getMonth();
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -34,7 +79,7 @@ function makeSurvey(prefix, completedField) {
     formUrl: process.env[`${prefix}_FORM_URL`] || '',          // .../viewform  (the published form)
     emailEntryId: process.env[`${prefix}_EMAIL_ENTRY`] || '',  // e.g. entry.1234567890  (pre-fills email)
     // Mandatory: 'hard' = blocking modal the student cannot dismiss until they
-    // submit. No SP reward — participation is required, not incentivised.
+    // submit. No SP reward â€” participation is required, not incentivised.
     enforcement: process.env[`${prefix}_ENFORCEMENT`] || 'hard',
     // Auto-expiry. After this instant the modal stops showing (normal Spurti
     // resumes) with no redeploy. ISO 8601 incl. offset, e.g. 2026-06-30T23:59:59+05:30.
@@ -96,62 +141,7 @@ const liveViewers = new Map();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
 
-function maskEmail(email) {
-  const [name, domain] = String(email || '').split('@');
-  if (!name || !domain) return 'hidden email';
-  const start = name.slice(0, Math.min(2, name.length));
-  const end = name.length > 4 ? name.slice(-2) : '';
-  return `${start}${'*'.repeat(Math.max(3, name.length - start.length - end.length))}${end}@${domain}`;
-}
-
-function publicStudent(student) {
-  return {
-    _id: String(student._id),
-    name: student.name,
-    maskedEmail: maskEmail(student.email),
-    maskedAlternateEmail: student.alternateEmail ? maskEmail(student.alternateEmail) : '',
-    status: student.status || 'active',
-    totalSp: student.totalSp
-  };
-}
-
-function parseCookies(header = '') {
-  return Object.fromEntries(String(header).split(';').map(part => {
-    const index = part.indexOf('=');
-    if (index < 0) return null;
-    return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())];
-  }).filter(Boolean));
-}
-
-// Validate the student's Samagama session by forwarding their chatengine_token
-// cookie to Samagama's internal auth endpoint. Returns the email on success.
-async function getSamagamaUser(chatengineToken) {
-  if (!chatengineToken) return null;
-  try {
-    const res = await fetch(SAMAGAMA_AUTH_URL, {
-      headers: { cookie: `chatengine_token=${chatengineToken}` },
-      signal: AbortSignal.timeout(5000)
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-async function studentEmailFromRequest(req) {
-  const cookies = parseCookies(req.headers.cookie || '');
-  const data = await getSamagamaUser(cookies.chatengine_token);
-  // Samagama's /api/auth/me nests the user as { user: { email, ... } };
-  // fall back to a top-level email in case the shape ever flattens.
-  const email = data?.user?.email || data?.email;
-  if (!email) return null;
-  return normalizeEmail(email);
-}
 
 async function rankFor(email) {
   const student = await Student.findOne({ email }).lean();
@@ -178,13 +168,14 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents, sessions] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
+    Session.find().sort({ endDateTime: 1 }).lean()
   ]);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
@@ -192,7 +183,7 @@ async function studentPayload(student) {
   const top50Cutoff = allStudents[49]?.totalSp || null;
   const currentIndex = allStudents.findIndex(s => s.email === email);
   const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
-  // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
+  // Spurti Levels & Trophy Leagues â€” derived from existing SP (lifetime highest + current).
   const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
   const myGroup = leaderboardGroup(student.internshipStartDate);
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
@@ -204,6 +195,22 @@ async function studentPayload(student) {
     level: levelFor(Math.max(Number(row.highestSpEver) || 0, Number(row.totalSp) || 0)),
     isCurrentStudent: row.email === email
   });
+  const now = new Date();
+  const applicableSessions = sessions.filter(s =>
+    new Date(s.endDateTime) <= now &&
+    new Date(s.endDateTime) >=
+      new Date(student.internshipStartDate)
+  );
+  const attMap = Object.fromEntries(
+    attendance.map(r => [r.sessionLabel, r])
+  );
+  const qualifiedFlags = applicableSessions.map(s =>
+    !!(attMap[s.label]?.qualified)
+  );
+  const { currentStreak, longestStreak, freezesAvailable } = computeStreak(qualifiedFlags);
+  const { band, rate, trend } = computeProgressBand(qualifiedFlags);
+  const { weeklyXp } = computeWeeklyXp(transactions);
+  const streakTimeline = buildTimelineDots(qualifiedFlags);
   return {
     student: {
       _id: String(student._id),
@@ -220,12 +227,22 @@ async function studentPayload(student) {
       cohortSize: rankInfo?.cohortSize || null,
       highestSpEver,
       level: levelFor(highestSpEver),
+      levelProgress: highestSpEver % 100,
       trophyLeague: leagueBand(student.totalSp),
       legendBadgeUnlocked: legendBadge(highestSpEver),
+      legendTiers: legendTiers(highestSpEver),
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      poll2Completed: Boolean(student.poll2Completed),
+      currentStreak,
+      longestStreak,
+      streakFreezesAvailable: freezesAvailable,
+      progressBand: band,
+      progressRate: rate,
+      progressTrend: trend,
+      weeklyXp,
+      streakTimeline,
     },
     transactions,
     polls,
@@ -262,12 +279,105 @@ api.get('/config', (_req, res) => res.json({
 }));
 
 api.get('/me', async (req, res) => {
-  const email = await studentEmailFromRequest(req);
+  // Auth + dev impersonation: ?asEmail= wins, then real Samagama cookie,
+  // then a localhost-only fallback to dummy1 so the dev experience works
+  // out of the box without a Samagama cookie.
+  const email = await resolveStudentEmail(req);
   if (!email) return res.status(401).json({ authenticated: false });
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
-  if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
+  if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found', email });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
   res.json({ authenticated: true, profile: await studentPayload(student) });
+});
+
+api.get('/wrapped', async (req, res) => {
+  try {
+    // Auth + dev impersonation: ?asEmail= wins, then real Samagama cookie,
+    // then localhost default to dummy1.
+    const email = await resolveStudentEmail(req);
+    if (!email)
+      return res.status(401).json({ error: 'Unauthorized' });
+    const student = await Student.findOne({ email }).lean();
+    if (!student)
+      return res.status(404).json({ error: 'Not found' });
+    if (student.status === 'excused')
+      return res.status(403).json({ error: 'Account excused' });
+
+    const targetMonth = (
+      typeof req.query.month === 'string' &&
+      /^\d{4}-\d{2}$/.test(req.query.month)
+    ) ? req.query.month : prevCompletedMonth();
+
+    const { start, end } = monthRange(targetMonth);
+    const [y, m] = targetMonth.split('-').map(Number);
+    const monthLabel = new Date(y, m - 1, 1)
+      .toLocaleDateString('en-IN',
+        { month: 'long', year: 'numeric' });
+
+    if (new Date(student.internshipStartDate) >= end)
+      return res.json({ available: false, reason: 'no-data' });
+
+    const sessionsInMonth = await Session.find({
+      date: { $gte: start, $lt: end },
+    }).sort({ endDateTime: 1 }).lean();
+
+    const sessionLabels = sessionsInMonth.map(s => s.label);
+
+    const [attendanceInMonth, pollsInMonth, transactions] =
+      await Promise.all([
+        AttendanceRecord.find({
+          email,
+          sessionLabel: { $in: sessionLabels },
+        }).lean(),
+        PollRecord.find({
+          email,
+          sessionLabel: { $in: sessionLabels },
+        }).lean(),
+        SPTransaction.find({
+          email,
+          dateTime: { $gte: start, $lt: end },
+        }).lean(),
+      ]);
+
+    let streakInfo = null, progressInfo = null;
+    try {
+      const { computeStreak, computeProgressBand } =
+        await import('./services/progress.js');
+      const now = new Date();
+      const allSessions = await Session
+        .find().sort({ endDateTime: 1 }).lean();
+      const applicable = allSessions.filter(s =>
+        new Date(s.endDateTime) <= now &&
+        new Date(s.endDateTime) >=
+        new Date(student.internshipStartDate)
+      );
+      const allAtt = await AttendanceRecord
+        .find({ email }).lean();
+      const attMap = Object.fromEntries(
+        allAtt.map(r => [r.sessionLabel, r])
+      );
+      const flags = applicable.map(
+        s => !!(attMap[s.sessionLabel]?.qualified)
+      );
+      streakInfo = computeStreak(flags);
+      progressInfo = computeProgressBand(flags);
+    } catch (_) { /* progress.js absent â€” omit gracefully */ }
+
+    const joinedThisMonth =
+      new Date(student.internshipStartDate) >= start &&
+      new Date(student.internshipStartDate) < end;
+
+    const story = buildWrappedStory({
+      month: targetMonth, monthLabel, joinedThisMonth,
+      transactions, attendanceInMonth, sessionsInMonth,
+      pollsInMonth, student, streakInfo, progressInfo,
+    });
+
+    return res.json({ available: true, ...story });
+  } catch (err) {
+    console.error('[wrapped]', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
 });
 
 api.get('/search', async (req, res) => {
@@ -279,7 +389,10 @@ api.get('/search', async (req, res) => {
     const email = normalizeEmail(q);
     const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
     if (student?.status === 'excused') return res.json(excusedPayload(student));
-    if (student) return res.json({ exact: true, profile: await studentPayload(student) });
+    if (student) {
+      setDevStudentCookie(res, student.email);
+      return res.json({ exact: true, profile: await studentPayload(student) });
+    }
   }
 
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -304,6 +417,7 @@ api.post('/confirm', async (req, res) => {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
+  setDevStudentCookie(res, student.email);
   res.json(await studentPayload(student));
 });
 
@@ -321,6 +435,9 @@ api.get('/leaderboard', async (req, res) => {
     trophyLeague: leagueBand(s.totalSp)
   })));
 });
+api.use('/weekly-leaderboard', weeklyLeaderboardRouter);
+api.use('/ghost-race', ghostRaceRouter);
+
 
 api.post('/ping', async (req, res) => {
   const { email, name, page } = req.body || {};
@@ -342,7 +459,7 @@ api.post('/ping', async (req, res) => {
 
 // --- Survey triangulation (mandatory perception follow-up) ---------------
 // Mark a student's survey as completed for the given survey config. Idempotent;
-// matches on primary or alternate email. No SP is awarded — mandatory, not rewarded.
+// matches on primary or alternate email. No SP is awarded â€” mandatory, not rewarded.
 async function markSurveyComplete(email, cfg) {
   const normalized = normalizeEmail(email);
   if (!normalized) return null;
@@ -620,7 +737,34 @@ function last24Hours(now) {
 app.use('/api', api);
 app.use('/spurti/api', api);
 
+// Dev cache-busting: tell the browser to always revalidate HTML/JS/CSS so
+// new client builds show up on next refresh instead of getting served from cache.
+// Gated on NODE_ENV !== 'production' so production uses default caching.
+if (process.env.NODE_ENV !== 'production') {
+  app.use((_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+  });
+}
+
 if (fs.existsSync(clientDist)) {
+  // SPA fallback — also clears the devStudentEmail cookie so refreshing
+  // the page (or closing the browser) returns the user to the login screen.
+  // Must run BEFORE express.static so it fires for the index.html served
+  // from the dist folder.
+  if (process.env.NODE_ENV !== 'production') {
+    app.use((req, res, next) => {
+      if (req.method === 'GET' && req.accepts('html') &&
+          !req.path.startsWith('/api') &&
+          !/\.[a-zA-Z0-9]+$/.test(req.path)) {
+        clearDevStudentCookie(res);
+        res.setHeader('Cache-Control', 'no-store');
+      }
+      next();
+    });
+  }
   app.use('/spurti', express.static(clientDist));
   app.use(express.static(clientDist));
   app.get('/spurti/*', (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));

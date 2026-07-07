@@ -1,0 +1,10 @@
+import mongoose from 'mongoose';
+import Student from './server/models/Student.js';
+await mongoose.connect('mongodb://127.0.0.1:27017/analysis_summership');
+const dummyCount = await Student.countDocuments({ email: { $regex: /@spurti\.test$/i } });
+console.log('dummy count:', dummyCount);
+const total = await Student.countDocuments({});
+console.log('total students:', total);
+const aakarsh = await Student.findOne({ email: 'bahukhandiaakarsh@gmail.com' }).lean();
+console.log('aakarsh:', aakarsh ? { email: aakarsh.email, name: aakarsh.name, status: aakarsh.status } : 'NOT FOUND');
+process.exit(0);
