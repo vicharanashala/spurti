@@ -17,7 +17,7 @@ import Notification from './models/Notification.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import { getOrCreatePreferences, notify } from './services/notifications.js';
 import { computeStreak } from './services/streaks.js';
-import { appendTransaction } from './services/spLedger.js';
+import { appendTransaction, logTransaction } from './services/spLedger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -338,14 +338,14 @@ api.post('/streak-freeze/buy', async (req, res) => {
     return res.status(400).json({ error: 'Not enough SP to buy a streak freeze' });
   }
 
-  await appendTransaction(
+  await logTransaction(
     email,
     'streakFreeze',
     '',
     new Date(),
     -STREAK_FREEZE_COST_SP,
     'Purchased a streak freeze',
-    student.totalSp + STREAK_FREEZE_COST_SP
+    student.totalSp
   ).catch(() => {});
 
   res.json({ streakFreezesAvailable: student.streakFreezesAvailable, totalSp: student.totalSp });
