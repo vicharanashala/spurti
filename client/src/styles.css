@@ -514,3 +514,155 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* ── Progress band colour hooks ──────────────────── */
+.band-excellent strong { color: var(--green); }
+.band-active strong { color: var(--primary); }
+.band-slowing-down strong { color: var(--amber); }
+.band-recovery strong { color: var(--red); }
+
+/* ── XP progress bar ─────────────────────────────── */
+.xp-bar-wrap {
+ height: 6px;
+ background: var(--line);
+ border-radius: 99px;
+ overflow: hidden;
+ margin: 6px 0 4px;
+ width: 100%;
+}
+.xp-bar-fill {
+ height: 100%;
+ background: linear-gradient(90deg, var(--primary), var(--green));
+ border-radius: 99px;
+ transition: width 0.5s ease;
+ min-width: 0%;
+ max-width: 100%;
+}
+.xp-weekly {
+ font-size: 11px;
+ color: var(--muted);
+ display: block;
+ margin-top: 2px;
+}
+
+/* ── Streak timeline dots ────────────────────────── */
+.streak-dots {
+ display: flex;
+ gap: 4px;
+ flex-wrap: wrap;
+ margin-top: 8px;
+}
+.streak-dot {
+ display: inline-block;
+ width: 10px;
+ height: 10px;
+ border-radius: 50%;
+ flex-shrink: 0;
+}
+.dot-qualified { background: var(--green); }
+.dot-missed { background: var(--red); }
+
+
+/* ── Tile icons + labels (Level, Trophy, Legend, Group, Band) ── */
+.tile-icon {
+  display: inline-block;
+  width: 1.3em;
+  height: 1.3em;
+  margin-right: 4px;
+  vertical-align: -0.20em;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.15));
+}
+
+/* ── Legend Badge tier row (4 small medals, colored when unlocked) ── */
+.tier-badge-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  margin: 4px 0 6px 0;
+  flex-wrap: wrap;
+}
+.tier-badge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  font-size: 0.78em;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.tier-badge .tier-badge-icon {
+  width: 1.7em;
+  height: 1.7em;
+  display: block;
+}
+.tier-badge small {
+  font-size: 0.78em;
+  letter-spacing: 0.02em;
+}
+.tier-badge-on {
+  filter: drop-shadow(0 1px 0 rgba(0,0,0,0.10));
+}
+.tier-badge-off {
+  opacity: 0.45;
+  filter: saturate(0.4);
+}
+.tier-badge-off small {
+  color: var(--muted, #6b7280);
+}
+/* ── Streak flame icon (static, photo-realistic) ── */
+.streak-flame {
+  display: inline-block;
+  width: 1.3em;
+  height: 1.3em;
+  margin-right: 4px;
+  vertical-align: -0.15em;
+  filter: drop-shadow(0 1px 0 rgba(127, 29, 29, 0.25));
+}
+.streak-tile.streak-hot .streak-flame {
+  width: 1.5em;
+  height: 1.5em;
+  filter: drop-shadow(0 0 4px rgba(255, 120, 30, 0.55));
+}
+.streak-tile.streak-cold .streak-flame {
+  width: 1.3em;
+  height: 1.3em;
+  filter: drop-shadow(0 1px 0 rgba(127, 29, 29, 0.25)) saturate(0.85);
+}
+
+/* ── Progress Band icon (large, sits before the band word — mirrors streak flame pattern) ── */
+.level-tile.band .tile-icon,
+.level-tile.band svg.tile-icon {
+  width: 2.0em;
+  height: 2.0em;
+  margin-right: 6px;
+  vertical-align: -0.30em;
+}
+.level-tile.band > strong {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.1;
+}
+
+
+/* ── SP currency coin (top score card + wherever SP appears) ── */
+.sp-coin {
+  display: inline-block;
+  width: 1.2em;
+  height: 1.2em;
+  margin-right: 4px;
+  vertical-align: -0.18em;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.15));
+}
+.sp-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  line-height: 1;
+}
+.score-card .sp-coin {
+  width: 1.5em;
+  height: 1.5em;
+  vertical-align: -0.25em;
+}

@@ -12,7 +12,13 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
-import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel, legendTiers } from './services/levels.js';
+import {
+  computeStreak,
+  computeProgressBand,
+  computeWeeklyXp,
+  buildTimelineDots,
+} from './services/progress.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -178,13 +184,14 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents, sessions] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
+    Session.find().sort({ endDateTime: 1 }).lean()
   ]);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
@@ -204,6 +211,22 @@ async function studentPayload(student) {
     level: levelFor(Math.max(Number(row.highestSpEver) || 0, Number(row.totalSp) || 0)),
     isCurrentStudent: row.email === email
   });
+  const now = new Date();
+  const applicableSessions = sessions.filter(s =>
+    new Date(s.endDateTime) <= now &&
+    new Date(s.endDateTime) >=
+      new Date(student.internshipStartDate)
+  );
+  const attMap = Object.fromEntries(
+    attendance.map(r => [r.sessionLabel, r])
+  );
+  const qualifiedFlags = applicableSessions.map(s =>
+    !!(attMap[s.label]?.qualified)
+  );
+  const { currentStreak, longestStreak, freezesAvailable } = computeStreak(qualifiedFlags);
+  const { band, rate, trend } = computeProgressBand(qualifiedFlags);
+  const { weeklyXp } = computeWeeklyXp(transactions);
+  const streakTimeline = buildTimelineDots(qualifiedFlags);
   return {
     student: {
       _id: String(student._id),
@@ -220,12 +243,22 @@ async function studentPayload(student) {
       cohortSize: rankInfo?.cohortSize || null,
       highestSpEver,
       level: levelFor(highestSpEver),
+      levelProgress: highestSpEver % 100,
       trophyLeague: leagueBand(student.totalSp),
       legendBadgeUnlocked: legendBadge(highestSpEver),
+      legendTiers: legendTiers(highestSpEver),
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      poll2Completed: Boolean(student.poll2Completed),
+      currentStreak,
+      longestStreak,
+      streakFreezesAvailable: freezesAvailable,
+      progressBand: band,
+      progressRate: rate,
+      progressTrend: trend,
+      weeklyXp,
+      streakTimeline,
     },
     transactions,
     polls,
@@ -262,6 +295,15 @@ api.get('/config', (_req, res) => res.json({
 }));
 
 api.get('/me', async (req, res) => {
+  // Dev override: ?asEmail=... impersonates a student without Samagama auth.
+  // Gated on NODE_ENV !== 'production' so it's auto-disabled in prod.
+  if (process.env.NODE_ENV !== 'production' && req.query.asEmail) {
+    const asEmail = String(req.query.asEmail).toLowerCase().trim();
+    const student = await Student.findOne({ $or: [{ email: asEmail }, { alternateEmail: asEmail }] }).lean();
+    if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found', email: asEmail });
+    if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
+    return res.json({ authenticated: true, profile: await studentPayload(student) });
+  }
   const email = await studentEmailFromRequest(req);
   if (!email) return res.status(401).json({ authenticated: false });
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
@@ -619,6 +661,18 @@ function last24Hours(now) {
 
 app.use('/api', api);
 app.use('/spurti/api', api);
+
+// Dev cache-busting: tell the browser to always revalidate HTML/JS/CSS so
+// new client builds show up on next refresh instead of getting served from cache.
+// Gated on NODE_ENV !== 'production' so production uses default caching.
+if (process.env.NODE_ENV !== 'production') {
+  app.use((_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+  });
+}
 
 if (fs.existsSync(clientDist)) {
   app.use('/spurti', express.static(clientDist));
