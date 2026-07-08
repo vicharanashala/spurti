@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { validateExcusePayload, buildExcusePatch, buildExcuseResponse } from './services/excuse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -466,6 +467,34 @@ api.get('/admin/student/:id', adminGuard, async (req, res) => {
   const student = await Student.findById(req.params.id).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await studentPayload(student));
+});
+
+// Excuse a student (sets status='excused', excusedAt, excusedReason).
+// Body: { reason: "..." }. Returns the updated student summary.
+api.post('/admin/student/:id/excuse', adminGuard, async (req, res) => {
+  const v = validateExcusePayload(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const patch = buildExcusePatch('excuse', v.reason);
+  const student = await Student.findByIdAndUpdate(
+    req.params.id,
+    { $set: patch },
+    { new: true }
+  ).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  res.json(buildExcuseResponse('excuse', student));
+});
+
+// Restore an excused student to active (clears excusedAt + excusedReason).
+// No body needed. Idempotent — calling on an already-active student is a no-op.
+api.post('/admin/student/:id/activate', adminGuard, async (req, res) => {
+  const patch = buildExcusePatch('activate', '');
+  const student = await Student.findByIdAndUpdate(
+    req.params.id,
+    { $set: patch },
+    { new: true }
+  ).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  res.json(buildExcuseResponse('activate', student));
 });
 
 api.get('/admin/active', adminGuard, (_req, res) => {

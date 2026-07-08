@@ -514,3 +514,72 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* Admin Excuse Flow (feature/admin-excuse-flow) */
+.admin-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  background: #fbfdff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.admin-actions-row .muted { font-size: 12px; }
+.admin-actions-row .error { font-size: 12px; color: var(--red); margin-left: auto; }
+.admin-status-badge {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+.admin-status-badge.excused {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.award-form {
+  display: grid;
+  gap: 14px;
+}
+.award-field {
+  display: grid;
+  gap: 6px;
+}
+.award-field > span:first-child {
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.award-field textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+.award-note {
+  font-size: 12px;
+  color: var(--muted);
+  background: #fef9ec;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0;
+}
+.award-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}

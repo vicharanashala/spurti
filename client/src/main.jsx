@@ -514,6 +514,10 @@ function AdminView({ admin, auth, onBack }) {
   const [analytics, setAnalytics] = useState(null);
   const [stats, setStats] = useState(null);
   const [studentProfile, setStudentProfile] = useState(null);
+  const [excuseOpen, setExcuseOpen] = useState(false);
+  const [excuseReason, setExcuseReason] = useState('');
+  const [excusing, setExcusing] = useState(false);
+  const [excuseError, setExcuseError] = useState('');
 
   const headers = adminHeaders(auth);
 
@@ -548,6 +552,50 @@ function AdminView({ admin, auth, onBack }) {
   const loadAnalytics = async () => {
     const res = await fetch(`${API}/admin/analytics`, { headers });
     setAnalytics(await res.json());
+  };
+
+  const submitExcuse = async () => {
+    if (!studentProfile) return;
+    setExcusing(true);
+    setExcuseError('');
+    try {
+      if (!excuseReason.trim()) throw new Error('reason is required');
+      const res = await fetch(`${API}/admin/student/${studentProfile.student._id}/excuse`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: excuseReason.trim() })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      // Refresh the full profile so the new status, excusedAt, excusedReason flow through.
+      await loadStudent(studentProfile.student._id);
+      setExcuseOpen(false);
+      setExcuseReason('');
+    } catch (err) {
+      setExcuseError(err.message);
+    } finally {
+      setExcusing(false);
+    }
+  };
+
+  const submitActivate = async () => {
+    if (!studentProfile) return;
+    if (!window.confirm('Restore this student to active? They will re-enter cohort scoring.')) return;
+    setExcusing(true);
+    setExcuseError('');
+    try {
+      const res = await fetch(`${API}/admin/student/${studentProfile.student._id}/activate`, {
+        method: 'POST',
+        headers
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      await loadStudent(studentProfile.student._id);
+    } catch (err) {
+      setExcuseError(err.message);
+    } finally {
+      setExcusing(false);
+    }
   };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
@@ -593,7 +641,72 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
-      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
+      {studentProfile && (
+        <div className="overlay">
+          <section className="modal wide">
+            <div className="modal-head">
+              <h2>{studentProfile.student.name} — {studentProfile.student.totalSp} SP</h2>
+              <button className="icon" onClick={() => setStudentProfile(null)}>x</button>
+            </div>
+            <div className="admin-actions-row">
+              {studentProfile.student.status === 'excused' ? (
+                <>
+                  <span className="admin-status-badge excused">Excused</span>
+                  <span className="muted">Last set: {studentProfile.student.excusedAt
+                    ? new Date(studentProfile.student.excusedAt).toLocaleString()
+                    : 'unknown'}
+                  </span>
+                  <button className="secondary" onClick={submitActivate} disabled={excusing}>
+                    {excusing ? 'Working…' : 'Restore to active'}
+                  </button>
+                </>
+              ) : (
+                <button className="secondary" onClick={() => { setExcuseOpen(true); setExcuseError(''); }}>
+                  Excuse student
+                </button>
+              )}
+              {excuseError && <span className="error">{excuseError}</span>}
+            </div>
+            <SpBank transactions={studentProfile.transactions} />
+          </section>
+        </div>
+      )}
+      {excuseOpen && studentProfile && (
+        <div className="overlay">
+          <section className="modal">
+            <div className="modal-head">
+              <h2>Excuse {studentProfile.student.name}</h2>
+              <button className="icon" onClick={() => setExcuseOpen(false)}>x</button>
+            </div>
+            <div className="award-form">
+              <label className="award-field">
+                <span>Reason (visible to the student as their "excused" status note)</span>
+                <textarea
+                  value={excuseReason}
+                  onChange={e => setExcuseReason(e.target.value)}
+                  placeholder="e.g. Medical leave for the next 2 weeks, family emergency, exam conflict"
+                  rows={3}
+                  maxLength={500}
+                  autoFocus
+                />
+              </label>
+              <p className="award-note">
+                <strong>Effect:</strong> excusing sets status='excused', excusedAt=now,
+                excusedReason=reason. Excused students are excluded from cohort scoring,
+                leaderboards, and analytics. Their admin award/deduct history is preserved.
+              </p>
+              <div className="award-actions">
+                <button className="primary" onClick={submitExcuse} disabled={excusing || !excuseReason.trim()}>
+                  {excusing ? 'Excusing…' : 'Excuse student'}
+                </button>
+                <button className="secondary" onClick={() => setExcuseOpen(false)} disabled={excusing}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
