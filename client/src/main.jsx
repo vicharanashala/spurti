@@ -279,7 +279,8 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['marketplace','Redeem SP']]} />
+      {tab === 'marketplace' && <Marketplace student={profile.student} />}
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
@@ -501,6 +502,65 @@ function Leaderboard({ rows }) {
         <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>SP</th></tr></thead>
         <tbody>{rows.map(row => <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}><td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.totalSp}</td></tr>)}</tbody>
       </table>
+    </section>
+  );
+}
+
+const REWARD_CATALOG = [
+  { id: 'resume-review', title: 'Resume Review', description: 'One-on-one resume review with a mentor.', cost: 150 },
+  { id: 'swag-kit', title: 'Spurti Swag Kit', description: 'T-shirt, sticker pack, and notebook.', cost: 100 },
+  { id: 'course-discount', title: 'Course Discount Code', description: '20% off a partner course of your choice.', cost: 200 },
+  { id: 'priority-mentor', title: 'Priority Mentor Session', description: '30-minute 1:1 session with a senior mentor.', cost: 250 },
+];
+
+function Marketplace({ student }) {
+  const [status, setStatus] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const redeem = async (reward) => {
+    if (student.totalSp < reward.cost) {
+      setStatus(`You need ${reward.cost - student.totalSp} more SP to redeem this.`);
+      return;
+    }
+    setSubmitting(true);
+    setStatus('');
+    try {
+      const res = await fetch(`${API}/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: student.email, rewardId: reward.id, cost: reward.cost })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Redemption failed');
+      setStatus(`Redeemed "${reward.title}"! Our team will reach out via email with next steps.`);
+    } catch (err) {
+      setStatus(err.message || 'Something went wrong. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <h2>Redeem Your SP</h2>
+      <p className="muted">You have <strong>{student.totalSp} SP</strong> available to redeem.</p>
+      <div className="cards">
+        {REWARD_CATALOG.map(reward => (
+          <article className="card" key={reward.id}>
+            <strong>{reward.title}</strong>
+            <p>{reward.description}</p>
+            <span>{reward.cost} SP</span>
+            <button
+              className="primary"
+              disabled={submitting || student.totalSp < reward.cost}
+              onClick={() => redeem(reward)}
+            >
+              {student.totalSp < reward.cost ? 'Not enough SP' : 'Redeem'}
+            </button>
+          </article>
+        ))}
+      </div>
+      {status && <p className="muted">{status}</p>}
     </section>
   );
 }
