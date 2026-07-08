@@ -514,6 +514,12 @@ function AdminView({ admin, auth, onBack }) {
   const [analytics, setAnalytics] = useState(null);
   const [stats, setStats] = useState(null);
   const [studentProfile, setStudentProfile] = useState(null);
+  const [awardOpen, setAwardOpen] = useState(false);
+  const [awardMode, setAwardMode] = useState('absolute'); // 'absolute' | 'percentage'
+  const [awardAmount, setAwardAmount] = useState('');
+  const [awardReason, setAwardReason] = useState('');
+  const [awarding, setAwarding] = useState(false);
+  const [awardError, setAwardError] = useState('');
 
   const headers = adminHeaders(auth);
 
@@ -548,6 +554,54 @@ function AdminView({ admin, auth, onBack }) {
   const loadAnalytics = async () => {
     const res = await fetch(`${API}/admin/analytics`, { headers });
     setAnalytics(await res.json());
+  };
+
+  const submitAward = async () => {
+    if (!studentProfile) return;
+    setAwarding(true);
+    setAwardError('');
+    try {
+      const amount = Number(awardAmount);
+      if (!Number.isInteger(amount) || amount <= 0) {
+        throw new Error('amount must be a positive integer');
+      }
+      if (!awardReason.trim()) {
+        throw new Error('reason is required');
+      }
+      const body = { delta: amount, reason: awardReason.trim() };
+      if (awardMode === 'percentage') body.deltaMode = 'percentage';
+      const res = await fetch(`${API}/admin/student/${studentProfile.student._id}/award`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      // Update the local profile in place so the new balance reflects immediately.
+      setStudentProfile(prev => prev && {
+        ...prev,
+        student: { ...prev.student, totalSp: data.transaction.balanceAfter },
+        transactions: [
+          {
+            _id: data.transaction._id,
+            category: 'manual',
+            appliedDelta: data.transaction.appliedDelta,
+            balanceAfter: data.transaction.balanceAfter,
+            reason: data.transaction.reason,
+            dateTime: data.transaction.dateTime,
+            sessionLabel: ''
+          },
+          ...(prev.transactions || [])
+        ]
+      });
+      setAwardOpen(false);
+      setAwardAmount('');
+      setAwardReason('');
+    } catch (err) {
+      setAwardError(err.message);
+    } finally {
+      setAwarding(false);
+    }
   };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
@@ -593,7 +647,94 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
-      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
+      {studentProfile && (
+        <div className="overlay">
+          <section className="modal wide">
+            <div className="modal-head">
+              <h2>{studentProfile.student.name} — {studentProfile.student.totalSp} SP</h2>
+              <button className="icon" onClick={() => setStudentProfile(null)}>x</button>
+            </div>
+            <div className="admin-actions-row">
+              <button className="primary" onClick={() => { setAwardOpen(true); setAwardError(''); }}>
+                Award SP
+              </button>
+              <span className="muted">Private admin action — student sees no notification</span>
+            </div>
+            <SpBank transactions={studentProfile.transactions} />
+          </section>
+        </div>
+      )}
+      {awardOpen && studentProfile && (
+        <div className="overlay">
+          <section className="modal">
+            <div className="modal-head">
+              <h2>Award SP to {studentProfile.student.name}</h2>
+              <button className="icon" onClick={() => setAwardOpen(false)}>x</button>
+            </div>
+            <div className="award-form">
+              <label className="award-field">
+                <span>Mode</span>
+                <div className="award-mode-toggle">
+                  <button
+                    className={awardMode === 'absolute' ? 'primary' : 'secondary'}
+                    onClick={() => setAwardMode('absolute')}
+                    type="button"
+                  >Fixed SP (+)</button>
+                  <button
+                    className={awardMode === 'percentage' ? 'primary' : 'secondary'}
+                    onClick={() => setAwardMode('percentage')}
+                    type="button"
+                  >% of current balance</button>
+                </div>
+              </label>
+              <label className="award-field">
+                <span>
+                  {awardMode === 'percentage'
+                    ? `Percentage (1-${100})`
+                    : 'Amount (SP, positive integer)'}
+                </span>
+                <input
+                  type="number"
+                  min={awardMode === 'percentage' ? 1 : 1}
+                  max={awardMode === 'percentage' ? 100 : 1_000_000}
+                  value={awardAmount}
+                  onChange={e => setAwardAmount(e.target.value)}
+                  placeholder={awardMode === 'percentage' ? 'e.g. 10 (= 10%)' : 'e.g. 5'}
+                  autoFocus
+                />
+                {awardMode === 'percentage' && studentProfile && (
+                  <span className="muted award-preview">
+                    Preview: +{Math.floor((studentProfile.student.totalSp * Number(awardAmount || 0)) / 100)} SP
+                  </span>
+                )}
+              </label>
+              <label className="award-field">
+                <span>Reason (visible in student's ledger)</span>
+                <textarea
+                  value={awardReason}
+                  onChange={e => setAwardReason(e.target.value)}
+                  placeholder="e.g. Outstanding presentation on Day 12"
+                  rows={3}
+                  maxLength={500}
+                />
+              </label>
+              {awardMode === 'percentage' && studentProfile && (
+                <p className="award-note">
+                  <strong>Note:</strong> percentage is rounded down to the nearest integer so admins never accidentally over-credit.
+                  e.g. 10% of 145 = 14 SP (not 14.5).
+                </p>
+              )}
+              <div className="award-actions">
+                <button className="primary" onClick={submitAward} disabled={awarding}>
+                  {awarding ? 'Awarding…' : `Award ${awardMode === 'percentage' ? `${awardAmount || 0}%` : `+${awardAmount || 0} SP`}`}
+                </button>
+                <button className="secondary" onClick={() => setAwardOpen(false)} disabled={awarding}>Cancel</button>
+                {awardError && <span className="error">{awardError}</span>}
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

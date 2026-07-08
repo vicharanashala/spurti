@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { validateAwardPayload, computeAppliedDelta, buildAwardReason } from './services/adminAward.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -466,6 +467,50 @@ api.get('/admin/student/:id', adminGuard, async (req, res) => {
   const student = await Student.findById(req.params.id).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await studentPayload(student));
+});
+
+// Award SP to a student. Admin-only. Two modes:
+//   - absolute:  { delta: 10, reason: "..." }  -> +10 SP
+//   - percentage:{ delta: 10, reason: "...", deltaMode: "percentage" } -> 10% of current balance
+// Creates an SPTransaction with category='manual' and atomically increments
+// Student.totalSp via $inc. Returns the new balance + transaction.
+api.post('/admin/student/:id/award', adminGuard, async (req, res) => {
+  const student = await Student.findById(req.params.id);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (student.status === 'excused') {
+    return res.status(400).json({ error: 'Cannot award SP to an excused student' });
+  }
+  const v = validateAwardPayload(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const appliedDelta = computeAppliedDelta(v, student.totalSp);
+  if (appliedDelta <= 0) {
+    return res.status(400).json({ error: 'Computed award is 0 (balance is 0 or percentage rounds to 0)' });
+  }
+  const reason = buildAwardReason(v.deltaMode, v.delta, v.reason);
+  const now = new Date();
+  const [txn] = await SPTransaction.create([{
+    email: student.email,
+    studentId: student._id,
+    category: 'manual',
+    sessionLabel: '',
+    deltaMode: v.deltaMode,
+    deltaValue: v.delta,
+    appliedDelta,
+    balanceAfter: student.totalSp + appliedDelta,
+    reason,
+    dateTime: now
+  }]);
+  await Student.updateOne({ _id: student._id }, { $inc: { totalSp: appliedDelta } });
+  res.json({
+    ok: true,
+    transaction: {
+      _id: txn._id,
+      appliedDelta,
+      balanceAfter: student.totalSp + appliedDelta,
+      reason,
+      dateTime: now
+    }
+  });
 });
 
 api.get('/admin/active', adminGuard, (_req, res) => {
