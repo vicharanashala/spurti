@@ -264,7 +264,7 @@ function StudentView({ profile, onBack }) {
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'chats' && <Chats chats={profile.chats} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
-      {tab === 'leaderboard' && <Leaderboard rows={profile.leaderboard} />}
+      {tab === 'leaderboard' && <Leaderboard rows={profile.leaderboard} neighbors={profile.neighbors} student={profile.student} />}
       {tab === 'event' && <InvestmentEventTab email={profile.student.email} profile={profile} />}
     </main>
   );
@@ -439,14 +439,32 @@ function Polls({ polls }) {
   );
 }
 
-function Leaderboard({ rows }) {
+function Leaderboard({ rows, neighbors = [], student }) {
+  const renderRow = row => (
+    <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
+      <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.totalSp}</td>
+    </tr>
+  );
+  const inTop50 = student && student.rank && student.rank <= 50;
   return (
     <section className="panel">
       <h2>Top 50 Leaderboard</h2>
       <table className="table">
         <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>SP</th></tr></thead>
-        <tbody>{rows.map(row => <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}><td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.totalSp}</td></tr>)}</tbody>
+        <tbody>{rows.map(renderRow)}</tbody>
       </table>
+      {student && student.rank && (
+        <div className="your-standing">
+          <h3>Your Standing</h3>
+          <p>You are <strong>Rank {student.rank}</strong> with <strong>{student.totalSp} SP</strong>{inTop50 ? ' — you are in the Top 50.' : '.'}</p>
+        </div>
+      )}
+      {neighbors.length > 0 && !inTop50 && (
+        <table className="table">
+          <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>SP</th></tr></thead>
+          <tbody>{neighbors.map(renderRow)}</tbody>
+        </table>
+      )}
     </section>
   );
 }

@@ -320,6 +320,8 @@ input {
 }
 .table tbody tr:hover { background: #f5fbfd; }
 .table tr.current-student { background: #e9f7ee; font-weight: 850; }
+.your-standing { margin: 1rem 0 0.5rem; }
+.your-standing h3 { margin: 0 0 0.25rem; }
 .matrix-wrap { overflow-x: auto; }
 .matrix th, .matrix td { white-space: nowrap; }
 .ok-cell { background: #dcfce7; color: var(--green); font-weight: 800; }

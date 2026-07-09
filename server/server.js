@@ -143,6 +143,15 @@ async function studentPayload(student) {
   const top50Cutoff = allStudents[49]?.totalSp || null;
   const currentIndex = allStudents.findIndex(s => s.email === email);
   const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
+  const neighborStart = currentIndex === -1 ? 0 : Math.max(0, currentIndex - 3);
+  const neighborEnd = currentIndex === -1 ? 0 : Math.min(allStudents.length, currentIndex + 4);
+  const neighbors = allStudents.slice(neighborStart, neighborEnd).map((row, offset) => ({
+    rank: neighborStart + offset + 1,
+    name: row.name,
+    maskedEmail: maskEmail(row.email),
+    totalSp: row.totalSp,
+    isCurrentStudent: row.email === email
+  }));
   return {
     student: {
       _id: String(student._id),
@@ -175,7 +184,8 @@ async function studentPayload(student) {
       maskedEmail: maskEmail(row.email),
       totalSp: row.totalSp,
       isCurrentStudent: row.email === email
-    }))
+    })),
+    neighbors
   };
 }
 
