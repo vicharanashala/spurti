@@ -862,6 +862,7 @@ function SquadView({ studentEmail, profile }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [confirmLeave, setConfirmLeave] = useState(false);
+  const [leaveError, setLeaveError] = useState("");
 
   const API = `${window.location.pathname.startsWith("/spurti") ? "/spurti" : ""}/api`;
 
@@ -924,7 +925,7 @@ function SquadView({ studentEmail, profile }) {
   }
 
   async function handleLeave() {
-    setError("");
+    setLeaveError("");
     try {
       const body = {};
       const sid = profile?.student?._id;
@@ -932,12 +933,12 @@ function SquadView({ studentEmail, profile }) {
       if (sid && em) { body.studentId = sid; body.email = em; }
       const res = await fetch(`${API}/squad/leave`, { method: "POST", credentials: 'same-origin', headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = await res.json();
-      if (!res.ok) { setError(data.error); return; }
+      if (!res.ok) { setLeaveError(data.error); return; }
       setSquad(null);
       setConfirmLeave(false);
       setSuccess("Left squad");
       setTimeout(() => setSuccess(""), 3000);
-    } catch (e) { setError("Network error"); }
+    } catch (e) { setLeaveError("Network error"); }
   }
 
   async function handleSearch(q) {
@@ -1152,13 +1153,14 @@ function SquadView({ studentEmail, profile }) {
           )}
 
           {confirmLeave && (
-            <div className="overlay" onClick={() => setConfirmLeave(false)}>
+            <div className="overlay" onClick={() => { setConfirmLeave(false); setLeaveError(""); }}>
               <div className="modal" onClick={e => e.stopPropagation()}>
                 <h3>Leave Squad?</h3>
                 <p>Are you sure you want to leave {squad.name}?</p>
+                {leaveError && <p className="error" style={{marginTop:8}}>{leaveError}</p>}
                 <div style={{display:"flex",gap:8,marginTop:12}}>
                   <button className="primary" onClick={handleLeave}>Yes, Leave</button>
-                  <button className="secondary" onClick={() => setConfirmLeave(false)}>Cancel</button>
+                  <button className="secondary" onClick={() => { setConfirmLeave(false); setLeaveError(""); }}>Cancel</button>
                 </div>
               </div>
             </div>
