@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { computePulse } from './services/pulse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -178,13 +179,14 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents, sessions] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
+    Session.find({}).sort({ endDateTime: -1 }).limit(60).lean()
   ]);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
@@ -230,6 +232,10 @@ async function studentPayload(student) {
     transactions,
     polls,
     attendance,
+    // 5-Day Pulse: a student-facing engagement tracker that surfaces
+    // weekly attendance + poll %, current streak, projected weekly SP,
+    // and recovery actions when at risk. Pure derived view; no schema.
+    pulse: computePulse({ now: new Date(), transactions, attendance, polls, sessions }),
     cohort: {
       averageSp,
       top10Cutoff,

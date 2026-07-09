@@ -187,6 +187,132 @@ input {
   padding: 20px;
   margin-bottom: 18px;
 }
+/* 5-Day Pulse (feature/five-day-pulse) */
+.pulse-widget {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 18px 20px;
+  margin-bottom: 18px;
+}
+.pulse-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.pulse-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pulse-emoji { font-size: 16px; }
+.pulse-status-badge {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border: 1px solid;
+  border-radius: 999px;
+}
+.pulse-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.pulse-metric {
+  background: #fbfdff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pulse-metric-value {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--primary);
+  font-family: ui-monospace, monospace;
+}
+.pulse-metric-value.pulse-streak { color: #ea580c; }
+.pulse-metric-value.pulse-projection { color: var(--green); }
+.pulse-metric-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.pulse-metric-sub {
+  font-size: 10px;
+  color: var(--muted);
+}
+.pulse-streak-callout {
+  background: linear-gradient(180deg, #fff7ed 0%, #fef3c7 100%);
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #92400e;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+.pulse-streak-callout strong { color: #9a3412; }
+.pulse-recovery {
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+.pulse-recovery-info {
+  background: #fef9ec;
+  border: 1px solid #fde68a;
+  color: #92400e;
+}
+.pulse-recovery-warning {
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+}
+.pulse-recovery-critical {
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+}
+.pulse-action {
+  display: inline-block;
+  margin-left: 8px;
+  background: #fff;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+.pulse-action:hover { background: var(--primary); color: #fff; }
+.pulse-foot {
+  font-size: 12px;
+  color: var(--green);
+  font-weight: 700;
+  text-align: center;
+  padding-top: 6px;
+}
+@media (max-width: 720px) {
+  .pulse-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* Spurti Levels & Trophy Leagues */
 .level-status {
   background: var(--panel);

@@ -278,6 +278,7 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
+      <PulseWidget pulse={profile.pulse} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
@@ -343,6 +344,87 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
           </tr>
         ))}</tbody>
       </table>
+    </section>
+  );
+}
+
+function PulseWidget({ pulse }) {
+  if (!pulse) return null;
+  const { fiveDay, streak, status, projection, recovery, earningWeeklyBonus } = pulse;
+
+  // Status badge config
+  const statusConfig = {
+    'on-track':       { label: 'On Track',            color: '#12805c', bg: '#dcfce7', border: '#86efac', emoji: '🟢' },
+    'recovering':     { label: 'Close to On Track',   color: '#a15c07', bg: '#fef3c7', border: '#fde68a', emoji: '🟡' },
+    'at-risk':        { label: 'At Risk',              color: '#b45309', bg: '#fed7aa', border: '#fdba74', emoji: '🟠' },
+    'fallen-behind':  { label: 'Falling Behind',       color: '#b42318', bg: '#fee2e2', border: '#fca5a5', emoji: '🔴' },
+    'no-data':        { label: 'Not Enough Data',      color: '#64748b', bg: '#f1f5f9', border: '#cbd5e1', emoji: '⚪' }
+  };
+  const sc = statusConfig[status] || statusConfig['no-data'];
+
+  return (
+    <section className="pulse-widget" aria-label="5-day pulse">
+      <div className="pulse-header">
+        <span className="pulse-title">
+          <span className="pulse-emoji">{sc.emoji}</span>
+          5-Day Pulse
+        </span>
+        <span
+          className="pulse-status-badge"
+          style={{ color: sc.color, background: sc.bg, borderColor: sc.border }}
+        >{sc.label}</span>
+      </div>
+
+      <div className="pulse-metrics">
+        <div className="pulse-metric">
+          <span className="pulse-metric-value">{fiveDay.attendancePct ?? '—'}%</span>
+          <span className="pulse-metric-label">Attendance</span>
+          <span className="pulse-metric-sub">last 5 days</span>
+        </div>
+        <div className="pulse-metric">
+          <span className="pulse-metric-value">{fiveDay.pollPct ?? '—'}%</span>
+          <span className="pulse-metric-label">Polls</span>
+          <span className="pulse-metric-sub">last 5 days</span>
+        </div>
+        <div className="pulse-metric">
+          <span className="pulse-metric-value pulse-streak">
+            {streak.currentStreak > 0 ? '🔥 ' + streak.currentStreak : '—'}
+          </span>
+          <span className="pulse-metric-label">Week Streak</span>
+          <span className="pulse-metric-sub">consecutive 90%+ weeks</span>
+        </div>
+        <div className="pulse-metric">
+          <span className="pulse-metric-value pulse-projection">
+            {projection.total > 0 ? '+' + projection.total : '0'}
+          </span>
+          <span className="pulse-metric-label">Projected SP</span>
+          <span className="pulse-metric-sub">
+            {projection.onStreak ? 'this week' : 'at your pace'}
+          </span>
+        </div>
+      </div>
+
+      {projection.onStreak && (
+        <div className="pulse-streak-callout">
+          <strong>🔥 You're on a streak.</strong> At 90%+ both for 7 days,
+          each day earns <strong>+{projection.daily} SP</strong> instead of +{projection.daily - 10},
+          plus a <strong>+{projection.bonus} SP weekly bonus</strong> at end of week.
+          That's <strong>+{projection.total} SP this week</strong>.
+        </div>
+      )}
+
+      {recovery && (
+        <div className={`pulse-recovery pulse-recovery-${recovery.severity}`}>
+          <strong>{recovery.title}.</strong> {recovery.message}
+          {recovery.actions && recovery.actions.includes('get-excused') && (
+            <a className="pulse-action" href="#excuse">Talk to your admin about being excused</a>
+          )}
+        </div>
+      )}
+
+      {earningWeeklyBonus && status === 'on-track' && (
+        <div className="pulse-foot">✓ 5-day target met. Keep going for the weekly bonus.</div>
+      )}
     </section>
   );
 }
