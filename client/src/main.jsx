@@ -564,7 +564,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students'], ['inactive','Inactive Tracker'], ['notifications','Bulk Notifications'], ['goals','Goal Monitoring']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -584,6 +584,9 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
+      {tab === 'inactive' && <InactiveTracker auth={auth} loadStudent={loadStudent} />}
+      {tab === 'notifications' && <BulkNotifications auth={auth} />}
+      {tab === 'goals' && <GoalMonitoring auth={auth} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
   );
@@ -837,5 +840,418 @@ function SurveyModal({ survey, student, onDone }) {
   );
 }
 
+
+function InactiveTracker({ auth, loadStudent }) {
+  const [students, setStudents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [batch, setBatch] = useState('');
+  const [spMin, setSpMin] = useState('');
+  const [spMax, setSpMax] = useState('');
+  const [sortBy, setSortBy] = useState('name');
+
+  const headers = adminHeaders(auth);
+
+  const loadInactive = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (batch) params.append('batch', batch);
+      if (spMin) params.append('spMin', spMin);
+      if (spMax) params.append('spMax', spMax);
+      if (sortBy) params.append('sortBy', sortBy);
+
+      const res = await fetch(`${API}/admin/inactive-students?${params.toString()}`, { headers });
+      if (res.ok) {
+        setStudents(await res.json());
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadInactive();
+  }, [batch, spMin, spMax, sortBy]);
+
+  return (
+    <section className="panel">
+      <div className="panel-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+        <h2>🚨 Inactive Student Tracker</h2>
+        <button className="secondary" onClick={loadInactive}>Refresh</button>
+      </div>
+
+      {/* Filters grid */}
+      <div className="search-grid" style={{ marginTop: '10px' }}>
+        <div className="filter-group">
+          <label>Batch Start Date</label>
+          <input type="date" value={batch} onChange={e => setBatch(e.target.value)} />
+        </div>
+        <div className="filter-group">
+          <label>SP Range (Min - Max)</label>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <input type="number" placeholder="Min" value={spMin} onChange={e => setSpMin(e.target.value)} style={{ width: '50%' }} />
+            <input type="number" placeholder="Max" value={spMax} onChange={e => setSpMax(e.target.value)} style={{ width: '50%' }} />
+          </div>
+        </div>
+        <div className="filter-group">
+          <label>Sort By</label>
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)}>
+            <option value="name">Name</option>
+            <option value="sp">SP Level</option>
+            <option value="attendance">Overall Attendance</option>
+          </select>
+        </div>
+      </div>
+
+      {loading ? (
+        <p style={{ textAlign: 'center', padding: '20px' }}>Loading inactive students...</p>
+      ) : students.length === 0 ? (
+        <p className="empty" style={{ textAlign: 'center', padding: '20px' }}>No inactive students found matching criteria.</p>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>SP</th>
+              <th>Avg Attendance</th>
+              <th>Inactivity Reasons</th>
+            </tr>
+          </thead>
+          <tbody>
+            {students.map(s => (
+              <tr key={s._id} onClick={() => loadStudent(s._id)} style={{ cursor: 'pointer' }}>
+                <td><strong>{s.name}</strong></td>
+                <td>{s.email}</td>
+                <td>{s.totalSp} SP <span style={{ color: 'var(--muted)', fontSize: '11px' }}>({s.trophyLeague})</span></td>
+                <td>{Math.round(s.stats.avgAttendance)}%</td>
+                <td>
+                  {s.reasons.missedLast3 && <span className="inactive-pill red">Missed 3 Sessions</span>}
+                  {s.reasons.noSpFor3Days && <span className="inactive-pill orange">No SP 3+ Days</span>}
+                  {s.reasons.lowAttendance && <span className="inactive-pill slate">Low Attendance (&lt;75%)</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function BulkNotifications({ auth }) {
+  const [targetGroup, setTargetGroup] = useState('low-sp');
+  const [targetValue, setTargetValue] = useState('100');
+  const [message, setMessage] = useState('');
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+
+  const headers = adminHeaders(auth);
+
+  const fetchLogs = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/admin/bulk-notifications`, { headers });
+      if (res.ok) setLogs(await res.json());
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLogs();
+  }, []);
+
+  const applyTemplate = (tmplText) => {
+    setMessage(tmplText);
+  };
+
+  const handleSend = async (e) => {
+    e.preventDefault();
+    if (!message.trim()) return alert('Message body cannot be empty.');
+    if (!targetValue.trim()) return alert('Target value must be specified.');
+
+    setSending(true);
+    try {
+      const res = await fetch(`${API}/admin/bulk-notifications`, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ targetGroup, targetValue, message })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        alert(`Notification dispatched successfully to ${data.log.recipientCount} students.`);
+        setMessage('');
+        fetchLogs();
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Failed to dispatch notification');
+      }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="moderation-grid" style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '15px' }}>
+      <section className="panel">
+        <h2>📨 Send Bulk Notification Reminders</h2>
+        
+        <form onSubmit={handleSend} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '15px' }}>
+          <div className="filter-group">
+            <label>Target Student Group</label>
+            <select value={targetGroup} onChange={e => {
+              setTargetGroup(e.target.value);
+              if (e.target.value === 'low-sp') setTargetValue('100');
+              else if (e.target.value === 'missing-sessions') setTargetValue('3');
+              else setTargetValue('');
+            }} style={{ padding: '8px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+              <option value="low-sp">Students with Low SP</option>
+              <option value="missing-sessions">Students Missing Consecutive Sessions</option>
+              <option value="batch">Specific Batch (Start Date)</option>
+            </select>
+          </div>
+
+          <div className="filter-group">
+            <label>
+              {targetGroup === 'low-sp' && 'SP Threshold Limit (Minimum SP to trigger)'}
+              {targetGroup === 'missing-sessions' && 'Consecutive Missed Sessions (e.g. 3)'}
+              {targetGroup === 'batch' && 'Batch Start Date (YYYY-MM-DD)'}
+            </label>
+            <input
+              type={targetGroup === 'batch' ? 'date' : 'number'}
+              value={targetValue}
+              onChange={e => setTargetValue(e.target.value)}
+              style={{ padding: '8px', borderRadius: '6px', border: '1px solid var(--line)' }}
+            />
+          </div>
+
+          <div className="filter-group">
+            <label>Message Templates (Click to apply)</label>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+              <button type="button" className="template-btn" onClick={() => applyTemplate('Reminder: Earn 20 SP today to keep your streak!')}>
+                Streak Alert 🔥
+              </button>
+              <button type="button" className="template-btn" onClick={() => applyTemplate('Warning: You have low attendance. Please attend the upcoming Zoom session.')}>
+                Attendance warning ⚠️
+              </button>
+              <button type="button" className="template-btn" onClick={() => applyTemplate('Well done batch! Keep up the high engagement!')}>
+                Kudos batch 👍
+              </button>
+            </div>
+          </div>
+
+          <div className="filter-group">
+            <label>Message Body</label>
+            <textarea
+              rows={4}
+              value={message}
+              onChange={e => setMessage(e.target.value)}
+              placeholder="Type your alert reminder here..."
+              style={{ padding: '10px', borderRadius: '6px', border: '1px solid var(--line)', font: 'inherit', resize: 'vertical' }}
+            />
+          </div>
+
+          <button type="submit" className="primary" disabled={sending} style={{ alignSelf: 'flex-start', padding: '10px 20px' }}>
+            {sending ? 'Sending...' : 'Dispatch Reminder'}
+          </button>
+        </form>
+      </section>
+
+      <section className="panel" style={{ alignSelf: 'start' }}>
+        <h2>📋 Dispatch Log History</h2>
+        {loading ? (
+          <p>Loading log history...</p>
+        ) : logs.length === 0 ? (
+          <p className="empty">No reminders sent yet.</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '450px', overflowY: 'auto', marginTop: '10px' }}>
+            {logs.map(log => (
+              <div key={log.id} style={{ border: '1px solid var(--line)', padding: '10px', borderRadius: '6px', background: '#f8fafc' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--muted)', marginBottom: '4px' }}>
+                  <strong>{log.targetGroup.toUpperCase()} ({log.targetValue})</strong>
+                  <span>{new Date(log.timestamp).toLocaleTimeString()}</span>
+                </div>
+                <p style={{ margin: '4px 0', fontSize: '13px', fontWeight: 'bold' }}>{log.message}</p>
+                <span style={{ fontSize: '11px', color: 'var(--green)', fontWeight: 'bold' }}>Sent to {log.recipientCount} students</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function GoalMonitoring({ auth }) {
+  const [goals, setGoals] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  
+  // Form state
+  const [title, setTitle] = useState('');
+  const [type, setType] = useState('sp_earned');
+  const [target, setTarget] = useState('100');
+  const [timeframe, setTimeframe] = useState('week');
+
+  const headers = adminHeaders(auth);
+
+  const fetchGoals = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/admin/goals`, { headers });
+      if (res.ok) setGoals(await res.json());
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchGoals();
+  }, []);
+
+  const handleCreateGoal = async (e) => {
+    e.preventDefault();
+    if (!title.trim() || !target.trim()) return alert('Please enter goal title and target.');
+
+    setCreating(true);
+    try {
+      const res = await fetch(`${API}/admin/goals`, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ title, type, target, timeframe })
+      });
+      if (res.ok) {
+        setTitle('');
+        fetchGoals();
+        alert('Goal created successfully.');
+      }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="moderation-grid" style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '15px' }}>
+      <section className="panel">
+        <h2>🎯 Goals Progress Tracking</h2>
+        
+        {loading ? (
+          <p style={{ textAlign: 'center', padding: '20px' }}>Loading custom goals...</p>
+        ) : goals.length === 0 ? (
+          <p className="empty" style={{ textAlign: 'center', padding: '20px' }}>No custom goals defined yet.</p>
+        ) : (
+          <div className="goals-grid" style={{ marginTop: '15px' }}>
+            {goals.map(g => {
+              const percentage = g.totalCount > 0 ? Math.round((g.achievedCount / g.totalCount) * 100) : 0;
+              return (
+                <div key={g.id} className="goal-card">
+                  <h3 style={{ margin: '0 0 6px 0', fontSize: '15px' }}>{g.title}</h3>
+                  <span style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 'bold' }}>
+                    Target: {g.target} {g.type === 'sp_earned' ? 'SP' : '% avg Attendance'} &bull; Timeframe: {g.timeframe}
+                  </span>
+                  
+                  <div className="goal-progress-container">
+                    <div className="goal-progress-fill" style={{ width: `${percentage}%` }} />
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold', marginTop: '6px' }}>
+                    <span style={{ color: 'var(--primary)' }}>{g.achievedCount} / {g.totalCount} Achieved</span>
+                    <span>{percentage}%</span>
+                  </div>
+
+                  {/* Achievers details dropdown preview */}
+                  <details style={{ marginTop: '10px', fontSize: '12px', borderTop: '1px solid var(--line)', paddingTop: '6px' }}>
+                    <summary style={{ cursor: 'pointer', color: 'var(--muted)' }}>View Achievers List</summary>
+                    <ul style={{ margin: '6px 0 0 0', paddingLeft: '20px', maxHeight: '120px', overflowY: 'auto' }}>
+                      {g.achievers.map((ach, ai) => (
+                        <li key={ai} style={{ marginBottom: '2px' }}>
+                          {ach.name} <small style={{ color: 'var(--muted)' }}>({ach.value})</small>
+                        </li>
+                      ))}
+                      {g.achievers.length === 0 && <li style={{ listStyle: 'none', marginLeft: '-20px', color: 'var(--muted)' }}>No achievers yet.</li>}
+                    </ul>
+                  </details>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="panel" style={{ alignSelf: 'start' }}>
+        <h2>Define New Custom Goal</h2>
+        
+        <form onSubmit={handleCreateGoal} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '15px' }}>
+          <div className="filter-group">
+            <label>Goal Title</label>
+            <input
+              type="text"
+              placeholder="e.g. Earn 100 SP this week"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              style={{ padding: '8px', borderRadius: '6px', border: '1px solid var(--line)' }}
+            />
+          </div>
+
+          <div className="filter-group">
+            <label>Goal Type</label>
+            <select value={type} onChange={e => {
+              setType(e.target.value);
+              if (e.target.value === 'sp_earned') setTarget('100');
+              else setTarget('90');
+            }} style={{ padding: '8px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+              <option value="sp_earned">Earn SP points</option>
+              <option value="attendance_sessions">Average attendance percentage</option>
+            </select>
+          </div>
+
+          <div className="filter-group">
+            <label>
+              {type === 'sp_earned' ? 'Target SP Points' : 'Target Attendance % (e.g. 90)'}
+            </label>
+            <input
+              type="number"
+              value={target}
+              onChange={e => setTarget(e.target.value)}
+              style={{ padding: '8px', borderRadius: '6px', border: '1px solid var(--line)' }}
+            />
+          </div>
+
+          <div className="filter-group">
+            <label>Timeframe window</label>
+            <select value={timeframe} onChange={e => setTimeframe(e.target.value)} style={{ padding: '8px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+              <option value="today">Today</option>
+              <option value="week">This Week</option>
+              <option value="month">This Month</option>
+              <option value="overall">Overall Course</option>
+            </select>
+          </div>
+
+          <button type="submit" className="primary" disabled={creating} style={{ padding: '10px', marginTop: '5px' }}>
+            {creating ? 'Creating...' : 'Create Goal'}
+          </button>
+        </form>
+      </section>
+    </div>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);

@@ -514,3 +514,57 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* --- Admin Inactive, Notification, Goals UI Styles --------------------- */
+.inactive-pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-right: 4px;
+  margin-bottom: 4px;
+}
+.inactive-pill.red { background: #fee2e2; color: var(--red); }
+.inactive-pill.orange { background: #ffedd5; color: #d97706; }
+.inactive-pill.slate { background: #f1f5f9; color: #475569; }
+
+.goal-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 15px;
+  background: #fff;
+  margin-bottom: 12px;
+}
+.goal-progress-container {
+  height: 8px;
+  background: #f1f5f9;
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 10px 0;
+}
+.goal-progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.goals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 15px;
+}
+.template-btn {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  color: inherit;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 6px;
+  text-align: left;
+}
+.template-btn:hover {
+  background: #e2e8f0;
+}
+

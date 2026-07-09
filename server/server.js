@@ -444,6 +444,354 @@ api.get('/admin/student/:id', adminGuard, async (req, res) => {
   res.json(await studentPayload(student));
 });
 
+// Inactive students tracker
+api.get('/admin/inactive-students', adminGuard, async (req, res) => {
+  try {
+    const { batch, spMin, spMax, sortBy } = req.query;
+
+    const students = await Student.find({ status: 'active' }).lean();
+    
+    // Get last 3 sessions
+    const last3Sessions = await Session.find().sort({ endDateTime: -1 }).limit(3).lean();
+    const sessionLabels = last3Sessions.map(s => s.label);
+
+    // Group qualified attendance for the last 3 sessions by email
+    const last3Attendance = await AttendanceRecord.find({
+      sessionLabel: { $in: sessionLabels }
+    }).lean();
+    const last3AttendanceByEmail = new Map();
+    for (const att of last3Attendance) {
+      if (att.qualified) {
+        const email = att.email.toLowerCase();
+        if (!last3AttendanceByEmail.has(email)) last3AttendanceByEmail.set(email, new Set());
+        last3AttendanceByEmail.get(email).add(att.sessionLabel);
+      }
+    }
+
+    // Calculate overall average attendance percentage
+    const overallAttendance = await AttendanceRecord.aggregate([
+      {
+        $group: {
+          _id: "$email",
+          avgPct: { $avg: "$attendancePercentage" }
+        }
+      }
+    ]);
+    const attendanceMap = new Map(overallAttendance.map(a => [a._id.toLowerCase(), a.avgPct]));
+
+    // Calculate latest SP transaction date for each email
+    const latestTransactions = await SPTransaction.aggregate([
+      { $match: { appliedDelta: { $gt: 0 } } },
+      { $sort: { dateTime: -1 } },
+      {
+        $group: {
+          _id: "$email",
+          latestDate: { $first: "$dateTime" }
+        }
+      }
+    ]);
+    const latestTxMap = new Map(latestTransactions.map(t => [t._id.toLowerCase(), t.latestDate]));
+
+    const threeDaysAgo = new Date();
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+
+    let inactiveStudents = [];
+    for (const student of students) {
+      const email = student.email.toLowerCase();
+      
+      const qualifiedCount = last3AttendanceByEmail.get(email)?.size || 0;
+      const missedLast3 = (sessionLabels.length >= 3) && (qualifiedCount === 0);
+
+      const latestSpDate = latestTxMap.get(email);
+      const noSpFor3Days = !latestSpDate || (new Date(latestSpDate) < threeDaysAgo);
+
+      const avgAttendance = attendanceMap.get(email) ?? 0;
+      const lowAttendance = avgAttendance < 75;
+
+      if (missedLast3 || noSpFor3Days || lowAttendance) {
+        // Apply batch filter if specified
+        if (batch) {
+          const parts = batch.split('-');
+          if (parts.length === 3) {
+            const y = parseInt(parts[0], 10);
+            const m = parseInt(parts[1], 10) - 1;
+            const d = parseInt(parts[2], 10);
+            const start = new Date(y, m, d, 0, 0, 0, 0);
+            const end = new Date(y, m, d, 23, 59, 59, 999);
+            if (student.internshipStartDate < start || student.internshipStartDate > end) {
+              continue;
+            }
+          }
+        }
+
+        // Apply SP Min / Max filters
+        if (spMin !== undefined && spMin !== '' && student.totalSp < Number(spMin)) continue;
+        if (spMax !== undefined && spMax !== '' && student.totalSp > Number(spMax)) continue;
+
+        inactiveStudents.push({
+          _id: student._id,
+          name: student.name,
+          email: student.email,
+          totalSp: student.totalSp,
+          level: student.level,
+          trophyLeague: student.trophyLeague,
+          internshipStartDate: student.internshipStartDate,
+          reasons: {
+            missedLast3,
+            noSpFor3Days,
+            lowAttendance
+          },
+          stats: {
+            lastSpDate: latestSpDate || null,
+            avgAttendance
+          }
+        });
+      }
+    }
+
+    // Sorting
+    if (sortBy === 'sp') {
+      inactiveStudents.sort((a, b) => a.totalSp - b.totalSp);
+    } else if (sortBy === 'attendance') {
+      inactiveStudents.sort((a, b) => a.stats.avgAttendance - b.stats.avgAttendance);
+    } else {
+      // Sort by name by default
+      inactiveStudents.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    res.json(inactiveStudents);
+  } catch (err) {
+    console.error('get inactive students error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Bulk notifications storage helpers
+const BULK_NOTIF_FILE = path.join(process.cwd(), 'data', 'bulk_notifications.json');
+function getBulkNotifications() {
+  try {
+    if (!fs.existsSync(BULK_NOTIF_FILE)) return [];
+    return JSON.parse(fs.readFileSync(BULK_NOTIF_FILE, 'utf8'));
+  } catch (e) {
+    return [];
+  }
+}
+function saveBulkNotification(log) {
+  try {
+    const logs = getBulkNotifications();
+    logs.unshift(log);
+    // ensure data directory exists
+    const dir = path.dirname(BULK_NOTIF_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(BULK_NOTIF_FILE, JSON.stringify(logs, null, 2), 'utf8');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+api.post('/admin/bulk-notifications', adminGuard, async (req, res) => {
+  try {
+    const { targetGroup, targetValue, message } = req.body;
+    if (!targetGroup || !targetValue || !message) {
+      return res.status(400).json({ error: 'Missing targetGroup, targetValue, or message' });
+    }
+
+    let recipients = [];
+    const students = await Student.find({ status: 'active' }).lean();
+
+    if (targetGroup === 'low-sp') {
+      const threshold = Number(targetValue) || 100;
+      recipients = students.filter(s => s.totalSp < threshold);
+    } else if (targetGroup === 'batch') {
+      const parts = targetValue.split('-');
+      if (parts.length === 3) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const d = parseInt(parts[2], 10);
+        const start = new Date(y, m, d, 0, 0, 0, 0);
+        const end = new Date(y, m, d, 23, 59, 59, 999);
+        recipients = students.filter(s => s.internshipStartDate >= start && s.internshipStartDate <= end);
+      }
+    } else if (targetGroup === 'missing-sessions') {
+      const count = Number(targetValue) || 3;
+      const sessions = await Session.find().sort({ endDateTime: -1 }).limit(count).lean();
+      const sessionLabels = sessions.map(s => s.label);
+      
+      const atts = await AttendanceRecord.find({ sessionLabel: { $in: sessionLabels } }).lean();
+      const qualifiedByEmail = new Map();
+      for (const att of atts) {
+        if (att.qualified) {
+          const email = att.email.toLowerCase();
+          if (!qualifiedByEmail.has(email)) qualifiedByEmail.set(email, new Set());
+          qualifiedByEmail.get(email).add(att.sessionLabel);
+        }
+      }
+      
+      recipients = students.filter(s => {
+        const qCount = qualifiedByEmail.get(s.email.toLowerCase())?.size || 0;
+        return qCount === 0 && sessions.length >= count;
+      });
+    }
+
+    const newLog = {
+      id: 'notif-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      adminEmail: req.headers['x-admin-email'] || 'admin@spurti.in',
+      targetGroup,
+      targetValue,
+      message,
+      recipientCount: recipients.length,
+      recipients: recipients.map(r => ({ name: r.name, email: r.email }))
+    };
+
+    saveBulkNotification(newLog);
+
+    res.json({
+      success: true,
+      log: newLog
+    });
+  } catch (err) {
+    console.error('bulk notifications error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.get('/admin/bulk-notifications', adminGuard, async (req, res) => {
+  res.json(getBulkNotifications());
+});
+
+// Goal monitoring storage helpers
+const GOALS_FILE = path.join(process.cwd(), 'data', 'goals.json');
+function getGoals() {
+  try {
+    if (!fs.existsSync(GOALS_FILE)) {
+      const defaults = [
+        { id: 'g-1', title: 'Earn 100 SP this week', type: 'sp_earned', target: 100, timeframe: 'week' },
+        { id: 'g-2', title: 'Attend 100% Zoom sessions', type: 'attendance_sessions', target: 100, timeframe: 'overall' }
+      ];
+      const dir = path.dirname(GOALS_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(GOALS_FILE, JSON.stringify(defaults, null, 2), 'utf8');
+      return defaults;
+    }
+    return JSON.parse(fs.readFileSync(GOALS_FILE, 'utf8'));
+  } catch (e) {
+    return [];
+  }
+}
+function saveGoals(goals) {
+  try {
+    const dir = path.dirname(GOALS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(GOALS_FILE, JSON.stringify(goals, null, 2), 'utf8');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+api.get('/admin/goals', adminGuard, async (req, res) => {
+  try {
+    const goals = getGoals();
+    const students = await Student.find({ status: 'active' }).lean();
+    const totalCount = students.length;
+
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+
+    const calculatedGoals = [];
+
+    for (const goal of goals) {
+      const { type, target, timeframe } = goal;
+      let startTime = null;
+      if (timeframe === 'today') {
+        startTime = new Date(new Date(now.getTime() + istOffset).setUTCHours(0, 0, 0, 0) - istOffset);
+      } else if (timeframe === 'week') {
+        startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      } else if (timeframe === 'month') {
+        startTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      }
+
+      let achievedCount = 0;
+      const achievers = [];
+
+      if (type === 'sp_earned') {
+        const match = { appliedDelta: { $gt: 0 } };
+        if (startTime) match.dateTime = { $gte: startTime };
+        
+        const txs = await SPTransaction.aggregate([
+          { $match: match },
+          { $group: { _id: "$email", spEarned: { $sum: "$appliedDelta" } } }
+        ]);
+        const spMap = new Map(txs.map(t => [t._id.toLowerCase(), t.spEarned]));
+
+        for (const s of students) {
+          const email = s.email.toLowerCase();
+          const earned = spMap.get(email) || 0;
+          if (earned >= target) {
+            achievedCount++;
+            achievers.push({ name: s.name, email: s.email, value: `${earned} SP` });
+          }
+        }
+      } else if (type === 'attendance_sessions') {
+        const match = {};
+        if (startTime) match.createdAt = { $gte: startTime };
+
+        const atts = await AttendanceRecord.aggregate([
+          { $match: match },
+          { $group: { _id: "$email", avgPct: { $avg: "$attendancePercentage" } } }
+        ]);
+        const attMap = new Map(atts.map(a => [a._id.toLowerCase(), a.avgPct]));
+
+        for (const s of students) {
+          const email = s.email.toLowerCase();
+          const avgAtt = attMap.get(email) ?? 0;
+          if (avgAtt >= target) {
+            achievedCount++;
+            achievers.push({ name: s.name, email: s.email, value: `${Math.round(avgAtt)}%` });
+          }
+        }
+      }
+
+      calculatedGoals.push({
+        ...goal,
+        achievedCount,
+        totalCount,
+        achievers
+      });
+    }
+
+    res.json(calculatedGoals);
+  } catch (err) {
+    console.error('get goals error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.post('/admin/goals', adminGuard, async (req, res) => {
+  try {
+    const { title, type, target, timeframe } = req.body;
+    if (!title || !type || !target || !timeframe) {
+      return res.status(400).json({ error: 'Missing title, type, target, or timeframe' });
+    }
+
+    const goals = getGoals();
+    const newGoal = {
+      id: 'goal-' + Date.now(),
+      title,
+      type,
+      target: Number(target),
+      timeframe
+    };
+    goals.push(newGoal);
+    saveGoals(goals);
+
+    res.json({ success: true, goal: newGoal });
+  } catch (err) {
+    console.error('post goals error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 api.get('/admin/active', adminGuard, (_req, res) => {
   const now = new Date();
   const cutoff = now.getTime() - 60_000;
