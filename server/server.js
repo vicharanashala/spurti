@@ -12,6 +12,7 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import ComparisonCircle from './models/ComparisonCircle.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -145,6 +146,10 @@ async function getSamagamaUser(chatengineToken) {
 
 async function studentEmailFromRequest(req) {
   const cookies = parseCookies(req.headers.cookie || '');
+  if (process.env.ENABLE_DEV_AUTH === 'true') {
+    const mockEmail = req.headers['x-mock-email'] || cookies.mock_email;
+    if (mockEmail) return normalizeEmail(mockEmail);
+  }
   const data = await getSamagamaUser(cookies.chatengine_token);
   // Samagama's /api/auth/me nests the user as { user: { email, ... } };
   // fall back to a top-level email in case the shape ever flattens.
@@ -173,6 +178,40 @@ function excusedPayload(student) {
     student: publicStudent(student),
     message: 'Your current internship account has been excused. Your previous Spurti record is preserved, and you may come back in the next cohort.'
   };
+}
+
+function calculateBadgesForStudent({
+  student,
+  highestSpEver,
+  rank,
+  averageSp,
+  attendanceRecords = [],
+  pollRecords = []
+}) {
+  const badges = [];
+  if (student.legendBadgeUnlocked || highestSpEver >= 1500) {
+    badges.push('Legend');
+  }
+  if (rank <= 50) {
+    badges.push('Top 50');
+  }
+  const qualifiedCount = attendanceRecords.filter(a => a.qualified).length;
+  const qualifiedPct = attendanceRecords.length ? qualifiedCount / attendanceRecords.length : 0;
+  if (qualifiedPct >= 0.75) {
+    badges.push('Consistent Attendee');
+  }
+  const pollAttempted = pollRecords.reduce((sum, p) => sum + (p.attemptedQuestions || 0), 0);
+  const pollTotal = pollRecords.reduce((sum, p) => sum + (p.totalQuestions || 0), 0);
+  if (pollTotal && pollAttempted / pollTotal >= 0.75) {
+    badges.push('Poll Champion');
+  }
+  if (student.totalSp >= averageSp) {
+    badges.push('Above Average');
+  }
+  if (badges.length === 0) {
+    badges.push('Getting Started');
+  }
+  return badges;
 }
 
 async function studentPayload(student) {
@@ -204,6 +243,16 @@ async function studentPayload(student) {
     level: levelFor(Math.max(Number(row.highestSpEver) || 0, Number(row.totalSp) || 0)),
     isCurrentStudent: row.email === email
   });
+
+  const badges = calculateBadgesForStudent({
+    student,
+    highestSpEver,
+    rank: rankInfo?.rank || 9999,
+    averageSp,
+    attendanceRecords: attendance,
+    pollRecords: polls
+  });
+
   return {
     student: {
       _id: String(student._id),
@@ -225,7 +274,8 @@ async function studentPayload(student) {
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      poll2Completed: Boolean(student.poll2Completed),
+      badges
     },
     transactions,
     polls,
@@ -250,6 +300,16 @@ function isAdmin(req) {
 
 function adminGuard(req, res, next) {
   if (!isAdmin(req)) return res.status(403).json({ error: 'Forbidden' });
+  next();
+}
+
+async function requireAuth(req, res, next) {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (student.status === 'excused') return res.status(403).json({ error: 'Account excused' });
+  req.student = student;
   next();
 }
 
@@ -320,6 +380,165 @@ api.get('/leaderboard', async (req, res) => {
     level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
     trophyLeague: leagueBand(s.totalSp)
   })));
+});
+
+api.get('/comparison-circle', requireAuth, async (req, res) => {
+  try {
+    let circle = await ComparisonCircle.findOne({ owner: req.student._id });
+    if (!circle) {
+      circle = await ComparisonCircle.create({ owner: req.student._id, members: [] });
+    }
+    const studentIds = [req.student._id, ...circle.members];
+    const activeStudents = await Student.find({
+      _id: { $in: studentIds },
+      status: { $ne: 'excused' }
+    }).sort({ totalSp: -1, name: 1 }).lean();
+
+    const activeFilter = { status: { $ne: 'excused' } };
+    const [allStudents, attendanceDocs, pollDocs] = await Promise.all([
+      Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
+      AttendanceRecord.find({ email: { $in: activeStudents.map(s => s.email) } }).lean(),
+      PollRecord.find({ email: { $in: activeStudents.map(s => s.email) } }).lean()
+    ]);
+
+    const allSp = allStudents.map(s => Number(s.totalSp || 0));
+    const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
+
+    const rankMap = new Map();
+    allStudents.forEach((s, idx) => {
+      rankMap.set(String(s._id), idx + 1);
+    });
+
+    const attendanceMap = new Map();
+    attendanceDocs.forEach(doc => {
+      if (!attendanceMap.has(doc.email)) attendanceMap.set(doc.email, []);
+      attendanceMap.get(doc.email).push(doc);
+    });
+
+    const pollMap = new Map();
+    pollDocs.forEach(doc => {
+      if (!pollMap.has(doc.email)) pollMap.set(doc.email, []);
+      pollMap.get(doc.email).push(doc);
+    });
+
+    const leaderboard = activeStudents.map((s, idx) => {
+      const email = s.email;
+      const overallRank = rankMap.get(String(s._id)) || 9999;
+      const badges = calculateBadgesForStudent({
+        student: s,
+        highestSpEver: Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0),
+        rank: overallRank,
+        averageSp,
+        attendanceRecords: attendanceMap.get(email) || [],
+        pollRecords: pollMap.get(email) || []
+      });
+
+      return {
+        rank: idx + 1,
+        _id: String(s._id),
+        name: s.name,
+        maskedEmail: maskEmail(s.email),
+        totalSp: s.totalSp,
+        level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
+        trophyLeague: leagueBand(s.totalSp),
+        isCurrentStudent: String(s._id) === String(req.student._id),
+        badges
+      };
+    });
+
+    const activeMembers = [];
+    const activeMembersMap = new Map(activeStudents.map(s => [String(s._id), s]));
+    for (const memberId of circle.members) {
+      const ms = activeMembersMap.get(String(memberId));
+      if (ms) {
+        activeMembers.push({
+          _id: String(ms._id),
+          name: ms.name,
+          maskedEmail: maskEmail(ms.email),
+          totalSp: ms.totalSp
+        });
+      }
+    }
+    res.json({
+      _id: String(circle._id),
+      owner: {
+        _id: String(req.student._id),
+        name: req.student.name,
+        totalSp: req.student.totalSp
+      },
+      members: activeMembers,
+      leaderboard
+    });
+  } catch (err) {
+    console.error('Error fetching comparison circle:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+api.post('/comparison-circle/members', requireAuth, async (req, res) => {
+  try {
+    const { studentId } = req.body || {};
+    if (!studentId) {
+      return res.status(400).json({ error: 'studentId is required' });
+    }
+    if (String(studentId) === String(req.student._id)) {
+      return res.status(400).json({ error: 'Cannot add yourself to your comparison circle' });
+    }
+    const target = await Student.findById(studentId);
+    if (!target || target.status === 'excused') {
+      return res.status(404).json({ error: 'Student not found or is excused' });
+    }
+    let circle = await ComparisonCircle.findOne({ owner: req.student._id });
+    if (!circle) {
+      circle = await ComparisonCircle.create({ owner: req.student._id, members: [] });
+    }
+    if (circle.members.map(id => String(id)).includes(String(target._id))) {
+      return res.status(400).json({ error: 'Student is already in your comparison circle' });
+    }
+    if (circle.members.length >= 10) {
+      return res.status(400).json({ error: 'Comparison circle is full (maximum 10 members)' });
+    }
+    const updatedCircle = await ComparisonCircle.findOneAndUpdate(
+      {
+        owner: req.student._id,
+        'members.9': { $exists: false }
+      },
+      { $addToSet: { members: target._id } },
+      { new: true }
+    );
+    if (!updatedCircle) {
+      const currentCircle = await ComparisonCircle.findOne({ owner: req.student._id });
+      if (currentCircle && currentCircle.members.length >= 10) {
+        return res.status(400).json({ error: 'Comparison circle is full (maximum 10 members)' });
+      }
+      return res.status(400).json({ error: 'Could not add member' });
+    }
+    res.json({ success: true, message: 'Member added successfully' });
+  } catch (err) {
+    console.error('Error adding member to comparison circle:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+api.delete('/comparison-circle/members/:memberId', requireAuth, async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    if (!memberId) {
+      return res.status(400).json({ error: 'memberId is required' });
+    }
+    const updatedCircle = await ComparisonCircle.findOneAndUpdate(
+      { owner: req.student._id },
+      { $pull: { members: memberId } },
+      { new: true }
+    );
+    if (!updatedCircle) {
+      return res.status(404).json({ error: 'Comparison circle not found' });
+    }
+    res.json({ success: true, message: 'Member removed successfully' });
+  } catch (err) {
+    console.error('Error removing member from comparison circle:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 api.post('/ping', async (req, res) => {

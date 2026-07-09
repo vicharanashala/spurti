@@ -69,7 +69,10 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => {
+          document.cookie = "mock_email=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+          setView('landing');
+        } : null} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -224,6 +227,9 @@ function SearchModal({ onClose, onStudent }) {
     });
     const data = await res.json();
     if (!res.ok) return setMessage(data.error || 'Email did not match.');
+    if (data.student?.email) {
+      document.cookie = `mock_email=${encodeURIComponent(data.student.email)}; path=/; max-age=86400`;
+    }
     onStudent(data);
   };
 
@@ -279,10 +285,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['comparison','Comparison Circle']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'comparison' && <ComparisonCirclePanel profile={profile} />}
     </main>
   );
 }
@@ -408,15 +415,7 @@ function Sparkline({ points }) {
 }
 
 function buildBadges(profile) {
-  const badges = [];
-  const qualifiedPct = profile.attendance.length ? profile.attendance.filter(a => a.qualified).length / profile.attendance.length : 0;
-  const pollAttempted = profile.polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
-  const pollTotal = profile.polls.reduce((sum, p) => sum + p.totalQuestions, 0);
-  if (profile.student.rank <= 50) badges.push('Top 50');
-  if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
-  if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
-  if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
-  return badges.length ? badges : ['Getting Started'];
+  return profile.student.badges || ['Getting Started'];
 }
 
 function buildNextActions(profile) {
@@ -502,6 +501,302 @@ function Leaderboard({ rows }) {
         <tbody>{rows.map(row => <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}><td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.totalSp}</td></tr>)}</tbody>
       </table>
     </section>
+  );
+}
+
+function getInitials(name) {
+  if (!name) return '';
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+function getAvatarBgColor(name) {
+  const colors = [
+    'linear-gradient(135deg, #176b87, #0f4d62)', // primary blues
+    'linear-gradient(135deg, #12805c, #0a5c40)', // greens
+    'linear-gradient(135deg, #a15c07, #754203)', // ambers/yellows
+    'linear-gradient(135deg, #6d28d9, #4c1d95)', // purples
+    'linear-gradient(135deg, #b42318, #7f1d1d)', // reds
+    'linear-gradient(135deg, #0284c7, #0369a1)', // sky blues
+    'linear-gradient(135deg, #db2777, #9d174d)', // pinks
+    'linear-gradient(135deg, #ea580c, #c2410c)'  // oranges
+  ];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+}
+
+function ComparisonCirclePanel({ profile }) {
+  const [circle, setCircle] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchMessage, setSearchMessage] = useState('');
+  const [actionError, setActionError] = useState('');
+
+  const fetchCircle = async () => {
+    try {
+      const res = await fetch(`${API}/comparison-circle`);
+      if (res.ok) {
+        const data = await res.json();
+        setCircle(data);
+      }
+    } catch (err) {
+      console.error('Error fetching comparison circle:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCircle();
+  }, []);
+
+  const handleSearch = async () => {
+    setActionError('');
+    if (searchQuery.trim().length < 2) {
+      setSearchMessage('Type at least 2 characters.');
+      return;
+    }
+    setSearchMessage('Searching...');
+    try {
+      const res = await fetch(`${API}/search?q=${encodeURIComponent(searchQuery.trim())}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.matches) {
+          const alreadyAddedIds = new Set(circle?.members?.map(m => m._id) || []);
+          const filtered = data.matches.filter(m => 
+            m._id !== profile.student._id && !alreadyAddedIds.has(m._id)
+          );
+          setSearchResults(filtered);
+          setSearchMessage(filtered.length ? '' : 'No matching active students found (who are not already in your circle).');
+        } else {
+          setSearchResults([]);
+          setSearchMessage('No matches found.');
+        }
+      }
+    } catch (err) {
+      setSearchMessage('Search failed.');
+    }
+  };
+
+  const handleAddMember = async (studentId) => {
+    setActionError('');
+    try {
+      const res = await fetch(`${API}/comparison-circle/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setActionError(data.error || 'Failed to add member');
+        return;
+      }
+      setSearchQuery('');
+      setSearchResults([]);
+      setSearchMessage('');
+      fetchCircle();
+    } catch (err) {
+      setActionError('Network error');
+    }
+  };
+
+  const handleRemoveMember = async (studentId) => {
+    setActionError('');
+    try {
+      const res = await fetch(`${API}/comparison-circle/members/${studentId}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setActionError(data.error || 'Failed to remove member');
+        return;
+      }
+      fetchCircle();
+    } catch (err) {
+      setActionError('Network error');
+    }
+  };
+
+  if (loading) {
+    return <section className="panel empty">Loading comparison circle...</section>;
+  }
+
+  const memberCount = circle?.members?.length || 0;
+
+  return (
+    <div className="comparison-circle-layout">
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Comparison Leaderboard</h2>
+            <p className="muted" style={{ margin: '4px 0 0', fontSize: '13px' }}>
+              Compare your performance with your selected comparison circle.
+            </p>
+          </div>
+          <div className="circle-limit-container">
+            <div className="circle-limit-text">
+              <strong>{memberCount}</strong> / 10 members
+            </div>
+            <div className="circle-progress-bar">
+              <div 
+                className={`circle-progress-fill ${memberCount >= 10 ? 'full' : ''}`}
+                style={{ width: `${memberCount * 10}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {memberCount === 0 ? (
+          <div className="circle-empty-state">
+            <div className="circle-empty-icon">👥</div>
+            <h3>Your comparison circle is empty.</h3>
+            <p className="muted">Search and add active students below to build your comparison circle!</p>
+            <button className="primary" onClick={() => document.getElementById('circle-search-input')?.focus()}>
+              Add Members
+            </button>
+          </div>
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Student</th>
+                <th>Level</th>
+                <th>SP</th>
+                <th>Badges</th>
+              </tr>
+            </thead>
+            <tbody>
+              {circle?.leaderboard?.map(row => (
+                <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
+                  <td style={{ fontWeight: '700' }}>#{row.rank}</td>
+                  <td>
+                    <div className="avatar-name-wrap">
+                      <div className="student-avatar" style={{ background: getAvatarBgColor(row.name) }}>
+                        {getInitials(row.name)}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: row.isCurrentStudent ? '850' : '600', display: 'flex', alignItems: 'center' }}>
+                          {row.name}
+                          {row.isCurrentStudent && <span className="current-user-tag">You</span>}
+                        </div>
+                        <span className="muted" style={{ fontSize: '12px' }}>{row.maskedEmail}</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td>{row.level}</td>
+                  <td style={{ fontWeight: '700', color: 'var(--primary)' }}>{row.totalSp}</td>
+                  <td>
+                    <div className="badge-row">
+                      {row.badges?.map(badge => (
+                        <em key={badge} className={`badge-${badge.toLowerCase().replace(/\s+/g, '-')}`}>
+                          {badge}
+                        </em>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Manage Circle Members</h2>
+        </div>
+        
+        {actionError && (
+          <div className="error-alert">
+            <span className="error-alert-icon">⚠️</span>
+            <span className="error-alert-text">{actionError}</span>
+          </div>
+        )}
+        
+        <div className="search-row" style={{ marginBottom: '16px' }}>
+          <input 
+            id="circle-search-input"
+            value={searchQuery} 
+            onChange={e => setSearchQuery(e.target.value)} 
+            onKeyDown={e => e.key === 'Enter' && handleSearch()} 
+            placeholder="Search student to add by name or email" 
+          />
+          <button className="primary" onClick={handleSearch}>Search</button>
+        </div>
+
+        {searchMessage && <p className="muted" style={{ marginBottom: '16px' }}>{searchMessage}</p>}
+
+        {searchResults.length > 0 && (
+          <div style={{ marginBottom: '24px' }}>
+            <h3 style={{ fontSize: '16px', marginBottom: '12px' }}>Search Results</h3>
+            <div className="match-list">
+              {searchResults.map(item => (
+                <div key={item._id} className="circle-member-card">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div className="student-avatar" style={{ background: getAvatarBgColor(item.name) }}>
+                      {getInitials(item.name)}
+                    </div>
+                    <div className="circle-member-info">
+                      <strong>{item.name}</strong>
+                      <div className="circle-member-meta">
+                        <span>{item.maskedEmail}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button 
+                    className="primary" 
+                    style={{ minHeight: '34px', padding: '0 12px' }} 
+                    onClick={() => handleAddMember(item._id)}
+                    disabled={memberCount >= 10}
+                  >
+                    Add
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <h3 style={{ fontSize: '16px', marginBottom: '12px' }}>Current Members</h3>
+        {(!circle?.members || circle.members.length === 0) ? (
+          <p className="muted">No members added yet.</p>
+        ) : (
+          <div className="match-list">
+            {circle.members.map(member => (
+              <div key={member._id} className="circle-member-card">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div className="student-avatar" style={{ background: getAvatarBgColor(member.name) }}>
+                    {getInitials(member.name)}
+                  </div>
+                  <div className="circle-member-info">
+                    <strong>{member.name}</strong>
+                    <div className="circle-member-meta">
+                      <span>{member.maskedEmail}</span>
+                      <span className="circle-member-sp">{member.totalSp} SP</span>
+                    </div>
+                  </div>
+                </div>
+                <button 
+                  className="secondary circle-remove-btn" 
+                  style={{ minHeight: '34px', padding: '0 12px' }} 
+                  onClick={() => handleRemoveMember(member._id)}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
