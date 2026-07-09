@@ -25,7 +25,7 @@ function App() {
         page: 'record',
         recordViewed: profile.student.email
       })
-    }).catch(() => {});
+    }).catch(() => { });
     send();
     const id = setInterval(send, 30000);
     return () => clearInterval(id);
@@ -270,7 +270,7 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank', 'SP Bank'], ['polls', 'Polls'], ['leaderboard', 'Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
@@ -498,13 +498,22 @@ function Leaderboard({ rows }) {
 
 function AdminView({ admin, auth, onBack }) {
   const [tab, setTab] = useState('leaderboard');
-  const [leaderLimit, setLeaderLimit] = useState(50);
   const [leaderboard, setLeaderboard] = useState([]);
+  const [leaderboardTimeRange, setLeaderboardTimeRange] = useState('overall');
+  const [leaderboardPage, setLeaderboardPage] = useState(1);
+  const [leaderboardSortBy, setLeaderboardSortBy] = useState('spEarned');
+  const [leaderboardSortOrder, setLeaderboardSortOrder] = useState('desc');
+  const [leaderboardTotal, setLeaderboardTotal] = useState(0);
+  const [leaderboardTotalPages, setLeaderboardTotalPages] = useState(1);
+  const [leaderboardLimit, setLeaderboardLimit] = useState(50);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+
   const [attendance, setAttendance] = useState(null);
   const [active, setActive] = useState([]);
   const [analytics, setAnalytics] = useState(null);
   const [stats, setStats] = useState(null);
   const [studentProfile, setStudentProfile] = useState(null);
+  const [modalTab, setModalTab] = useState('bank');
 
   const headers = adminHeaders(auth);
 
@@ -515,15 +524,32 @@ function AdminView({ admin, auth, onBack }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: auth.email, name: auth.email, page })
-    }).catch(() => {});
+    }).catch(() => { });
     doPing('admin-analytics');
     const id = setInterval(() => doPing('admin-live'), 30000);
     return () => clearInterval(id);
   }, [admin]);
-  const loadLeaderboard = async (limit = leaderLimit) => {
-    const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers });
-    setLeaderboard(await res.json());
+
+  const loadLeaderboard = async () => {
+    setLeaderboardLoading(true);
+    try {
+      const res = await fetch(
+        `${API}/admin/leaderboard?timeRange=${leaderboardTimeRange}&page=${leaderboardPage}&limit=${leaderboardLimit}&sortBy=${leaderboardSortBy}&sortOrder=${leaderboardSortOrder}`,
+        { headers }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setLeaderboard(data.students);
+        setLeaderboardTotal(data.total);
+        setLeaderboardTotalPages(data.totalPages);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLeaderboardLoading(false);
+    }
   };
+
   const loadAttendance = async () => {
     const res = await fetch(`${API}/admin/attendance`, { headers });
     setAttendance(await res.json());
@@ -531,6 +557,7 @@ function AdminView({ admin, auth, onBack }) {
   const loadStudent = async (id) => {
     const res = await fetch(`${API}/admin/student/${id}`, { headers });
     setStudentProfile(await res.json());
+    setModalTab('bank');
   };
   const loadActive = async () => {
     const res = await fetch(`${API}/admin/active`, { headers });
@@ -541,11 +568,21 @@ function AdminView({ admin, auth, onBack }) {
     setAnalytics(await res.json());
   };
 
-  useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
   const fetchStats = async () => {
     const r = await fetch(`${API}/admin/stats`, headers);
     if (r.ok) setStats(await r.json());
   };
+
+  useEffect(() => {
+    fetchStats();
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'leaderboard') {
+      loadLeaderboard();
+    }
+  }, [tab, leaderboardTimeRange, leaderboardPage, leaderboardLimit, leaderboardSortBy, leaderboardSortOrder]);
+
   useEffect(() => {
     if (tab === 'attendance' && !attendance) loadAttendance();
     if (tab === 'live') {
@@ -564,27 +601,136 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard', 'Leaderboard'], ['attendance', 'Attendance'], ['live', 'Live'], ['analytics', 'Analytics'], ['students', 'Students']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
-          <div className="panel-head">
-            <h2>Leaderboard</h2>
-            <div className="limit-row">
-              <input type="number" min="1" max="500" value={leaderLimit} onChange={e => setLeaderLimit(e.target.value)} />
-              <button className="secondary" onClick={() => loadLeaderboard(Number(leaderLimit) || 50)}>Apply</button>
+          <div className="panel-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+            <h2>Student Leaderboard</h2>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <select value={leaderboardTimeRange} onChange={e => { setLeaderboardTimeRange(e.target.value); setLeaderboardPage(1); }} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+                <option value="overall">Overall SP</option>
+                <option value="today">Today</option>
+                <option value="week">This Week</option>
+                <option value="month">This Month</option>
+              </select>
+
+              <select value={leaderboardSortBy} onChange={e => { setLeaderboardSortBy(e.target.value); setLeaderboardPage(1); }} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+                <option value="spEarned">Sort by SP Earned</option>
+                <option value="name">Sort by Name</option>
+                <option value="email">Sort by Email</option>
+              </select>
+
+              <select value={leaderboardSortOrder} onChange={e => { setLeaderboardSortOrder(e.target.value); setLeaderboardPage(1); }} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+                <option value="desc">Descending</option>
+                <option value="asc">Ascending</option>
+              </select>
+
+              <select value={leaderboardLimit} onChange={e => { setLeaderboardLimit(Number(e.target.value)); setLeaderboardPage(1); }} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+                <option value={10}>10 per page</option>
+                <option value={25}>25 per page</option>
+                <option value={50}>50 per page</option>
+                <option value={100}>100 per page</option>
+              </select>
             </div>
           </div>
-          <table className="table">
-            <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>SP</th></tr></thead>
-            <tbody>{leaderboard.map(row => <tr key={row._id} onClick={() => loadStudent(row._id)}><td>{row.rank}</td><td>{row.name}</td><td>{row.email}</td><td>{row.totalSp}</td></tr>)}</tbody>
-          </table>
+
+          {leaderboardLoading ? (
+            <p style={{ textAlign: 'center', padding: '20px' }}>Loading leaderboard...</p>
+          ) : leaderboard.length === 0 ? (
+            <p className="empty" style={{ textAlign: 'center', padding: '20px' }}>No records found.</p>
+          ) : (
+            <>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Rank</th>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>{leaderboardTimeRange === 'overall' ? 'Total SP' : 'SP Earned'}</th>
+                    <th>Level / League</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leaderboard.map(row => (
+                    <tr key={row._id} onClick={() => loadStudent(row._id)} style={{ cursor: 'pointer' }}>
+                      <td><strong>#{row.rank}</strong></td>
+                      <td>{row.name}</td>
+                      <td>{row.email}</td>
+                      <td>
+                        <span className={row.spEarned >= 0 ? 'credit' : 'debit'} style={{ fontWeight: 'bold' }}>
+                          {row.spEarned >= 0 ? `+${row.spEarned}` : row.spEarned} SP
+                        </span>
+                        {leaderboardTimeRange !== 'overall' && (
+                          <small style={{ color: 'var(--muted)', marginLeft: '6px' }}>({row.totalSp} total)</small>
+                        )}
+                      </td>
+                      <td>
+                        Level {row.level} &bull; <span style={{ color: 'var(--muted)' }}>{row.trophyLeague}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div className="pagination-row">
+                <span>Showing page {leaderboardPage} of {leaderboardTotalPages} ({leaderboardTotal} students)</span>
+                <div className="btn-group">
+                  <button className="secondary" disabled={leaderboardPage <= 1} onClick={() => setLeaderboardPage(prev => prev - 1)}>
+                    &larr; Prev
+                  </button>
+                  <button className="secondary" disabled={leaderboardPage >= leaderboardTotalPages} onClick={() => setLeaderboardPage(prev => prev + 1)}>
+                    Next &rarr;
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </section>
       )}
       {tab === 'attendance' && <AdminAttendance data={attendance} onStudent={loadStudent} />}
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
-      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
+      {studentProfile && (
+        <div className="overlay">
+          <section className="modal wide" style={{ maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="modal-head" style={{ flexShrink: 0 }}>
+              <h2>{studentProfile.student.name}</h2>
+              <button className="icon" onClick={() => setStudentProfile(null)}>x</button>
+            </div>
+
+            <div style={{ flexShrink: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', marginBottom: '15px', marginTop: '10px' }}>
+              <div className="info" style={{ padding: '8px 12px', margin: 0, border: '1px solid var(--line)', borderRadius: '6px', background: '#f8fafc' }}>
+                <span style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 'bold' }}>Total SP</span>
+                <strong style={{ display: 'block', fontSize: '18px', color: 'var(--primary)', marginTop: '2px' }}>{studentProfile.student.totalSp}</strong>
+              </div>
+              <div className="info" style={{ padding: '8px 12px', margin: 0, border: '1px solid var(--line)', borderRadius: '6px', background: '#f8fafc' }}>
+                <span style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 'bold' }}>Level</span>
+                <strong style={{ display: 'block', fontSize: '18px', color: 'var(--green)', marginTop: '2px' }}>Level {studentProfile.student.level}</strong>
+              </div>
+              <div className="info" style={{ padding: '8px 12px', margin: 0, border: '1px solid var(--line)', borderRadius: '6px', background: '#f8fafc' }}>
+                <span style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 'bold' }}>Trophy League</span>
+                <strong style={{ display: 'block', fontSize: '18px', color: 'var(--amber)', marginTop: '2px' }}>{studentProfile.student.trophyLeague}</strong>
+              </div>
+              <div className="info" style={{ padding: '8px 12px', margin: 0, border: '1px solid var(--line)', borderRadius: '6px', background: '#f8fafc' }}>
+                <span style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 'bold' }}>Internship Status</span>
+                <strong style={{ display: 'block', fontSize: '18px', color: studentProfile.student.status === 'active' ? 'var(--green)' : 'var(--red)', marginTop: '2px' }}>
+                  {studentProfile.student.status.toUpperCase()}
+                </strong>
+              </div>
+            </div>
+
+            <div style={{ flexShrink: 0 }}>
+              <Tabs tab={modalTab} setTab={setModalTab} tabs={[['bank', 'SP Bank Statement'], ['timeline', 'Activity Timeline']]} />
+            </div>
+
+            <div style={{ flex: '1 1 auto', overflowY: 'auto', minHeight: 0 }}>
+              {modalTab === 'bank' && <SpBank transactions={studentProfile.transactions} />}
+              {modalTab === 'timeline' && <StudentTimeline studentId={studentProfile.student._id} auth={auth} />}
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
@@ -757,7 +903,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
       {loading ? <p>Loading...</p> : list.length === 0 ? <p className="empty">No students in this category.</p> : (
         <table className="table">
           <thead><tr><th>Name</th><th>Email</th><th>SP</th><th>Start Date</th></tr></thead>
-          <tbody>{list.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{cursor:'pointer'}}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
+          <tbody>{list.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{ cursor: 'pointer' }}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
         </table>
       )}
     </section>

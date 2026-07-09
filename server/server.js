@@ -399,15 +399,331 @@ api.get('/admin/students-by-status', adminGuard, async (req, res) => {
 
 
 api.get('/admin/leaderboard', adminGuard, async (req, res) => {
-  const limit = Math.min(500, Math.max(1, Number(req.query.limit || 50)));
-  const students = await Student.find({ status: 'active' }).sort({ totalSp: -1, name: 1 }).limit(limit).lean();
-  res.json(students.map((s, i) => ({
-    rank: i + 1,
-    _id: String(s._id),
-    name: s.name,
-    email: s.email,
-    totalSp: s.totalSp
-  })));
+  try {
+    const timeRange = String(req.query.timeRange || 'overall'); // today, week, month, overall
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+    const sortBy = String(req.query.sortBy || 'spEarned'); // spEarned, name, email
+    const sortOrder = String(req.query.sortOrder || 'desc'); // asc, desc
+
+    const skip = (page - 1) * limit;
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+
+    let startTime = null;
+    if (timeRange === 'today') {
+      startTime = new Date(new Date(now.getTime() + istOffset).setUTCHours(0, 0, 0, 0) - istOffset);
+    } else if (timeRange === 'week') {
+      startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else if (timeRange === 'month') {
+      startTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    }
+
+    const matchStage = { status: 'active' };
+
+    // We calculate total count of active students
+    const totalStudents = await Student.countDocuments(matchStage);
+
+    let aggregationPipeline = [];
+    aggregationPipeline.push({ $match: matchStage });
+
+    if (timeRange !== 'overall' && startTime) {
+      // Lookup and sum transactions in time range
+      aggregationPipeline.push({
+        $lookup: {
+          from: 'sptransactions',
+          let: { studentEmail: '$email' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: [ '$email', '$$studentEmail' ] },
+                    { $gte: [ '$dateTime', startTime ] }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalEarned: { $sum: '$appliedDelta' }
+              }
+            }
+          ],
+          as: 'transSum'
+        }
+      });
+      aggregationPipeline.push({
+        $addFields: {
+          spEarned: {
+            $ifNull: [ { $arrayElemAt: [ '$transSum.totalEarned', 0 ] }, 0 ]
+          }
+        }
+      });
+    } else {
+      // For overall, spEarned is just totalSp
+      aggregationPipeline.push({
+        $addFields: {
+          spEarned: '$totalSp'
+        }
+      });
+    }
+
+    // Sort stage
+    const sortDir = sortOrder === 'asc' ? 1 : -1;
+    const sortObj = {};
+    if (sortBy === 'name') {
+      sortObj.name = sortDir;
+    } else if (sortBy === 'email') {
+      sortObj.email = sortDir;
+    } else {
+      sortObj.spEarned = sortDir;
+    }
+    // tie-breaker sorting
+    sortObj.name = sortObj.name || 1;
+    aggregationPipeline.push({ $sort: sortObj });
+
+    // Skip & Limit
+    aggregationPipeline.push({ $skip: skip });
+    aggregationPipeline.push({ $limit: limit });
+
+    const students = await Student.aggregate(aggregationPipeline);
+
+    res.json({
+      students: students.map((s, idx) => ({
+        rank: skip + idx + 1,
+        _id: String(s._id),
+        name: s.name,
+        email: s.email,
+        totalSp: s.totalSp,
+        spEarned: s.spEarned,
+        level: s.level,
+        trophyLeague: s.trophyLeague
+      })),
+      total: totalStudents,
+      page,
+      limit,
+      totalPages: Math.ceil(totalStudents / limit)
+    });
+  } catch (err) {
+    console.error('get admin leaderboard error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Advanced student search with sorting & pagination
+api.get('/admin/student-search', adminGuard, async (req, res) => {
+  try {
+    const { name, spMin, spMax, attendanceMin, attendanceMax, batch, status } = req.query;
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+
+    const matchStage = {};
+
+    if (name) {
+      matchStage.name = { $regex: name.trim(), $options: 'i' };
+    }
+
+    if (spMin !== undefined || spMax !== undefined) {
+      matchStage.totalSp = {};
+      if (spMin !== undefined && spMin !== '') matchStage.totalSp.$gte = Number(spMin);
+      if (spMax !== undefined && spMax !== '') matchStage.totalSp.$lte = Number(spMax);
+      if (Object.keys(matchStage.totalSp).length === 0) delete matchStage.totalSp;
+    }
+
+    if (status) {
+      matchStage.status = status; // active, excused
+    }
+
+    if (batch) {
+      const parts = batch.split('-');
+      if (parts.length === 3) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const d = parseInt(parts[2], 10);
+        const start = new Date(y, m, d, 0, 0, 0, 0);
+        const end = new Date(y, m, d, 23, 59, 59, 999);
+        matchStage.internshipStartDate = { $gte: start, $lte: end };
+      }
+    }
+
+    // Prepare aggregation pipeline to lookup attendance and average it
+    const pipeline = [{ $match: matchStage }];
+
+    pipeline.push({
+      $lookup: {
+        from: 'attendancerecords',
+        let: { studentEmail: '$email' },
+        pipeline: [
+          { $match: { $expr: { $eq: [ '$email', '$$studentEmail' ] } } },
+          {
+            $group: {
+              _id: null,
+              avgPct: { $avg: '$attendancePercentage' },
+              totalSessions: { $sum: 1 },
+              qualifiedSessions: { $sum: { $cond: [ '$qualified', 1, 0 ] } }
+            }
+          }
+        ],
+        as: 'attendanceStats'
+      }
+    });
+
+    pipeline.push({
+      $addFields: {
+        avgAttendance: {
+          $ifNull: [ { $arrayElemAt: [ '$attendanceStats.avgPct', 0 ] }, 0 ]
+        }
+      }
+    });
+
+    // Attendance filter
+    if (attendanceMin !== undefined || attendanceMax !== undefined) {
+      const attMatch = {};
+      if (attendanceMin !== undefined && attendanceMin !== '') attMatch.avgAttendance = { $gte: Number(attendanceMin) };
+      if (attendanceMax !== undefined && attendanceMax !== '') attMatch.avgAttendance = { $lte: Number(attendanceMax) };
+      if (Object.keys(attMatch).length > 0) {
+        pipeline.push({ $match: attMatch });
+      }
+    }
+
+    // Count before paging
+    const countPipeline = [...pipeline, { $count: 'total' }];
+    const countResult = await Student.aggregate(countPipeline);
+    const total = countResult[0]?.total || 0;
+
+    // Add pagination and sort
+    pipeline.push({ $sort: { name: 1 } });
+    pipeline.push({ $skip: (page - 1) * limit });
+    pipeline.push({ $limit: limit });
+
+    const students = await Student.aggregate(pipeline);
+
+    res.json({
+      students: students.map(s => ({
+        _id: String(s._id),
+        name: s.name,
+        email: s.email,
+        alternateEmail: s.alternateEmail,
+        totalSp: s.totalSp,
+        internshipStartDate: s.internshipStartDate,
+        status: s.status,
+        avgAttendance: s.avgAttendance,
+        level: s.level,
+        trophyLeague: s.trophyLeague
+      })),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    });
+  } catch (err) {
+    console.error('student search error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Student chronological activity timeline
+api.get('/admin/student-activity/:studentId', adminGuard, async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const emails = [student.email];
+    if (student.alternateEmail) emails.push(student.alternateEmail);
+    const queryEmails = emails.map(e => e.toLowerCase());
+
+    const [transactions, attendances, polls, doubts, answers] = await Promise.all([
+      SPTransaction.find({ email: { $in: queryEmails } }).lean(),
+      AttendanceRecord.find({ email: { $in: queryEmails } }).lean(),
+      PollRecord.find({ email: { $in: queryEmails } }).lean(),
+      Question.find({ "author.email": { $in: queryEmails } }).lean(),
+      Question.find({ "answers.author.email": { $in: queryEmails } }).lean()
+    ]);
+
+    const txEvents = transactions.map(tx => {
+      const isPenalty = tx.appliedDelta < 0;
+      return {
+        type: isPenalty ? 'sp_penalty' : 'sp_earn',
+        title: isPenalty ? `SP Penalty: ${tx.category}` : `SP Credited: ${tx.category}`,
+        description: tx.reason,
+        timestamp: tx.dateTime || tx.createdAt,
+        sp: tx.appliedDelta,
+        meta: { sessionLabel: tx.sessionLabel, category: tx.category }
+      };
+    });
+
+    const attEvents = attendances.map(att => ({
+      type: 'attendance',
+      title: `Zoom Attendance: ${att.sessionLabel}`,
+      description: `Attended ${att.attendedMinutes} of ${att.totalSessionMinutes} mins (${att.attendancePercentage}%). Status: ${att.qualified ? 'Qualified' : 'Not Qualified'}.`,
+      timestamp: att.createdAt,
+      sp: null,
+      meta: { sessionLabel: att.sessionLabel, attendedMinutes: att.attendedMinutes, totalMinutes: att.totalSessionMinutes }
+    }));
+
+    const pollEvents = polls.map(p => ({
+      type: 'poll',
+      title: `Poll Participation: ${p.sessionLabel}`,
+      description: `Attempted ${p.attemptedQuestions} of ${p.totalQuestions} questions (Missed ${p.missedQuestions}).`,
+      timestamp: p.createdAt,
+      sp: null,
+      meta: { sessionLabel: p.sessionLabel, attempted: p.attemptedQuestions, total: p.totalQuestions }
+    }));
+
+    const doubtEvents = doubts.map(q => ({
+      type: 'doubt',
+      title: `Doubt Asked: "${q.title}"`,
+      description: q.description.length > 150 ? q.description.substring(0, 150) + '...' : q.description,
+      timestamp: q.createdAt,
+      sp: null,
+      meta: { questionId: q._id.toString(), title: q.title }
+    }));
+
+    const answerEvents = [];
+    for (const q of answers) {
+      for (const ans of q.answers) {
+        if (queryEmails.includes(ans.author.email.toLowerCase())) {
+          answerEvents.push({
+            type: 'answer',
+            title: `Answered Doubt: "${q.title}"`,
+            description: ans.body.length > 150 ? ans.body.substring(0, 150) + '...' : ans.body,
+            timestamp: ans.createdAt || q.createdAt,
+            sp: ans.isAccepted ? 3 : null,
+            meta: { questionId: q._id.toString(), answerId: ans._id.toString(), title: q.title, isAccepted: ans.isAccepted }
+          });
+        }
+      }
+    }
+
+    const allEvents = [
+      ...txEvents,
+      ...attEvents,
+      ...pollEvents,
+      ...doubtEvents,
+      ...answerEvents
+    ];
+
+    allEvents.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    res.json({
+      student: {
+        _id: String(student._id),
+        name: student.name,
+        email: student.email,
+        alternateEmail: student.alternateEmail,
+        totalSp: student.totalSp,
+        level: student.level,
+        trophyLeague: student.trophyLeague,
+        status: student.status
+      },
+      timeline: allEvents
+    });
+  } catch (err) {
+    console.error('get student activity error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 api.get('/admin/attendance', adminGuard, async (_req, res) => {

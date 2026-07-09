@@ -514,3 +514,63 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* --- Admin Advanced Search & Timeline Styles --------------------------- */
+.search-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 15px;
+  background: #f8fafc;
+  padding: 15px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.search-grid .filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.search-grid label {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+}
+.search-grid input, .search-grid select {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+  background: #fff;
+  color: inherit;
+}
+.pagination-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 15px;
+  font-size: 13px;
+  color: var(--muted);
+  gap: 10px;
+}
+.pagination-row .btn-group {
+  display: flex;
+  gap: 8px;
+}
+.pagination-row button {
+  padding: 6px 12px;
+  font-size: 12px;
+  min-height: auto;
+}
+.timeline-container::-webkit-scrollbar {
+  width: 6px;
+}
+.timeline-container::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+.timeline-container::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
