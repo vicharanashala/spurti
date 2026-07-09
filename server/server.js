@@ -180,6 +180,40 @@ function excusedPayload(student) {
   };
 }
 
+function calculateBadgesForStudent({
+  student,
+  highestSpEver,
+  rank,
+  averageSp,
+  attendanceRecords = [],
+  pollRecords = []
+}) {
+  const badges = [];
+  if (student.legendBadgeUnlocked || highestSpEver >= 1500) {
+    badges.push('Legend');
+  }
+  if (rank <= 50) {
+    badges.push('Top 50');
+  }
+  const qualifiedCount = attendanceRecords.filter(a => a.qualified).length;
+  const qualifiedPct = attendanceRecords.length ? qualifiedCount / attendanceRecords.length : 0;
+  if (qualifiedPct >= 0.75) {
+    badges.push('Consistent Attendee');
+  }
+  const pollAttempted = pollRecords.reduce((sum, p) => sum + (p.attemptedQuestions || 0), 0);
+  const pollTotal = pollRecords.reduce((sum, p) => sum + (p.totalQuestions || 0), 0);
+  if (pollTotal && pollAttempted / pollTotal >= 0.75) {
+    badges.push('Poll Champion');
+  }
+  if (student.totalSp >= averageSp) {
+    badges.push('Above Average');
+  }
+  if (badges.length === 0) {
+    badges.push('Getting Started');
+  }
+  return badges;
+}
+
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
@@ -209,6 +243,16 @@ async function studentPayload(student) {
     level: levelFor(Math.max(Number(row.highestSpEver) || 0, Number(row.totalSp) || 0)),
     isCurrentStudent: row.email === email
   });
+
+  const badges = calculateBadgesForStudent({
+    student,
+    highestSpEver,
+    rank: rankInfo?.rank || 9999,
+    averageSp,
+    attendanceRecords: attendance,
+    pollRecords: polls
+  });
+
   return {
     student: {
       _id: String(student._id),
@@ -230,7 +274,8 @@ async function studentPayload(student) {
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      poll2Completed: Boolean(student.poll2Completed),
+      badges
     },
     transactions,
     polls,
@@ -348,16 +393,59 @@ api.get('/comparison-circle', requireAuth, async (req, res) => {
       _id: { $in: studentIds },
       status: { $ne: 'excused' }
     }).sort({ totalSp: -1, name: 1 }).lean();
-    const leaderboard = activeStudents.map((s, idx) => ({
-      rank: idx + 1,
-      _id: String(s._id),
-      name: s.name,
-      maskedEmail: maskEmail(s.email),
-      totalSp: s.totalSp,
-      level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
-      trophyLeague: leagueBand(s.totalSp),
-      isCurrentStudent: String(s._id) === String(req.student._id)
-    }));
+
+    const activeFilter = { status: { $ne: 'excused' } };
+    const [allStudents, attendanceDocs, pollDocs] = await Promise.all([
+      Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
+      AttendanceRecord.find({ email: { $in: activeStudents.map(s => s.email) } }).lean(),
+      PollRecord.find({ email: { $in: activeStudents.map(s => s.email) } }).lean()
+    ]);
+
+    const allSp = allStudents.map(s => Number(s.totalSp || 0));
+    const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
+
+    const rankMap = new Map();
+    allStudents.forEach((s, idx) => {
+      rankMap.set(String(s._id), idx + 1);
+    });
+
+    const attendanceMap = new Map();
+    attendanceDocs.forEach(doc => {
+      if (!attendanceMap.has(doc.email)) attendanceMap.set(doc.email, []);
+      attendanceMap.get(doc.email).push(doc);
+    });
+
+    const pollMap = new Map();
+    pollDocs.forEach(doc => {
+      if (!pollMap.has(doc.email)) pollMap.set(doc.email, []);
+      pollMap.get(doc.email).push(doc);
+    });
+
+    const leaderboard = activeStudents.map((s, idx) => {
+      const email = s.email;
+      const overallRank = rankMap.get(String(s._id)) || 9999;
+      const badges = calculateBadgesForStudent({
+        student: s,
+        highestSpEver: Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0),
+        rank: overallRank,
+        averageSp,
+        attendanceRecords: attendanceMap.get(email) || [],
+        pollRecords: pollMap.get(email) || []
+      });
+
+      return {
+        rank: idx + 1,
+        _id: String(s._id),
+        name: s.name,
+        maskedEmail: maskEmail(s.email),
+        totalSp: s.totalSp,
+        level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
+        trophyLeague: leagueBand(s.totalSp),
+        isCurrentStudent: String(s._id) === String(req.student._id),
+        badges
+      };
+    });
+
     const activeMembers = [];
     const activeMembersMap = new Map(activeStudents.map(s => [String(s._id), s]));
     for (const memberId of circle.members) {

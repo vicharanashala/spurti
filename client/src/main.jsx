@@ -415,15 +415,7 @@ function Sparkline({ points }) {
 }
 
 function buildBadges(profile) {
-  const badges = [];
-  const qualifiedPct = profile.attendance.length ? profile.attendance.filter(a => a.qualified).length / profile.attendance.length : 0;
-  const pollAttempted = profile.polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
-  const pollTotal = profile.polls.reduce((sum, p) => sum + p.totalQuestions, 0);
-  if (profile.student.rank <= 50) badges.push('Top 50');
-  if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
-  if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
-  if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
-  return badges.length ? badges : ['Getting Started'];
+  return profile.student.badges || ['Getting Started'];
 }
 
 function buildNextActions(profile) {
@@ -510,6 +502,33 @@ function Leaderboard({ rows }) {
       </table>
     </section>
   );
+}
+
+function getInitials(name) {
+  if (!name) return '';
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+function getAvatarBgColor(name) {
+  const colors = [
+    'linear-gradient(135deg, #176b87, #0f4d62)', // primary blues
+    'linear-gradient(135deg, #12805c, #0a5c40)', // greens
+    'linear-gradient(135deg, #a15c07, #754203)', // ambers/yellows
+    'linear-gradient(135deg, #6d28d9, #4c1d95)', // purples
+    'linear-gradient(135deg, #b42318, #7f1d1d)', // reds
+    'linear-gradient(135deg, #0284c7, #0369a1)', // sky blues
+    'linear-gradient(135deg, #db2777, #9d174d)', // pinks
+    'linear-gradient(135deg, #ea580c, #c2410c)'  // oranges
+  ];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
 }
 
 function ComparisonCirclePanel({ profile }) {
@@ -609,36 +628,80 @@ function ComparisonCirclePanel({ profile }) {
     return <section className="panel empty">Loading comparison circle...</section>;
   }
 
+  const memberCount = circle?.members?.length || 0;
+
   return (
     <div className="comparison-circle-layout">
       <section className="panel">
         <div className="panel-head">
-          <h2>Comparison Leaderboard</h2>
-          <span className="muted">
-            {circle?.members?.length || 0} / 10 members
-          </span>
+          <div>
+            <h2>Comparison Leaderboard</h2>
+            <p className="muted" style={{ margin: '4px 0 0', fontSize: '13px' }}>
+              Compare your performance with your selected comparison circle.
+            </p>
+          </div>
+          <div className="circle-limit-container">
+            <div className="circle-limit-text">
+              <strong>{memberCount}</strong> / 10 members
+            </div>
+            <div className="circle-progress-bar">
+              <div 
+                className={`circle-progress-fill ${memberCount >= 10 ? 'full' : ''}`}
+                style={{ width: `${memberCount * 10}%` }}
+              />
+            </div>
+          </div>
         </div>
-        {(!circle?.leaderboard || circle.leaderboard.length <= 1) ? (
-          <p className="empty">Your comparison circle is empty. Search and add active students below to build your comparison circle!</p>
+
+        {memberCount === 0 ? (
+          <div className="circle-empty-state">
+            <div className="circle-empty-icon">👥</div>
+            <h3>Your comparison circle is empty.</h3>
+            <p className="muted">Search and add active students below to build your comparison circle!</p>
+            <button className="primary" onClick={() => document.getElementById('circle-search-input')?.focus()}>
+              Add Members
+            </button>
+          </div>
         ) : (
           <table className="table">
             <thead>
               <tr>
                 <th>Rank</th>
-                <th>Name</th>
-                <th>Email</th>
+                <th>Student</th>
                 <th>Level</th>
                 <th>SP</th>
+                <th>Badges</th>
               </tr>
             </thead>
             <tbody>
-              {circle.leaderboard.map(row => (
+              {circle?.leaderboard?.map(row => (
                 <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
-                  <td>{row.rank}</td>
-                  <td>{row.name}</td>
-                  <td>{row.maskedEmail}</td>
+                  <td style={{ fontWeight: '700' }}>#{row.rank}</td>
+                  <td>
+                    <div className="avatar-name-wrap">
+                      <div className="student-avatar" style={{ background: getAvatarBgColor(row.name) }}>
+                        {getInitials(row.name)}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: row.isCurrentStudent ? '850' : '600', display: 'flex', alignItems: 'center' }}>
+                          {row.name}
+                          {row.isCurrentStudent && <span className="current-user-tag">You</span>}
+                        </div>
+                        <span className="muted" style={{ fontSize: '12px' }}>{row.maskedEmail}</span>
+                      </div>
+                    </div>
+                  </td>
                   <td>{row.level}</td>
-                  <td>{row.totalSp}</td>
+                  <td style={{ fontWeight: '700', color: 'var(--primary)' }}>{row.totalSp}</td>
+                  <td>
+                    <div className="badge-row">
+                      {row.badges?.map(badge => (
+                        <em key={badge} className={`badge-${badge.toLowerCase().replace(/\s+/g, '-')}`}>
+                          {badge}
+                        </em>
+                      ))}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -651,10 +714,16 @@ function ComparisonCirclePanel({ profile }) {
           <h2>Manage Circle Members</h2>
         </div>
         
-        {actionError && <p className="error" style={{ marginBottom: '16px' }}>{actionError}</p>}
+        {actionError && (
+          <div className="error-alert">
+            <span className="error-alert-icon">⚠️</span>
+            <span className="error-alert-text">{actionError}</span>
+          </div>
+        )}
         
         <div className="search-row" style={{ marginBottom: '16px' }}>
           <input 
+            id="circle-search-input"
             value={searchQuery} 
             onChange={e => setSearchQuery(e.target.value)} 
             onKeyDown={e => e.key === 'Enter' && handleSearch()} 
@@ -671,17 +740,22 @@ function ComparisonCirclePanel({ profile }) {
             <div className="match-list">
               {searchResults.map(item => (
                 <div key={item._id} className="circle-member-card">
-                  <div className="circle-member-info">
-                    <strong>{item.name}</strong>
-                    <div className="circle-member-meta">
-                      <span>{item.maskedEmail}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div className="student-avatar" style={{ background: getAvatarBgColor(item.name) }}>
+                      {getInitials(item.name)}
+                    </div>
+                    <div className="circle-member-info">
+                      <strong>{item.name}</strong>
+                      <div className="circle-member-meta">
+                        <span>{item.maskedEmail}</span>
+                      </div>
                     </div>
                   </div>
                   <button 
                     className="primary" 
                     style={{ minHeight: '34px', padding: '0 12px' }} 
                     onClick={() => handleAddMember(item._id)}
-                    disabled={circle?.members?.length >= 10}
+                    disabled={memberCount >= 10}
                   >
                     Add
                   </button>
@@ -698,11 +772,16 @@ function ComparisonCirclePanel({ profile }) {
           <div className="match-list">
             {circle.members.map(member => (
               <div key={member._id} className="circle-member-card">
-                <div className="circle-member-info">
-                  <strong>{member.name}</strong>
-                  <div className="circle-member-meta">
-                    <span>{member.maskedEmail}</span>
-                    <span className="circle-member-sp">{member.totalSp} SP</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div className="student-avatar" style={{ background: getAvatarBgColor(member.name) }}>
+                    {getInitials(member.name)}
+                  </div>
+                  <div className="circle-member-info">
+                    <strong>{member.name}</strong>
+                    <div className="circle-member-meta">
+                      <span>{member.maskedEmail}</span>
+                      <span className="circle-member-sp">{member.totalSp} SP</span>
+                    </div>
                   </div>
                 </div>
                 <button 

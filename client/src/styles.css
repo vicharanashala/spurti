@@ -553,3 +553,149 @@ input {
 .circle-remove-btn:hover {
   background: #fecaca;
 }
+
+/* UX and Layout Enhancements */
+.avatar-name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.student-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  user-select: none;
+  flex-shrink: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+.current-user-tag {
+  background: #dcfce7;
+  color: #166534;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  margin-left: 8px;
+  text-transform: uppercase;
+}
+
+/* Progress indicator styles */
+.circle-limit-container {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 140px;
+}
+.circle-limit-text {
+  font-size: 13px;
+  color: var(--muted);
+}
+.circle-limit-text strong {
+  color: var(--text);
+  font-size: 15px;
+}
+.circle-progress-bar {
+  width: 120px;
+  height: 6px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.circle-progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.circle-progress-fill.full {
+  background: var(--green);
+}
+
+/* Empty state styles */
+.circle-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px 24px;
+  background: #fdfdfd;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  margin: 16px 0;
+}
+.circle-empty-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  opacity: 0.75;
+}
+.circle-empty-state h3 {
+  font-size: 18px;
+  margin-bottom: 8px;
+  font-weight: 700;
+  color: var(--text);
+}
+.circle-empty-state p {
+  font-size: 14px;
+  max-width: 420px;
+  margin-bottom: 16px;
+}
+
+/* Alert styles */
+.error-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: var(--red);
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+.error-alert-icon {
+  font-size: 16px;
+}
+.error-alert-text {
+  font-weight: 600;
+}
+
+/* Badge styling variations */
+.badge-row em.badge-legend {
+  background: #fffbeb;
+  color: #d97706;
+  border: 1px solid #fde68a;
+}
+.badge-row em.badge-top-50 {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+.badge-row em.badge-consistent-attendee {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+.badge-row em.badge-poll-champion {
+  background: #faf5ff;
+  color: #7e22ce;
+  border: 1px solid #e9d5ff;
+}
+.badge-row em.badge-above-average {
+  background: #f0fdfa;
+  color: #0f766e;
+  border: 1px solid #99f6e4;
+}
+.badge-row em.badge-getting-started {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
