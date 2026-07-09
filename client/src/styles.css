@@ -1020,3 +1020,102 @@ input {
   font-size: 13px;
 }
 
+/* --- Moderation Extensions --- */
+.duplicate-badge {
+  background: #fef3c7;
+  color: var(--amber);
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.duplicate-banner {
+  background: #fffbeb;
+  border: 1px solid #fef3c7;
+  border-left: 4px solid var(--amber);
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: #78350f;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.duplicate-banner a {
+  color: var(--primary);
+  font-weight: bold;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.moderation-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 20px;
+  margin-top: 10px;
+}
+@media (max-width: 900px) {
+  .moderation-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.active-helpers-panel {
+  align-self: start;
+}
+.helper-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.helper-row:last-child {
+  border-bottom: none;
+}
+.helper-rank {
+  font-weight: bold;
+  color: var(--primary);
+  margin-right: 8px;
+}
+.report-badge {
+  background: #fee2e2;
+  color: var(--red);
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.report-item-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  background: #fff;
+  margin-bottom: 12px;
+}
+.report-item-panel.pending {
+  border-left: 4px solid var(--red);
+}
+.report-item-panel.approved {
+  border-left: 4px solid var(--muted);
+  opacity: 0.8;
+}
+.report-item-panel.rejected {
+  border-left: 4px solid var(--green);
+  opacity: 0.8;
+}
+.log-reason {
+  font-family: monospace;
+  font-size: 12px;
+  background: #f1f5f9;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #334155;
+}
+
+

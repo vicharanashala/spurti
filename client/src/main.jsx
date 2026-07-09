@@ -584,7 +584,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students'], ['doubts','Doubts Moderation']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students'], ['admin-doubt-forum','Admin Doubt Forum'], ['spam-reports','Spam Reports']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -604,7 +604,8 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
-      {tab === 'doubts' && <Doubts isAdmin={true} adminAuth={auth} />}
+      {tab === 'admin-doubt-forum' && <AdminDoubtForum admin={admin} auth={auth} loadStudent={loadStudent} />}
+      {tab === 'spam-reports' && <AdminSpamReports admin={admin} auth={auth} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
   );
@@ -859,6 +860,36 @@ function Doubts({ student, isAdmin: isUserAdmin, adminAuth }) {
     }
   };
 
+  const handleReportSpam = async (postId, postType, questionId) => {
+    const reason = prompt('Please enter the reason for reporting this post:');
+    if (reason === null) return; // user cancelled
+    if (!reason.trim()) {
+      alert('A reason is required to report a post.');
+      return;
+    }
+
+    try {
+      let url = postType === 'question'
+        ? `${API}/doubts/${postId}/report`
+        : `${API}/doubts/${questionId}/answers/${postId}/report`;
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ reason: reason.trim() })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to submit report');
+      }
+
+      alert('Post reported successfully. Admins will review it.');
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
   const handleAskQuestion = async (e) => {
     e.preventDefault();
     if (!newTitle.trim() || !newDesc.trim()) return;
@@ -1048,9 +1079,20 @@ function Doubts({ student, isAdmin: isUserAdmin, adminAuth }) {
               </button>
             </div>
           )}
+          {!isUserAdmin && student && (
+            <button className="secondary" style={{ color: 'var(--red)' }} onClick={() => handleReportSpam(activeQuestion._id, 'question')}>
+              🚩 Report Spam
+            </button>
+          )}
         </div>
 
         <article className="question-body-panel">
+          {activeQuestion.duplicateInfo && (
+            <div className="duplicate-banner">
+              <span>⚠️ This question has been marked as a duplicate of: <strong>{activeQuestion.duplicateInfo.originalTitle}</strong></span>
+              <button className="primary" style={{ padding: '4px 8px', fontSize: '11px', minHeight: 'auto' }} onClick={() => loadQuestionDetail(activeQuestion.duplicateInfo.originalQuestionId)}>View Original &rarr;</button>
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '10px' }}>
             <div>
               <h1 style={{ fontSize: '24px', margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1132,6 +1174,11 @@ function Doubts({ student, isAdmin: isUserAdmin, adminAuth }) {
                         {isAnswerAuthor && editingAnswerId !== answer._id && (
                           <button className="secondary" style={{ padding: '4px 8px', minHeight: 'auto', fontSize: '11px' }} onClick={() => { setEditingAnswerId(answer._id); setEditText(answer.body); }}>
                             Edit
+                          </button>
+                        )}
+                        {!isUserAdmin && student && !isAnswerAuthor && (
+                          <button className="secondary" style={{ padding: '4px 8px', minHeight: 'auto', fontSize: '11px', color: 'var(--red)' }} onClick={() => handleReportSpam(answer._id, 'answer', activeQuestion._id)}>
+                            🚩 Report
                           </button>
                         )}
                       </div>
@@ -1247,6 +1294,7 @@ function Doubts({ student, isAdmin: isUserAdmin, adminAuth }) {
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                     {hasSolved && <span className="solved-badge">Solved ✅</span>}
                     {q.isSpam && <span className="debit" style={{ fontSize: '10px', fontWeight: 'bold' }}>🚫 Spam</span>}
+                    {q.duplicateInfo && <span className="duplicate-badge">⚠️ Duplicate</span>}
                     <span className="answer-count-badge">{q.answers.length} {q.answers.length === 1 ? 'answer' : 'answers'}</span>
                   </div>
                 </div>
@@ -1393,5 +1441,459 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
+function AdminDoubtForum({ admin, auth, loadStudent }) {
+  const [questions, setQuestions] = useState([]);
+  const [duplicates, setDuplicates] = useState([]);
+  const [activeHelpers, setActiveHelpers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeQuestion, setActiveQuestion] = useState(null);
+  const [duplicateTargetId, setDuplicateTargetId] = useState('');
+  
+  const headers = useMemo(() => ({
+    'X-Admin-Email': auth.email,
+    'X-Admin-Token': auth.token,
+    'Content-Type': 'application/json'
+  }), [auth]);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/admin/doubt-forum`, { headers });
+      if (!res.ok) throw new Error('Failed to load doubt forum details');
+      const data = await res.json();
+      setQuestions(data.questions);
+      setDuplicates(data.duplicates);
+      setActiveHelpers(data.activeHelpers);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const handleDeleteQuestion = async (id) => {
+    if (!confirm('Are you sure you want to delete this question? This will refund student reward (or apply penalty if spam).')) return;
+    try {
+      const res = await fetch(`${API}/admin/doubt-forum/question/${id}`, {
+        method: 'DELETE',
+        headers
+      });
+      if (!res.ok) throw new Error('Failed to delete question');
+      setActiveQuestion(null);
+      loadData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleDeleteAnswer = async (questionId, answerId) => {
+    if (!confirm('Are you sure you want to delete this answer?')) return;
+    try {
+      const res = await fetch(`${API}/admin/doubt-forum/question/${questionId}/answers/${answerId}`, {
+        method: 'DELETE',
+        headers
+      });
+      if (!res.ok) throw new Error('Failed to delete answer');
+      // Reload active question
+      const qRes = await fetch(`${API}/doubts/${questionId}`, { headers });
+      if (qRes.ok) {
+        setActiveQuestion(await qRes.json());
+      }
+      loadData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleMarkDuplicate = async (questionId) => {
+    if (!duplicateTargetId) {
+      alert('Please select a question to mark as original');
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/admin/doubt-forum/duplicate`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ questionId, originalQuestionId: duplicateTargetId })
+      });
+      if (!res.ok) throw new Error('Failed to mark duplicate');
+      setDuplicateTargetId('');
+      // Reload active question
+      const qRes = await fetch(`${API}/doubts/${questionId}`, { headers });
+      if (qRes.ok) {
+        setActiveQuestion(await qRes.json());
+      }
+      loadData();
+      alert('Question marked as duplicate. Author penalized -1 SP.');
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleUnmarkDuplicate = async (questionId) => {
+    if (!confirm('Are you sure you want to unmark this question as duplicate?')) return;
+    try {
+      const res = await fetch(`${API}/admin/doubt-forum/duplicate/${questionId}`, {
+        method: 'DELETE',
+        headers
+      });
+      if (!res.ok) throw new Error('Failed to unmark duplicate');
+      // Reload active question
+      const qRes = await fetch(`${API}/doubts/${questionId}`, { headers });
+      if (qRes.ok) {
+        setActiveQuestion(await qRes.json());
+      }
+      loadData();
+      alert('Duplicate mark removed. Author refunded 1 SP.');
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleApproveAnswer = async (questionId, answerId) => {
+    if (!confirm('Are you sure you want to accept this answer? This will override student selection.')) return;
+    try {
+      const res = await fetch(`${API}/admin/doubt-forum/question/${questionId}/answers/${answerId}/approve`, {
+        method: 'POST',
+        headers
+      });
+      if (!res.ok) throw new Error('Failed to accept answer');
+      // Reload active question
+      const qRes = await fetch(`${API}/doubts/${questionId}`, { headers });
+      if (qRes.ok) {
+        setActiveQuestion(await qRes.json());
+      }
+      loadData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  if (loading) return <section className="panel empty">Loading Admin Doubt Forum...</section>;
+
+  if (activeQuestion) {
+    const isDup = duplicates.find(d => d.questionId === activeQuestion._id);
+    const otherQuestions = questions.filter(q => q._id !== activeQuestion._id);
+
+    return (
+      <div className="doubts-container">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+          <button className="secondary" onClick={() => { setActiveQuestion(null); loadData(); }}>
+            &larr; Back to Admin Doubt List
+          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="secondary" style={{ color: 'var(--red)' }} onClick={() => handleDeleteQuestion(activeQuestion._id)}>
+              🗑️ Delete Question
+            </button>
+          </div>
+        </div>
+
+        {isDup && (
+          <div className="duplicate-banner">
+            <span>⚠️ This question is marked as a duplicate of: <strong>{isDup.originalTitle}</strong></span>
+            <button className="secondary" style={{ padding: '4px 8px', fontSize: '11px', minHeight: 'auto' }} onClick={() => handleUnmarkDuplicate(activeQuestion._id)}>
+              ❌ Remove Duplicate Mark
+            </button>
+          </div>
+        )}
+
+        {!isDup && (
+          <div className="duplicate-banner" style={{ background: '#f1f5f9', borderColor: 'var(--line)', borderLeftColor: 'var(--muted)', color: '#334155' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              🔗 Mark as duplicate of:
+              <select value={duplicateTargetId} onChange={e => setDuplicateTargetId(e.target.value)} style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--line)' }}>
+                <option value="">-- Select Original Question --</option>
+                {otherQuestions.map(oq => (
+                  <option key={oq._id} value={oq._id}>{oq.title}</option>
+                ))}
+              </select>
+            </span>
+            <button className="primary" style={{ padding: '4px 8px', fontSize: '11px', minHeight: 'auto' }} onClick={() => handleMarkDuplicate(activeQuestion._id)} disabled={!duplicateTargetId}>
+              Confirm Duplicate (-1 SP)
+            </button>
+          </div>
+        )}
+
+        <article className="question-body-panel">
+          <h2>{activeQuestion.title}</h2>
+          <p style={{ whiteSpace: 'pre-wrap', fontSize: '15px', color: '#334155' }}>{activeQuestion.description}</p>
+          <div className="question-tags">
+            {activeQuestion.tags.map(t => <span key={t} className="tag-pill active" style={{ pointerEvents: 'none' }}>{t}</span>)}
+          </div>
+          <div style={{ marginTop: '20px', borderTop: '1px solid var(--line)', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--muted)' }}>
+            <span>Asked by <strong>{activeQuestion.author.name}</strong> ({activeQuestion.author.email})</span>
+            <span>{new Date(activeQuestion.createdAt).toLocaleString()}</span>
+          </div>
+        </article>
+
+        <section style={{ marginTop: '20px' }}>
+          <h3>Answers ({activeQuestion.answers.length})</h3>
+          <div className="cards">
+            {activeQuestion.answers.length === 0 ? (
+              <p className="empty" style={{ padding: '20px', textAlign: 'center' }}>No answers posted yet.</p>
+            ) : (
+              activeQuestion.answers.map(ans => (
+                <div key={ans._id} className={`answer-panel ${ans.isAccepted ? 'accepted' : ''}`}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1 }}>
+                      <p style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: '14px' }}>{ans.body}</p>
+                      <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '8px' }}>
+                        Answered by <strong>{ans.author.name}</strong> ({ans.author.email}) &bull; {new Date(ans.createdAt).toLocaleString()}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      {ans.isAccepted ? (
+                        <span className="solved-badge" style={{ fontSize: '10px' }}>Accepted ✅</span>
+                      ) : (
+                        <button className="primary" style={{ padding: '4px 8px', minHeight: 'auto', fontSize: '11px' }} onClick={() => handleApproveAnswer(activeQuestion._id, ans._id)}>
+                          Approve/Accept
+                        </button>
+                      )}
+                      <button className="secondary" style={{ padding: '4px 8px', minHeight: 'auto', fontSize: '11px', color: 'var(--red)' }} onClick={() => handleDeleteAnswer(activeQuestion._id, ans._id)}>
+                        🗑️ Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <div className="moderation-grid">
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Student Questions</h2>
+        </div>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Author</th>
+              <th>Answers</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {questions.map(q => {
+              const isDup = duplicates.some(d => d.questionId === q._id);
+              const isSolved = q.answers.some(a => a.isAccepted);
+              return (
+                <tr key={q._id} onClick={() => setActiveQuestion(q)} style={{ cursor: 'pointer' }}>
+                  <td>
+                    {q.pinned && '📌 '}
+                    <strong>{q.title}</strong>
+                  </td>
+                  <td>{q.author.name}</td>
+                  <td>{q.answers.length}</td>
+                  <td>
+                    {q.isSpam && <span className="report-badge" style={{ fontSize: '9px' }}>Spam</span>}
+                    {isDup && <span className="duplicate-badge" style={{ fontSize: '9px', marginLeft: '4px' }}>Duplicate</span>}
+                    {isSolved && <span className="solved-badge" style={{ fontSize: '9px', marginLeft: '4px' }}>Solved</span>}
+                    {!q.isSpam && !isDup && !isSolved && <span className="tag-pill" style={{ fontSize: '9px', marginLeft: '4px' }}>Open</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel active-helpers-panel">
+        <div className="panel-head">
+          <h2>Active Helpers</h2>
+        </div>
+        <div className="helper-list">
+          {activeHelpers.length === 0 ? (
+            <p className="empty" style={{ padding: '20px', textAlign: 'center' }}>No accepted answers yet.</p>
+          ) : (
+            activeHelpers.map((h, i) => (
+              <div key={h.email} className="helper-row">
+                <span>
+                  <span className="helper-rank">#{i + 1}</span>
+                  <strong>{h.name}</strong>
+                  <br />
+                  <small style={{ color: 'var(--muted)' }}>{h.email}</small>
+                </span>
+                <span className="solved-badge">{h.acceptedCount} solved</span>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AdminSpamReports({ admin, auth }) {
+  const [reports, setReports] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState('pending');
+
+  const headers = useMemo(() => ({
+    'X-Admin-Email': auth.email,
+    'X-Admin-Token': auth.token,
+    'Content-Type': 'application/json'
+  }), [auth]);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/admin/spam-reports`, { headers });
+      if (!res.ok) throw new Error('Failed to load spam reports');
+      const data = await res.json();
+      setReports(data.reports);
+      setLogs(data.logs);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const handleResolveReport = async (id, approve) => {
+    const action = approve ? 'approve' : 'reject';
+    if (!confirm(`Are you sure you want to ${action} this spam report?${approve ? ' This will penalize the author -2 SP.' : ''}`)) return;
+    try {
+      const res = await fetch(`${API}/admin/spam-reports/${id}/${action}`, {
+        method: 'POST',
+        headers
+      });
+      if (!res.ok) throw new Error(`Failed to ${action} spam report`);
+      loadData();
+      alert(`Report ${approve ? 'approved' : 'rejected'} successfully.`);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const filteredReports = reports.filter(r => r.status === statusFilter);
+
+  if (loading) return <section className="panel empty">Loading Spam Moderation Dashboard...</section>;
+
+  return (
+    <div className="moderation-grid">
+      <section className="panel">
+        <div className="panel-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+          <h2>Spam Reports</h2>
+          <div className="tag-filters" style={{ margin: 0 }}>
+            <button className={`tag-pill ${statusFilter === 'pending' ? 'active' : ''}`} onClick={() => setStatusFilter('pending')}>
+              Pending ({reports.filter(r => r.status === 'pending').length})
+            </button>
+            <button className={`tag-pill ${statusFilter === 'approved' ? 'active' : ''}`} onClick={() => setStatusFilter('approved')}>
+              Approved ({reports.filter(r => r.status === 'approved').length})
+            </button>
+            <button className={`tag-pill ${statusFilter === 'rejected' ? 'active' : ''}`} onClick={() => setStatusFilter('rejected')}>
+              Rejected ({reports.filter(r => r.status === 'rejected').length})
+            </button>
+          </div>
+        </div>
+
+        <div style={{ marginTop: '15px' }}>
+          {filteredReports.length === 0 ? (
+            <p className="empty" style={{ padding: '40px', textAlign: 'center' }}>No reports in this category.</p>
+          ) : (
+            filteredReports.map(rep => (
+              <div key={rep.id} className={`report-item-panel ${rep.status}`}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '10px' }}>
+                  <div>
+                    <span className="report-badge" style={{ fontSize: '10px', textTransform: 'uppercase' }}>
+                      Reported {rep.postType}
+                    </span>
+                    <span style={{ fontSize: '12px', color: 'var(--muted)', marginLeft: '8px' }}>
+                      by {rep.reportedBy} &bull; {new Date(rep.createdAt).toLocaleString()}
+                    </span>
+                    <h3 style={{ margin: '8px 0 4px 0', fontSize: '16px' }}>
+                      Reason: <span style={{ color: 'var(--red)', fontWeight: 'bold' }}>{rep.reason}</span>
+                    </h3>
+                  </div>
+                  {rep.status === 'pending' && (
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button className="primary" style={{ padding: '6px 12px', minHeight: 'auto', fontSize: '12px' }} onClick={() => handleResolveReport(rep.id, true)}>
+                        Approve Spam (-2 SP)
+                      </button>
+                      <button className="secondary" style={{ padding: '6px 12px', minHeight: 'auto', fontSize: '12px' }} onClick={() => handleResolveReport(rep.id, false)}>
+                        Reject
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ marginTop: '12px', padding: '12px', background: '#f8fafc', borderRadius: '6px', border: '1px solid var(--line)' }}>
+                  {rep.postType === 'question' ? (
+                    <div>
+                      <strong style={{ display: 'block', fontSize: '14px', marginBottom: '4px' }}>Question Title: {rep.content.title}</strong>
+                      <p style={{ margin: 0, fontSize: '13px', whiteSpace: 'pre-wrap', color: '#475569' }}>{rep.content.description}</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <strong style={{ display: 'block', fontSize: '14px', marginBottom: '4px' }}>Answer under question: "{rep.content.questionTitle}"</strong>
+                      <p style={{ margin: 0, fontSize: '13px', whiteSpace: 'pre-wrap', color: '#475569' }}>{rep.content.body}</p>
+                    </div>
+                  )}
+                  <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--muted)', borderTop: '1px solid #f1f5f9', paddingTop: '6px' }}>
+                    Author: <strong>{rep.content.authorName}</strong> ({rep.content.authorEmail})
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      <section className="panel" style={{ alignSelf: 'start' }}>
+        <div className="panel-head">
+          <h2>Moderation Action Log</h2>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="table" style={{ fontSize: '12px' }}>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Admin</th>
+                <th>Action</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.length === 0 ? (
+                <tr>
+                  <td colSpan="4" className="empty" style={{ textAlign: 'center' }}>No actions logged yet.</td>
+                </tr>
+              ) : (
+                logs.slice(0, 50).map(log => (
+                  <tr key={log.id}>
+                    <td style={{ whiteSpace: 'nowrap' }}>{new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
+                    <td>{log.adminEmail}</td>
+                    <td>
+                      <span className="log-reason" style={{ 
+                        background: log.action.includes('approve') ? '#fee2e2' : log.action.includes('reject') ? '#dcfce7' : '#e2e8f0',
+                        color: log.action.includes('approve') ? 'var(--red)' : log.action.includes('reject') ? 'var(--green)' : '#475569'
+                      }}>{log.action}</span>
+                    </td>
+                    <td>{log.details}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);

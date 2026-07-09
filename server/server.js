@@ -14,6 +14,18 @@ import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import Question from './models/Question.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import {
+  getSpamReports,
+  saveSpamReport,
+  updateSpamReportStatus,
+  getDuplicates,
+  saveDuplicate,
+  removeDuplicate,
+  getModerationLogs,
+  logModerationAction,
+  removeSpamReportsForQuestion,
+  removeSpamReportsForAnswer
+} from './services/moderation.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -729,7 +741,15 @@ api.get('/doubts', authGuard, async (req, res) => {
       ];
     }
     const questions = await Question.find(filter).sort({ pinned: -1, createdAt: -1 }).lean();
-    res.json(questions);
+    
+    // Merge duplicate info
+    const duplicates = getDuplicates();
+    const questionsWithDups = questions.map(question => {
+      const dup = duplicates.find(d => d.questionId === question._id.toString());
+      return dup ? { ...question, duplicateInfo: dup } : question;
+    });
+
+    res.json(questionsWithDups);
   } catch (err) {
     console.error('get doubts error:', err);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -743,7 +763,10 @@ api.get('/doubts/:id', authGuard, async (req, res) => {
     if (question.isSpam && !req.isAdmin) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    res.json(question);
+    const duplicates = getDuplicates();
+    const dup = duplicates.find(d => d.questionId === question._id.toString());
+    const questionWithDup = dup ? { ...question, duplicateInfo: dup } : question;
+    res.json(questionWithDup);
   } catch (err) {
     console.error('get doubt detail error:', err);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -1037,6 +1060,518 @@ api.post('/doubts/:id/unspam', adminGuard, async (req, res) => {
     res.json(question);
   } catch (err) {
     console.error('unspam question error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Student flag question as spam
+api.post('/doubts/:id/report', authGuard, async (req, res) => {
+  try {
+    const { reason } = req.body || {};
+    const question = await Question.findById(req.params.id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    // Create report
+    const reportId = 'rep_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+    const newReport = {
+      id: reportId,
+      postId: question._id.toString(),
+      postType: 'question',
+      reportedBy: req.student ? req.student.email : req.headers['x-admin-email'] || 'anonymous',
+      reason: reason || 'Spam / Inappropriate content',
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      content: {
+        title: question.title,
+        description: question.description,
+        authorName: question.author.name,
+        authorEmail: question.author.email
+      }
+    };
+    saveSpamReport(newReport);
+    res.status(201).json({ success: true, report: newReport });
+  } catch (err) {
+    console.error('report question error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Student flag answer as spam
+api.post('/doubts/:id/answers/:answerId/report', authGuard, async (req, res) => {
+  try {
+    const { reason } = req.body || {};
+    const question = await Question.findById(req.params.id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+    const answer = question.answers.id(req.params.answerId);
+    if (!answer) return res.status(404).json({ error: 'Answer not found' });
+
+    // Create report
+    const reportId = 'rep_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+    const newReport = {
+      id: reportId,
+      postId: answer._id.toString(),
+      questionId: question._id.toString(),
+      postType: 'answer',
+      reportedBy: req.student ? req.student.email : req.headers['x-admin-email'] || 'anonymous',
+      reason: reason || 'Spam / Inappropriate content',
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      content: {
+        body: answer.body,
+        authorName: answer.author.name,
+        authorEmail: answer.author.email,
+        questionTitle: question.title
+      }
+    };
+    saveSpamReport(newReport);
+    res.status(201).json({ success: true, report: newReport });
+  } catch (err) {
+    console.error('report answer error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Admin Doubt Forum stats & lists
+api.get('/admin/doubt-forum', adminGuard, async (req, res) => {
+  try {
+    // Return all questions, sorted newest first
+    const questions = await Question.find({}).sort({ createdAt: -1 }).lean();
+    const duplicates = getDuplicates();
+
+    // Calculate most active helpers based on accepted answers
+    const helperCounts = {};
+    for (const q of questions) {
+      for (const a of q.answers) {
+        if (a.isAccepted) {
+          const email = a.author.email.toLowerCase();
+          if (!helperCounts[email]) {
+            helperCounts[email] = {
+              name: a.author.name,
+              email: a.author.email,
+              acceptedCount: 0
+            };
+          }
+          helperCounts[email].acceptedCount++;
+        }
+      }
+    }
+    const activeHelpers = Object.values(helperCounts).sort((a, b) => b.acceptedCount - a.acceptedCount);
+
+    res.json({
+      questions,
+      duplicates,
+      activeHelpers
+    });
+  } catch (err) {
+    console.error('get admin doubt forum details error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Mark question as duplicate
+api.post('/admin/doubt-forum/duplicate', adminGuard, async (req, res) => {
+  try {
+    const { questionId, originalQuestionId } = req.body;
+    if (!questionId || !originalQuestionId) {
+      return res.status(400).json({ error: 'questionId and originalQuestionId required' });
+    }
+
+    const question = await Question.findById(questionId);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    const originalQuestion = await Question.findById(originalQuestionId);
+    if (!originalQuestion) return res.status(404).json({ error: 'Original question not found' });
+
+    // Save duplicate link
+    saveDuplicate({
+      questionId: questionId.toString(),
+      originalQuestionId: originalQuestionId.toString(),
+      originalTitle: originalQuestion.title,
+      markedBy: req.headers['x-admin-email'] || 'admin',
+      markedAt: new Date().toISOString()
+    });
+
+    // Deduct 1 SP from duplicate author
+    const author = await Student.findOne({
+      $or: [{ email: question.author.email }, { alternateEmail: question.author.email }]
+    });
+    if (author) {
+      const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+      await awardSp(
+        author,
+        -1,
+        'manual',
+        `Doubt Discussion: Question marked as duplicate (Title: "${shortTitle}")`
+      );
+    }
+
+    logModerationAction(
+      'mark_duplicate',
+      req.headers['x-admin-email'] || 'admin',
+      questionId,
+      'question',
+      `Question "${question.title}" marked as duplicate of "${originalQuestion.title}"`
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('mark duplicate error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Unmark duplicate
+api.delete('/admin/doubt-forum/duplicate/:id', adminGuard, async (req, res) => {
+  try {
+    const questionId = req.params.id;
+    const question = await Question.findById(questionId);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    removeDuplicate(questionId);
+
+    // Refund 1 SP to author
+    const author = await Student.findOne({
+      $or: [{ email: question.author.email }, { alternateEmail: question.author.email }]
+    });
+    if (author) {
+      const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+      await awardSp(
+        author,
+        1,
+        'manual',
+        `Doubt Discussion: Duplicate question status removed (Title: "${shortTitle}")`
+      );
+    }
+
+    logModerationAction(
+      'unmark_duplicate',
+      req.headers['x-admin-email'] || 'admin',
+      questionId,
+      'question',
+      `Question "${question.title}" unmarked as duplicate`
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('unmark duplicate error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Delete a question
+api.delete('/admin/doubt-forum/question/:id', adminGuard, async (req, res) => {
+  try {
+    const question = await Question.findById(req.params.id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    // If not marked spam, revert the +1 SP they got
+    if (!question.isSpam) {
+      const author = await Student.findOne({
+        $or: [{ email: question.author.email }, { alternateEmail: question.author.email }]
+      });
+      if (author) {
+        const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+        await awardSp(
+          author,
+          -1,
+          'manual',
+          `Doubt Discussion: Question deleted (Title: "${shortTitle}")`
+        );
+      }
+    }
+
+    // Also deduct SP from any accepted answer author (revert helper SP)
+    for (const ans of question.answers) {
+      if (ans.isAccepted) {
+        const helper = await Student.findOne({
+          $or: [{ email: ans.author.email }, { alternateEmail: ans.author.email }]
+        });
+        if (helper) {
+          const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+          await awardSp(
+            helper,
+            -3,
+            'manual',
+            `Doubt Discussion: Accepted answer deleted due to question deletion (Title: "${shortTitle}")`
+          );
+        }
+      }
+    }
+
+    // Clean up duplicates if this question was duplicate
+    removeDuplicate(req.params.id);
+
+    // Clean up spam reports
+    removeSpamReportsForQuestion(req.params.id);
+
+    // Delete the question
+    await Question.findByIdAndDelete(req.params.id);
+
+    logModerationAction(
+      'delete_question',
+      req.headers['x-admin-email'] || 'admin',
+      req.params.id,
+      'question',
+      `Question "${question.title}" deleted by admin`
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('delete question error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Delete an answer
+api.delete('/admin/doubt-forum/question/:id/answers/:answerId', adminGuard, async (req, res) => {
+  try {
+    const { id, answerId } = req.params;
+    const question = await Question.findById(id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    const answer = question.answers.id(answerId);
+    if (!answer) return res.status(404).json({ error: 'Answer not found' });
+
+    // If accepted, deduct 3 SP from answer author
+    if (answer.isAccepted) {
+      const helper = await Student.findOne({
+        $or: [{ email: answer.author.email }, { alternateEmail: answer.author.email }]
+      });
+      if (helper) {
+        const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+        await awardSp(
+          helper,
+          -3,
+          'manual',
+          `Doubt Discussion: Accepted answer deleted by admin (Title: "${shortTitle}")`
+        );
+      }
+    }
+
+    // Remove from reports
+    removeSpamReportsForAnswer(answerId);
+
+    // Delete answer
+    question.answers.pull(answerId);
+    await question.save();
+
+    logModerationAction(
+      'delete_answer',
+      req.headers['x-admin-email'] || 'admin',
+      answerId,
+      'answer',
+      `Answer by "${answer.author.name}" under question "${question.title}" deleted by admin`
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('delete answer error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Mentor/admin accept answer override
+api.post('/admin/doubt-forum/question/:id/answers/:answerId/approve', adminGuard, async (req, res) => {
+  try {
+    const { id, answerId } = req.params;
+    const question = await Question.findById(id);
+    if (!question) return res.status(404).json({ error: 'Question not found' });
+
+    const answer = question.answers.id(answerId);
+    if (!answer) return res.status(404).json({ error: 'Answer not found' });
+
+    const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+
+    // Unaccept previously accepted answer if any
+    const prevAccepted = question.answers.find(a => a.isAccepted);
+    if (prevAccepted) {
+      if (prevAccepted._id.toString() === answerId) {
+        return res.json(question);
+      }
+      prevAccepted.isAccepted = false;
+      const prevContributor = await Student.findOne({
+        $or: [{ email: prevAccepted.author.email }, { alternateEmail: prevAccepted.author.email }]
+      });
+      if (prevContributor) {
+        await awardSp(
+          prevContributor,
+          -3,
+          'manual',
+          `Doubt Discussion: Answer unaccepted (Title: "${shortTitle}")`
+        );
+      }
+    }
+
+    answer.isAccepted = true;
+    await question.save();
+
+    // Award 3 SP to helper
+    const contributor = await Student.findOne({
+      $or: [{ email: answer.author.email }, { alternateEmail: answer.author.email }]
+    });
+    if (contributor) {
+      await awardSp(
+        contributor,
+        3,
+        'manual',
+        `Doubt Discussion: Answer accepted by admin override (Title: "${shortTitle}")`
+      );
+    }
+
+    logModerationAction(
+      'approve_accepted_answer',
+      req.headers['x-admin-email'] || 'admin',
+      answerId,
+      'answer',
+      `Answer by "${answer.author.name}" accepted by admin override under question "${question.title}"`
+    );
+
+    res.json(question);
+  } catch (err) {
+    console.error('admin approve answer error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Admin get spam reports & logs
+api.get('/admin/spam-reports', adminGuard, async (req, res) => {
+  try {
+    res.json({
+      reports: getSpamReports(),
+      logs: getModerationLogs()
+    });
+  } catch (err) {
+    console.error('get spam reports error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Admin approve spam report (-2 SP penalty)
+api.post('/admin/spam-reports/:id/approve', adminGuard, async (req, res) => {
+  try {
+    const reportId = req.params.id;
+    const reports = getSpamReports();
+    const report = reports.find(r => r.id === reportId);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+
+    if (report.status !== 'pending') {
+      return res.status(400).json({ error: 'Report already resolved' });
+    }
+
+    const adminEmail = req.headers['x-admin-email'] || 'admin';
+
+    if (report.postType === 'question') {
+      const question = await Question.findById(report.postId);
+      if (question) {
+        if (!question.isSpam) {
+          question.isSpam = true;
+          await question.save();
+
+          // Deduct 2 SP from question author
+          const author = await Student.findOne({
+            $or: [{ email: question.author.email }, { alternateEmail: question.author.email }]
+          });
+          if (author) {
+            const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+            await awardSp(
+              author,
+              -2,
+              'manual',
+              `Doubt Discussion: Spam penalty (Title: "${shortTitle}")`
+            );
+          }
+        }
+      }
+    } else if (report.postType === 'answer') {
+      const question = await Question.findById(report.questionId);
+      if (question) {
+        const answer = question.answers.id(report.postId);
+        if (answer) {
+          // Deduct 2 SP from answer author
+          const author = await Student.findOne({
+            $or: [{ email: answer.author.email }, { alternateEmail: answer.author.email }]
+          });
+          if (author) {
+            const shortBody = answer.body.length > 50 ? answer.body.substring(0, 50) + '...' : answer.body;
+            await awardSp(
+              author,
+              -2,
+              'manual',
+              `Doubt Discussion: Spam answer penalty (Body: "${shortBody}")`
+            );
+          }
+
+          // If the answer was accepted, also deduct the 3 SP helper reward
+          if (answer.isAccepted) {
+            const helper = await Student.findOne({
+              $or: [{ email: answer.author.email }, { alternateEmail: answer.author.email }]
+            });
+            if (helper) {
+              const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
+              await awardSp(
+                helper,
+                -3,
+                'manual',
+                `Doubt Discussion: Answer unaccepted due to spam (Title: "${shortTitle}")`
+              );
+            }
+          }
+
+          // Remove answer
+          question.answers.pull(report.postId);
+          await question.save();
+        }
+      }
+    }
+
+    // Update status
+    const updatedReport = updateSpamReportStatus(reportId, 'approved');
+
+    // Log moderation action
+    logModerationAction(
+      'approve_spam',
+      adminEmail,
+      report.postId,
+      report.postType,
+      `Spam report for ${report.postType} approved. Author penalized -2 SP.`
+    );
+
+    res.json({ success: true, report: updatedReport });
+  } catch (err) {
+    console.error('approve spam error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Admin reject spam report
+api.post('/admin/spam-reports/:id/reject', adminGuard, async (req, res) => {
+  try {
+    const reportId = req.params.id;
+    const reports = getSpamReports();
+    const report = reports.find(r => r.id === reportId);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+
+    if (report.status !== 'pending') {
+      return res.status(400).json({ error: 'Report already resolved' });
+    }
+
+    const adminEmail = req.headers['x-admin-email'] || 'admin';
+
+    // Update status
+    const updatedReport = updateSpamReportStatus(reportId, 'rejected');
+
+    // Log moderation action
+    logModerationAction(
+      'reject_spam',
+      adminEmail,
+      report.postId,
+      report.postType,
+      `Spam report for ${report.postType} rejected.`
+    );
+
+    res.json({ success: true, report: updatedReport });
+  } catch (err) {
+    console.error('reject spam error:', err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
