@@ -103,9 +103,19 @@ function App() {
         <SurveyModal
           survey={config.survey}
           student={profile.student}
+          statusPath="/survey/status"
+          completedKey="surveyCompleted"
           onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, surveyCompleted: true } }))}
         />
       </DevContext.Provider>
+        <SurveyModal
+          survey={config.poll2}
+          student={profile.student}
+          statusPath="/poll2/status"
+          completedKey="poll2Completed"
+          onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll2Completed: true } }))}
+        />
+      </>
     );
   }
   if (view === 'excused' && excused) {
@@ -806,12 +816,12 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
 }
 
 
-function SurveyModal({ survey, student, onDone }) {
+function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', completedKey = 'surveyCompleted' }) {
   const [checking, setChecking] = useState(false);
   const [note, setNote] = useState('');
   const done = useRef(false);
 
-  const enabled = survey?.enabled && survey.formUrl && student && !student.surveyCompleted;
+  const enabled = survey?.enabled && survey.formUrl && student && !student[completedKey];
 
   // Verify against the server. The completion flag is set ONLY by a real Google
   // submission (Apps Script webhook) or the server-side sheet sync — never by the
@@ -821,7 +831,7 @@ function SurveyModal({ survey, student, onDone }) {
     if (done.current) return;
     if (showNote) { setChecking(true); setNote(''); }
     try {
-      const r = await fetch(`${API}/survey/status`);
+      const r = await fetch(`${API}${statusPath}`);
       if (r.ok && (await r.json()).completed) { done.current = true; onDone(); return; }
       if (showNote) setNote("We haven't received your response yet. Please make sure you pressed Submit in the form above — this window closes on its own once your response is recorded (it can take a few seconds).");
     } catch {
