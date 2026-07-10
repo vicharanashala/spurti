@@ -1,8 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
+import { toPng } from 'html-to-image';
 
 export default function ShareCard({ student, badges = [], onClose }) {
   const [copied, setCopied] = useState(false);
   const [liCopied, setLiCopied] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
+  
+  const cardRef = useRef(null);
 
   if (!student) return null;
 
@@ -35,6 +40,73 @@ export default function ShareCard({ student, badges = [], onClose }) {
     window.open('https://www.linkedin.com/feed/?shareActive=true', '_blank', 'noopener,noreferrer');
   };
 
+  const handleDownload = async () => {
+    if (!cardRef.current) return;
+    setSharing(true);
+    setStatusMessage('Generating card image…');
+    try {
+      const dataUrl = await toPng(cardRef.current, {
+        cacheBust: true,
+        useCors: true,
+        backgroundColor: 'var(--panel)'
+      });
+      const link = document.createElement('a');
+      link.download = `${name.replace(/\s+/g, '_')}_spurti_achievement.png`;
+      link.href = dataUrl;
+      link.click();
+      setStatusMessage('✅ Card image downloaded successfully!');
+      setTimeout(() => setStatusMessage(''), 3000);
+    } catch (err) {
+      console.error('Error generating card image:', err);
+      setStatusMessage('❌ Failed to generate card image.');
+      setTimeout(() => setStatusMessage(''), 3000);
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const handleShareImage = async () => {
+    if (!cardRef.current) return;
+    setSharing(true);
+    setStatusMessage('Generating card image…');
+    try {
+      const dataUrl = await toPng(cardRef.current, {
+        cacheBust: true,
+        useCors: true,
+        backgroundColor: 'var(--panel)'
+      });
+      
+      const blob = await (await fetch(dataUrl)).blob();
+      const file = new File([blob], 'spurti-achievement.png', { type: 'image/png' });
+
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: 'My Spurti Achievement Card',
+          text: `🎯 I just reached Level ${level} in the Spurti Motivation Engine!`
+        });
+        setStatusMessage('✅ Shared successfully!');
+        setTimeout(() => setStatusMessage(''), 3000);
+      } else {
+        // Fallback: download and copy text
+        const link = document.createElement('a');
+        link.download = `${name.replace(/\s+/g, '_')}_spurti_achievement.png`;
+        link.href = dataUrl;
+        link.click();
+        
+        navigator.clipboard.writeText(shareText).catch(() => {});
+        setStatusMessage('ℹ️ Web Share not supported. Card downloaded; description copied to clipboard!');
+        setTimeout(() => setStatusMessage(''), 6000);
+      }
+    } catch (err) {
+      console.error('Error sharing card image:', err);
+      setStatusMessage('❌ Failed to share image.');
+      setTimeout(() => setStatusMessage(''), 3000);
+    } finally {
+      setSharing(false);
+    }
+  };
+
   const handleClose = () => {
     delete window.__lastSharedRank;
     delete window.__lastSharedContext;
@@ -54,7 +126,21 @@ export default function ShareCard({ student, badges = [], onClose }) {
 
         <div className="share-modal-content">
           {/* Achievement Card */}
-          <div className="achievement-card">
+          <div className="achievement-card" ref={cardRef}>
+            <div className="achievement-logos">
+              <img
+                src="https://avatars.githubusercontent.com/u/197844754?s=200&v=4"
+                alt="VLED Logo"
+                className="achievement-logo"
+                crossOrigin="anonymous"
+              />
+              <img
+                src="https://upload.wikimedia.org/wikipedia/en/b/b5/Indian_Institute_of_Technology_Ropar_logo.png"
+                alt="IIT Ropar Logo"
+                className="achievement-logo"
+                crossOrigin="anonymous"
+              />
+            </div>
             <div className="achievement-header">Spurti Achievement Card</div>
             <div className="achievement-name">{name}</div>
 
@@ -93,7 +179,7 @@ export default function ShareCard({ student, badges = [], onClose }) {
             </div>
           </div>
 
-          {/* LinkedIn note */}
+          {/* LinkedIn / Sharing status note */}
           {liCopied && (
             <div style={{
               margin: '12px 0 0',
@@ -102,19 +188,33 @@ export default function ShareCard({ student, badges = [], onClose }) {
               border: '1px solid var(--primary)',
               borderRadius: '8px',
               fontSize: '0.85rem',
-              color: 'var(--text)'
+              color: 'var(--text)',
+              width: '100%',
+              textAlign: 'center'
             }}>
               ✅ <strong>Achievement text copied!</strong> LinkedIn is now opening — just paste it into your post (Ctrl+V / Cmd+V).
             </div>
           )}
 
+          {statusMessage && (
+            <div className="share-status-message">
+              {statusMessage}
+            </div>
+          )}
+
           {/* Social Share Buttons */}
           <div className="share-buttons-row">
-            <a href={twitterUrl} target="_blank" rel="noopener noreferrer" className="share-btn twitter" data-testid="twitter-share">
-              🐦 Twitter
-            </a>
+            <button onClick={handleShareImage} disabled={sharing} className="share-btn share-img" data-testid="image-share">
+              📤 Share Card (Image)
+            </button>
+            <button onClick={handleDownload} disabled={sharing} className="share-btn download" data-testid="download-share">
+              💾 Download Card
+            </button>
             <a href={whatsappUrl} target="_blank" rel="noopener noreferrer" className="share-btn whatsapp" data-testid="whatsapp-share">
               💬 WhatsApp
+            </a>
+            <a href={twitterUrl} target="_blank" rel="noopener noreferrer" className="share-btn twitter" data-testid="twitter-share">
+              🐦 Twitter
             </a>
             <button onClick={handleLinkedIn} className="share-btn linkedin" data-testid="linkedin-share">
               🔗 {liCopied ? 'Opening LinkedIn…' : 'LinkedIn'}

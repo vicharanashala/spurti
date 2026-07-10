@@ -769,6 +769,19 @@ input:checked + .slider:before {
   background: radial-gradient(circle, rgba(56, 189, 248, 0.08) 0%, transparent 70%);
   pointer-events: none;
 }
+.achievement-logos {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 0 4px;
+}
+.achievement-logo {
+  height: 38px;
+  width: auto;
+  object-fit: contain;
+}
 .achievement-header {
   font-size: 12px;
   font-weight: 800;
@@ -863,6 +876,14 @@ input:checked + .slider:before {
   background: #25d366;
   color: #fff;
 }
+.share-btn.download {
+  background: var(--primary);
+  color: #fff;
+}
+.share-btn.share-img {
+  background: #4f46e5;
+  color: #fff;
+}
 .share-btn.copy {
   background: var(--icon-bg);
   color: var(--text);
@@ -874,6 +895,27 @@ input:checked + .slider:before {
 }
 .share-btn:active {
   transform: translateY(0);
+}
+.share-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+}
+.share-status-message {
+  padding: 8px 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  color: var(--text);
+  width: 100%;
+  text-align: center;
+  margin-top: 4px;
+  animation: shareStatusFadeIn 0.3s ease;
+}
+@keyframes shareStatusFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .share-trigger-btn {
   display: inline-flex;
