@@ -95,12 +95,13 @@ function App() {
 
   if (loading) {
     return (
-      <main className="page login-page">
+<main className="page login-page">
         <section className="panel auth-card">
           <p className="eyebrow">Spurti</p>
           <h1>Loading...</h1>
         </section>
       </main>
+
     );
   }
 
@@ -141,7 +142,16 @@ function App() {
           <SurveyModal
             survey={config.survey}
             student={profile.student}
+            statusPath="/survey/status"
+            completedKey="surveyCompleted"
             onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, surveyCompleted: true } }))}
+          />
+          <SurveyModal
+            survey={config.poll2}
+            student={profile.student}
+            statusPath="/poll2/status"
+            completedKey="poll2Completed"
+            onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll2Completed: true } }))}
           />
         </>
       );
@@ -206,18 +216,18 @@ function ExcusedView({ data, onBack }) {
   );
 }
 
-function SurveyModal({ survey, student, onDone }) {
+function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', completedKey = 'surveyCompleted' }) {
   const [checking, setChecking] = useState(false);
   const [note, setNote] = useState('');
   const done = useRef(false);
 
-  const enabled = survey?.enabled && survey.formUrl && student && !student.surveyCompleted;
+  const enabled = survey?.enabled && survey.formUrl && student && !student[completedKey];
 
   async function verifyStatus(showNote) {
     if (done.current) return;
     if (showNote) { setChecking(true); setNote(''); }
     try {
-      const r = await fetch(`${API}/survey/status`);
+      const r = await fetch(`${API}${statusPath}`);
       if (r.ok && (await r.json()).completed) { done.current = true; onDone(); return; }
       if (showNote) setNote("We haven't received your response yet. Please make sure you pressed Submit in the form above — this window closes on its own once your response is recorded.");
     } catch {
