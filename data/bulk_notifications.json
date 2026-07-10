@@ -1,0 +1,21 @@
+[
+  {
+    "id": "notif-1783609572766",
+    "timestamp": "2026-07-09T15:06:12.766Z",
+    "adminEmail": "dled@iitrpr.ac.in",
+    "targetGroup": "low-sp",
+    "targetValue": "100",
+    "message": "Please check your stats",
+    "recipientCount": 2,
+    "recipients": [
+      {
+        "name": "Charlie Brown",
+        "email": "charlie@example.com"
+      },
+      {
+        "name": "David Miller",
+        "email": "david@example.com"
+      }
+    ]
+  }
+]
