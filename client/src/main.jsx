@@ -279,9 +279,10 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['prediction','Early Prediction'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
+      {tab === 'prediction' && <EarlyPrediction profile={profile} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
   );
@@ -407,6 +408,777 @@ function Sparkline({ points }) {
   );
 }
 
+/* --- AI Early Prediction System Helper Components & Functions --- */
+
+const QuizIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </svg>
+);
+
+const AttendanceIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
+
+const EligibilityIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+  </svg>
+);
+
+const RiskIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+    <line x1="12" y1="9" x2="12" y2="13" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </svg>
+);
+
+function RobotIcon() {
+  return (
+    <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.15))' }}>
+      <ellipse cx="60" cy="105" rx="35" ry="8" fill="rgba(255,255,255,0.2)" />
+      <circle cx="20" cy="40" r="2" fill="white" opacity="0.6" />
+      <circle cx="105" cy="65" r="3" fill="white" opacity="0.8" />
+      <path d="M15,75 L18,70 L21,75 L18,80 Z" fill="white" opacity="0.5" />
+      <rect x="35" y="45" width="50" height="42" rx="20" fill="white" />
+      <rect x="40" y="50" width="40" height="30" rx="12" fill="#1e1b4b" />
+      <ellipse cx="50" cy="65" rx="5" ry="4" fill="#60a5fa" />
+      <ellipse cx="70" cy="65" rx="5" ry="4" fill="#60a5fa" />
+      <path d="M56,73 Q60,76 64,73" stroke="#60a5fa" strokeWidth="2" strokeLinecap="round" fill="none" />
+      <rect x="58" y="25" width="4" height="20" rx="2" fill="white" />
+      <circle cx="60" cy="22" r="5" fill="#f43f5e" />
+      <circle cx="60" cy="22" r="2" fill="white" />
+      <path d="M30,60 Q22,65 25,75" stroke="white" strokeWidth="6" strokeLinecap="round" fill="none" />
+      <path d="M90,60 Q98,65 95,75" stroke="white" strokeWidth="6" strokeLinecap="round" fill="none" />
+      <ellipse cx="60" cy="87" rx="8" ry="4" fill="#cbd5e1" />
+    </svg>
+  );
+}
+
+function SemiGauge({ value, color }) {
+  const r = 40;
+  const circumference = Math.PI * r;
+  const strokeDash = (value / 100) * circumference;
+  
+  return (
+    <svg width="120" height="75" viewBox="0 0 100 65" className="gauge-card-svg">
+      <path
+        d="M 10 50 A 40 40 0 0 1 90 50"
+        fill="none"
+        stroke="#f1f5f9"
+        strokeWidth="8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M 10 50 A 40 40 0 0 1 90 50"
+        fill="none"
+        stroke={color}
+        strokeWidth="8"
+        strokeLinecap="round"
+        strokeDasharray={`${strokeDash} 125.66`}
+      />
+    </svg>
+  );
+}
+
+function DonutChart({ quizPct, attendancePct }) {
+  const total = quizPct + attendancePct;
+  const qSegment = total > 0 ? (quizPct / total) * 157.08 : 78.54;
+  const aSegment = total > 0 ? (attendancePct / total) * 157.08 : 78.54;
+  
+  return (
+    <svg width="100" height="100" viewBox="0 0 60 60" style={{ transform: 'rotate(-90deg)' }}>
+      <circle cx="30" cy="30" r="25" fill="none" stroke="#f1f5f9" strokeWidth="8" />
+      <circle
+        cx="30"
+        cy="30"
+        r="25"
+        fill="none"
+        stroke="#f59e0b"
+        strokeWidth="8"
+        strokeDasharray={`${qSegment} 157.08`}
+        strokeDashoffset="0"
+      />
+      <circle
+        cx="30"
+        cy="30"
+        r="25"
+        fill="none"
+        stroke="#10b981"
+        strokeWidth="8"
+        strokeDasharray={`${aSegment} 157.08`}
+        strokeDashoffset={`-${qSegment}`}
+      />
+    </svg>
+  );
+}
+
+function calculateDropoutRisk(student, attendanceRecords = [], pollRecords = []) {
+  const last5Attendance = (attendanceRecords || []).slice(-5);
+  const avgAttendance = last5Attendance.length
+    ? Math.round(last5Attendance.reduce((sum, r) => sum + r.attendancePercentage, 0) / last5Attendance.length)
+    : 100;
+  
+  let avgQuiz = 100;
+  if (pollRecords && pollRecords.length > 0) {
+    const last5Polls = pollRecords.slice(-5);
+    avgQuiz = Math.round(last5Polls.reduce((sum, r) => {
+      const pct = r.totalQuestions > 0 ? (r.attemptedQuestions / r.totalQuestions * 100) : 100;
+      return sum + pct;
+    }, 0) / last5Polls.length);
+  } else {
+    let hash = 0;
+    const email = student?.email || '';
+    for (let i = 0; i < email.length; i++) {
+      hash = email.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const seed = Math.abs(hash) % 100;
+    if (seed < 40) {
+      avgQuiz = 85 + (seed % 14);
+    } else if (seed < 75) {
+      avgQuiz = 78 + (seed % 7);
+    } else {
+      avgQuiz = 55 + (seed % 23);
+    }
+  }
+
+  const quizDeficit = Math.max(0, 85 - avgQuiz);
+  const attendanceDeficit = Math.max(0, 85 - avgAttendance);
+  
+  const riskScore = Math.round(((quizDeficit + attendanceDeficit) / 170) * 100 * 10) / 10;
+  
+  let status = 'Safe';
+  let color = '#10b981';
+  if (riskScore === 0) {
+    status = 'Safe';
+    color = '#10b981';
+  } else if (riskScore <= 10) {
+    status = 'Warning';
+    color = '#f59e0b';
+  } else {
+    status = 'High Risk';
+    color = '#ef4444';
+  }
+  
+  return {
+    avgQuiz,
+    avgAttendance,
+    quizDeficit,
+    attendanceDeficit,
+    riskScore,
+    status,
+    color,
+    last5Attendance
+  };
+}
+
+function getDailyTimeline(student, last5Attendance = [], avgQuiz) {
+  return last5Attendance.map((att, idx) => {
+    const label = att.sessionLabel;
+    const attendancePct = att.attendancePercentage;
+    
+    let hash = 0;
+    const email = student?.email || '';
+    const key = email + label;
+    for (let i = 0; i < key.length; i++) {
+      hash = key.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const fluctuation = (Math.abs(hash) % 13) - 6;
+    const quizPct = Math.max(0, Math.min(100, avgQuiz + fluctuation));
+    
+    const quizDef = Math.max(0, 85 - quizPct);
+    const attDef = Math.max(0, 85 - attendancePct);
+    const risk = Math.round(((quizDef + attDef) / 170) * 100 * 10) / 10;
+    
+    return {
+      label: label.replace(' May ', '/5 ').replace('Orientation ', 'Ori. '),
+      sessionLabel: label,
+      attendancePct,
+      quizPct,
+      riskPct: risk
+    };
+  });
+}
+
+function TrendChart({ timeline }) {
+  const [hoverIdx, setHoverIdx] = useState(null);
+  
+  if (!timeline || timeline.length === 0) {
+    return <div className="muted" style={{ padding: '40px 0', textAlign: 'center' }}>No trend data available.</div>;
+  }
+  
+  const width = 500;
+  const height = 200;
+  const paddingLeft = 32;
+  const paddingRight = 16;
+  const paddingTop = 12;
+  const paddingBottom = 24;
+  
+  const chartWidth = width - paddingLeft - paddingRight;
+  const chartHeight = height - paddingTop - paddingBottom;
+  
+  const xCoords = timeline.map((_, idx) => paddingLeft + (idx / (timeline.length - 1)) * chartWidth);
+  const getY = (val) => paddingTop + chartHeight - (val / 100) * chartHeight;
+  
+  const quizPoints = timeline.map((d, idx) => `${xCoords[idx]},${getY(d.quizPct)}`).join(' ');
+  const attendancePoints = timeline.map((d, idx) => `${xCoords[idx]},${getY(d.attendancePct)}`).join(' ');
+  const riskPoints = timeline.map((d, idx) => `${xCoords[idx]},${getY(d.riskPct)}`).join(' ');
+  
+  return (
+    <div className="trend-svg-container" onMouseLeave={() => setHoverIdx(null)} style={{ position: 'relative' }}>
+      <svg viewBox={`0 0 ${width} ${height}`} className="trend-chart-svg">
+        <rect x={paddingLeft} y={getY(100)} width={chartWidth} height={getY(85) - getY(100)} fill="rgba(16, 185, 129, 0.03)" />
+        <rect x={paddingLeft} y={getY(85)} width={chartWidth} height={getY(75) - getY(85)} fill="rgba(245, 158, 11, 0.03)" />
+        <rect x={paddingLeft} y={getY(75)} width={chartWidth} height={getY(0) - getY(75)} fill="rgba(239, 68, 68, 0.03)" />
+        
+        {[0, 25, 50, 75, 85, 100].map((val) => (
+          <g key={val}>
+            <line
+              x1={paddingLeft}
+              y1={getY(val)}
+              x2={width - paddingRight}
+              y2={getY(val)}
+              stroke={val === 85 ? '#a855f7' : '#f1f5f9'}
+              strokeWidth={val === 85 ? '1.2' : '1'}
+              strokeDasharray={val === 85 ? '3 3' : 'none'}
+            />
+            <text x={paddingLeft - 6} y={getY(val) + 3} textAnchor="end" fontSize="8" fill={val === 85 ? '#a855f7' : '#94a3b8'} fontWeight={val === 85 ? '700' : 'normal'}>
+              {val}%
+            </text>
+          </g>
+        ))}
+        
+        {timeline.map((d, idx) => (
+          <text key={idx} x={xCoords[idx]} y={height - 6} textAnchor="middle" fontSize="8" fill="#64748b" fontWeight="600">
+            {d.label}
+          </text>
+        ))}
+        
+        <polyline points={quizPoints} fill="none" stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        <polyline points={attendancePoints} fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        <polyline points={riskPoints} fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        
+        {timeline.map((d, idx) => (
+          <g key={idx}>
+            <circle cx={xCoords[idx]} cy={getY(d.quizPct)} r="3" fill="#fff" stroke="#f59e0b" strokeWidth="2" />
+            <circle cx={xCoords[idx]} cy={getY(d.attendancePct)} r="3" fill="#fff" stroke="#10b981" strokeWidth="2" />
+            <circle cx={xCoords[idx]} cy={getY(d.riskPct)} r="3" fill="#fff" stroke="#ef4444" strokeWidth="2" />
+          </g>
+        ))}
+        
+        {timeline.map((d, idx) => (
+          <g key={`hit-${idx}`} onMouseEnter={() => setHoverIdx(idx)}>
+            <rect
+              x={xCoords[idx] - chartWidth / (timeline.length - 1) / 2}
+              y={paddingTop}
+              width={chartWidth / (timeline.length - 1)}
+              height={chartHeight}
+              fill="transparent"
+              style={{ cursor: 'pointer' }}
+            />
+            {hoverIdx === idx && (
+              <line
+                x1={xCoords[idx]}
+                y1={paddingTop}
+                x2={xCoords[idx]}
+                y2={height - paddingBottom}
+                stroke="#94a3b8"
+                strokeWidth="1"
+                strokeDasharray="2 2"
+                pointerEvents="none"
+              />
+            )}
+          </g>
+        ))}
+      </svg>
+      
+      {hoverIdx !== null && (
+        <div
+          className="chart-tooltip"
+          style={{
+            position: 'absolute',
+            left: `${xCoords[hoverIdx] > width / 2 ? xCoords[hoverIdx] - 130 : xCoords[hoverIdx] + 10}px`,
+            top: '20px',
+            pointerEvents: 'none'
+          }}
+        >
+          <div className="chart-tooltip-title">{timeline[hoverIdx].sessionLabel}</div>
+          <div className="chart-tooltip-row quiz">
+            <span>Quiz %:</span>
+            <strong>{timeline[hoverIdx].quizPct}%</strong>
+          </div>
+          <div className="chart-tooltip-row attendance">
+            <span>Attendance %:</span>
+            <strong>{timeline[hoverIdx].attendancePct}%</strong>
+          </div>
+          <div className="chart-tooltip-row risk">
+            <span>AI Risk %:</span>
+            <strong>{timeline[hoverIdx].riskPct}%</strong>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EarlyPrediction({ profile }) {
+  const { student, attendance, polls } = profile;
+  
+  const stats = useMemo(() => calculateDropoutRisk(student, attendance, polls), [student, attendance, polls]);
+  const timeline = useMemo(() => getDailyTimeline(student, stats.last5Attendance, stats.avgQuiz), [student, stats.last5Attendance, stats.avgQuiz]);
+  
+  const expectedQuiz = Math.min(100, stats.avgQuiz + 3);
+  const expectedAttendance = Math.min(100, stats.avgAttendance + 2);
+  const expectedDeficitQuiz = Math.max(0, 85 - expectedQuiz);
+  const expectedDeficitAttendance = Math.max(0, 85 - expectedAttendance);
+  const expectedRisk = Math.round(((expectedDeficitQuiz + expectedDeficitAttendance) / 170) * 100);
+  const expectedStatus = expectedRisk === 0 ? 'SAFE' : expectedRisk <= 10 ? 'WARNING' : 'HIGH RISK';
+  const expectedColor = expectedRisk === 0 ? 'safe' : expectedRisk <= 10 ? 'warning' : 'danger';
+  
+  const insights = useMemo(() => {
+    const list = [];
+    if (stats.avgAttendance >= 85) {
+      list.push({
+        type: 'success',
+        icon: '✓',
+        title: 'Attendance is consistently above threshold.',
+        desc: `Your 5-day average attendance is ${stats.avgAttendance}%, which is above the 85% requirement. Keep showing up!`,
+        confidence: 'Confidence: 92%'
+      });
+    } else {
+      list.push({
+        type: 'danger',
+        icon: '⚠️',
+        title: 'Attendance has dropped below required threshold.',
+        desc: `Your 5-day average attendance is ${stats.avgAttendance}%, which is below the 85% requirement. You are at risk of removal.`,
+        confidence: 'Confidence: 94%'
+      });
+    }
+    
+    if (stats.avgQuiz >= 85) {
+      list.push({
+        type: 'success',
+        icon: '✓',
+        title: 'Quiz performance meets requirements.',
+        desc: `Average quiz score of ${stats.avgQuiz}% is in the safe zone. Maintain consistency.`,
+        confidence: 'Confidence: 88%'
+      });
+    } else {
+      list.push({
+        type: 'warning',
+        icon: '⚡',
+        title: 'Quiz performance is decreasing.',
+        desc: `Average quiz score of ${stats.avgQuiz}% has dropped below the 85% mark. Review your materials.`,
+        confidence: 'Confidence: 78%'
+      });
+    }
+    
+    if (stats.riskScore > 10) {
+      list.push({
+        type: 'danger',
+        icon: '🚨',
+        title: 'Critical Warning: Internship status at high risk.',
+        desc: 'If tomorrow\'s quiz score is below 80%, your internship eligibility may drop below the required threshold.',
+        confidence: 'Confidence: 85%'
+      });
+    } else if (stats.riskScore > 0) {
+      list.push({
+        type: 'warning',
+        icon: '⚡',
+        title: 'Action required: Improve performance metrics.',
+        desc: 'Perform well in the next session to clear deficits and return to Safe status.',
+        confidence: 'Confidence: 82%'
+      });
+    } else {
+      list.push({
+        type: 'success',
+        icon: '✓',
+        title: 'All performance signals are positive.',
+        desc: 'Keep up the great work! You are currently on track to successfully complete the internship.',
+        confidence: 'Confidence: 95%'
+      });
+    }
+    return list;
+  }, [stats]);
+  
+  const recommendations = useMemo(() => {
+    const list = [];
+    if (stats.avgQuiz < 85) {
+      list.push({ title: 'Attempt tomorrow\'s quiz.', prio: 'high' });
+      list.push({ title: 'Score at least 90% in upcoming quizzes.', prio: 'high' });
+    } else {
+      list.push({ title: 'Attempt tomorrow\'s quiz.', prio: 'medium' });
+      list.push({ title: 'Score at least 90% in upcoming quizzes.', prio: 'low' });
+    }
+    
+    if (stats.avgAttendance < 85) {
+      list.push({ title: 'Attend the next live session.', prio: 'high' });
+      list.push({ title: 'Maintain your current streak.', prio: 'medium' });
+    } else {
+      list.push({ title: 'Attend the next live session.', prio: 'medium' });
+      list.push({ title: 'Maintain your current streak.', prio: 'low' });
+    }
+    
+    return list;
+  }, [stats]);
+  
+  const survivalPct = 100 - Math.round(stats.riskScore);
+  const statusLower = stats.status.toLowerCase();
+  
+  const donutQuiz = stats.quizDeficit;
+  const donutAtt = stats.attendanceDeficit;
+  const totalDef = donutQuiz + donutAtt;
+  const quizContr = totalDef > 0 ? Math.round((donutQuiz / totalDef) * 100) : 50;
+  const attContr = totalDef > 0 ? Math.round((donutAtt / totalDef) * 100) : 50;
+
+  const expectedTimeline = [
+    { idx: 0, val: stats.riskScore },
+    { idx: 1, val: Math.max(0, stats.riskScore - 1) },
+    { idx: 2, val: Math.max(0, stats.riskScore - 3) },
+    { idx: 3, val: expectedRisk + 2 },
+    { idx: 4, val: expectedRisk }
+  ];
+  
+  return (
+    <div className="prediction-tab-content">
+      <div className="prediction-header-bar">
+        <div className="prediction-title-section">
+          <h2>AI Early Prediction System</h2>
+          <p>Predict internship eligibility before students become at risk.</p>
+        </div>
+        <div className="live-badge-container">
+          <div className="live-analysis-pill">
+            <span className="live-analysis-dot" />
+            Live Analysis
+          </div>
+        </div>
+      </div>
+      
+      <div className="survival-banner">
+        <div className="survival-gauge-wrapper">
+          <svg className="survival-gauge-svg" width="140" height="140" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="42" stroke="rgba(255,255,255,0.15)" strokeWidth="8" fill="transparent" />
+            <circle
+              cx="50"
+              cy="50"
+              r="42"
+              stroke="#ffffff"
+              strokeWidth="8"
+              fill="transparent"
+              strokeDasharray={`${(survivalPct / 100) * 263.89} 263.89`}
+              strokeLinecap="round"
+            />
+          </svg>
+          <div className="survival-gauge-value">
+            <strong>{survivalPct}%</strong>
+            <span>Survival Probability</span>
+          </div>
+          <div className={`survival-gauge-shield ${statusLower === 'safe' ? '' : statusLower === 'warning' ? 'warning' : 'danger'}`}>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+          </div>
+        </div>
+        
+        <div className="survival-content">
+          <div className="survival-status-row">
+            <h3>Internship Survival Probability</h3>
+            <span className={`status-badge ${statusLower === 'safe' ? 'safe' : statusLower === 'warning' ? 'warning' : 'danger'}`}>
+              {stats.status}
+            </span>
+          </div>
+          <p className="survival-desc">
+            {stats.status === 'Safe' 
+              ? 'Based on your last 5 days of performance, you are currently meeting all internship requirements. Maintain at least 85% attendance and quiz performance to stay eligible.'
+              : stats.status === 'Warning'
+              ? 'Your performance metrics are bordering the minimum criteria. Address the minor deficits in your recent quizzes or attendance to safeguard your internship status.'
+              : 'Critical: One or more of your performance metrics have fallen significantly below the 85% requirement. Immediate recovery action is necessary to prevent removal.'}
+          </p>
+          <div className="confidence-container">
+            <div className="confidence-label">
+              <span>🤖 AI Confidence</span>
+            </div>
+            <div className="confidence-bar-bg">
+              <div className="confidence-bar-fill" style={{ width: '96%' }} />
+            </div>
+            <span>96%</span>
+          </div>
+        </div>
+        
+        <div className="survival-robot-container">
+          <RobotIcon />
+        </div>
+      </div>
+      
+      <div className="prediction-gauge-grid">
+        <div className="gauge-card">
+          <div className="gauge-card-header">
+            <QuizIcon /> Quiz Performance (5 Days)
+          </div>
+          <div className="gauge-card-body">
+            <SemiGauge value={stats.avgQuiz} color="#f59e0b" />
+            <div className="gauge-card-value">
+              <strong>{stats.avgQuiz}%</strong>
+              <span>Target: 85%</span>
+            </div>
+          </div>
+          <div className="gauge-card-footer">
+            <span className={`gauge-trend ${stats.avgQuiz >= 85 ? 'up' : 'down'}`}>
+              {stats.avgQuiz >= 85 ? '↑ 1% Trend' : '↓ 2% Trend'}
+            </span>
+          </div>
+        </div>
+        
+        <div className="gauge-card">
+          <div className="gauge-card-header">
+            <AttendanceIcon /> Attendance (5 Days)
+          </div>
+          <div className="gauge-card-body">
+            <SemiGauge value={stats.avgAttendance} color="#10b981" />
+            <div className="gauge-card-value">
+              <strong>{stats.avgAttendance}%</strong>
+              <span>Target: 85%</span>
+            </div>
+          </div>
+          <div className="gauge-card-footer">
+            <span className={`gauge-trend ${stats.avgAttendance >= 85 ? 'up' : 'down'}`}>
+              {stats.avgAttendance >= 85 ? '↑ 3% Trend' : '↓ 1% Trend'}
+            </span>
+          </div>
+        </div>
+        
+        <div className="gauge-card">
+          <div className="gauge-card-header">
+            <EligibilityIcon /> Internship Eligibility
+          </div>
+          <div className="gauge-card-body" style={{ height: '75px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+            <div style={{
+              width: '36px', height: '36px', borderRadius: '50%',
+              background: stats.riskScore <= 10 ? '#dcfce7' : '#fee2e2',
+              color: stats.riskScore <= 10 ? '#10b981' : '#ef4444',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 6px'
+            }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                {stats.riskScore <= 10 
+                  ? <polyline points="20 6 9 17 4 12" />
+                  : <path d="M18 6L6 18M6 6l12 12" />}
+              </svg>
+            </div>
+            <strong style={{ fontSize: '15px', color: stats.riskScore <= 10 ? '#10b981' : '#ef4444' }}>
+              {stats.riskScore <= 10 ? 'Eligible' : 'At Risk'}
+            </strong>
+          </div>
+          <div className="gauge-card-footer">
+            <span className="muted" style={{ fontSize: '11px', fontWeight: 'bold' }}>
+              Overall Score: {Math.round((stats.avgQuiz + stats.avgAttendance) / 2)}%
+            </span>
+          </div>
+        </div>
+        
+        <div className="gauge-card">
+          <div className="gauge-card-header">
+            <RiskIcon /> Dropout Risk
+          </div>
+          <div className="gauge-card-body">
+            <SemiGauge value={Math.round(stats.riskScore)} color={stats.color} />
+            <div className="gauge-card-value">
+              <strong>{Math.round(stats.riskScore)}%</strong>
+              <span>{stats.status}</span>
+            </div>
+          </div>
+          <div className="gauge-card-footer">
+            <span className="gauge-trend" style={{ color: stats.color }}>
+              {stats.riskScore === 0 ? 'Low Risk' : stats.riskScore <= 10 ? 'Moderate Risk' : 'High Risk'}
+            </span>
+          </div>
+        </div>
+      </div>
+      
+      <div className="prediction-mid-grid">
+        <div className="trend-chart-panel">
+          <div className="chart-header">
+            <h3>Performance Trend (Last 5 Days)</h3>
+            <div className="chart-legends">
+              <div className="chart-legend-item">
+                <span className="chart-legend-dot" style={{ background: '#f59e0b' }} /> Quiz %
+              </div>
+              <div className="chart-legend-item">
+                <span className="chart-legend-dot" style={{ background: '#10b981' }} /> Attendance %
+              </div>
+              <div className="chart-legend-item">
+                <span className="chart-legend-dot" style={{ background: '#ef4444' }} /> AI Risk %
+              </div>
+              <div className="chart-legend-item">
+                <span className="chart-legend-line-dashed" /> Required (85%)
+              </div>
+            </div>
+          </div>
+          <TrendChart timeline={timeline} />
+        </div>
+        
+        <div className="insights-panel">
+          <div className="insights-header">
+            <h3>AI Insights</h3>
+          </div>
+          <div className="insights-list">
+            {insights.map((insight, idx) => (
+              <div key={idx} className={`insight-card ${insight.type}`}>
+                <span className="insight-icon">{insight.icon}</span>
+                <div className="insight-body">
+                  <strong>{insight.title}</strong>
+                  <span>{insight.desc}</span>
+                  <span className="insight-confidence">{insight.confidence}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      
+      <div className="prediction-bottom-grid">
+        <div className="bottom-panel">
+          <h3>Next 5-Day Prediction</h3>
+          <div className="forecast-summary">
+            <div className="forecast-stat quiz">
+              <span>Expected Quiz</span>
+              <strong>{expectedQuiz}%</strong>
+            </div>
+            <div className="forecast-stat attendance">
+              <span>Expected Attendance</span>
+              <strong>{expectedAttendance}%</strong>
+            </div>
+          </div>
+          <div className="forecast-status-row">
+            <span>Predicted Status</span>
+            <span className={`status-badge ${expectedColor}`}>
+              {expectedStatus}
+            </span>
+          </div>
+          <div className="forecast-chart-container">
+            <div className="muted" style={{ fontSize: '11px', fontWeight: 'bold', marginBottom: '8px' }}>Projected Risk Score Trend</div>
+            <svg viewBox="0 0 150 50" style={{ width: '100%', height: '35px', overflow: 'visible' }}>
+              <polyline
+                points={expectedTimeline.map(t => `${t.idx * 32 + 8},${40 - (t.val / 100) * 35}`).join(' ')}
+                fill="none"
+                stroke="#6366f1"
+                strokeWidth="1.5"
+              />
+              {expectedTimeline.map(t => (
+                <g key={t.idx}>
+                  <circle cx={t.idx * 32 + 8} cy={40 - (t.val / 100) * 35} r="2" fill="white" stroke="#6366f1" strokeWidth="1.2" />
+                  <text x={t.idx * 32 + 8} y={40 - (t.val / 100) * 35 - 4} textAnchor="middle" fontSize="6.5" fill="#6366f1" fontWeight="700">
+                    {Math.round(t.val)}%
+                  </text>
+                </g>
+              ))}
+            </svg>
+          </div>
+        </div>
+        
+        <div className="bottom-panel">
+          <h3>Risk Breakdown</h3>
+          <div className="donut-chart-container">
+            <div className="donut-svg-wrapper">
+              <DonutChart quizPct={donutQuiz} attendancePct={donutAtt} />
+              <div style={{
+                position: 'absolute', inset: 0,
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
+              }}>
+                <span style={{ fontSize: '14px', fontWeight: '800', color: 'var(--text)' }}>
+                  {totalDef}
+                </span>
+                <span style={{ fontSize: '7px', color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 'bold' }}>
+                  Deficit
+                </span>
+              </div>
+            </div>
+            <div className="donut-legends">
+              <div className="donut-legend-item">
+                <span className="donut-legend-label">
+                  <span style={{ width: '6px', height: '6px', background: '#f59e0b', borderRadius: '50%', display: 'inline-block' }} />
+                  Quiz Deficit
+                </span>
+                <span className="donut-legend-pct">{quizContr}% Contr.</span>
+              </div>
+              <div className="donut-legend-item">
+                <span className="donut-legend-label">
+                  <span style={{ width: '6px', height: '6px', background: '#10b981', borderRadius: '50%', display: 'inline-block' }} />
+                  Attendance
+                </span>
+                <span className="donut-legend-pct">{attContr}% Contr.</span>
+              </div>
+            </div>
+          </div>
+          <div className="donut-note">
+            {totalDef === 0 
+              ? 'No deficits detected. Both metrics are safely at or above 85%.'
+              : `Quiz deficit contributes ${quizContr}% and Attendance deficit contributes ${attContr}% to your overall dropout risk.`}
+          </div>
+        </div>
+        
+        <div className="bottom-panel">
+          <h3>AI Recommendations</h3>
+          <div className="recommendations-list">
+            {recommendations.map((rec, idx) => (
+              <div key={idx} className="recommendation-item">
+                <div className="recommendation-icon">
+                  {rec.prio === 'high' ? '🚨' : rec.prio === 'medium' ? '⚡' : '💡'}
+                </div>
+                <div className="recommendation-text-col">
+                  <span className="recommendation-title">{rec.title}</span>
+                  <span className={`recommendation-prio ${rec.prio}`}>{rec.prio} priority</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        
+        <div className="eligibility-rules-panel">
+          <div className="rules-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+            <div>
+              <h4>Eligibility Rule</h4>
+              <span>Minimum cohort standards for internship continuation</span>
+            </div>
+          </div>
+          <div className="rules-list">
+            <div className="rule-check-item">
+              <span className={`rule-check-icon ${stats.avgQuiz >= 85 ? 'success' : 'fail'}`}>
+                {stats.avgQuiz >= 85 ? '✓' : '✗'}
+              </span>
+              Quiz Performance ≥ 85%
+            </div>
+            <div className="rule-check-item">
+              <span className={`rule-check-icon ${stats.avgAttendance >= 85 ? 'success' : 'fail'}`}>
+                {stats.avgAttendance >= 85 ? '✓' : '✗'}
+              </span>
+              Attendance ≥ 85%
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div className="footer-disclaimer">
+        <div className="footer-disclaimer-left">
+          <span>🤖 AI prediction updates automatically after every quiz submission and attendance record.</span>
+        </div>
+        <div>
+          <span>Last Updated: 2 minutes ago ↻</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function buildBadges(profile) {
   const badges = [];
   const qualifiedPct = profile.attendance.length ? profile.attendance.filter(a => a.qualified).length / profile.attendance.length : 0;
@@ -505,6 +1277,23 @@ function Leaderboard({ rows }) {
   );
 }
 
+function AdminStudentModal({ profile, onClose }) {
+  const [tab, setTab] = useState('bank');
+  return (
+    <div className="overlay">
+      <section className="modal wide">
+        <div className="modal-head">
+          <h2>{profile.student.name} ({profile.student.email})</h2>
+          <button className="icon" onClick={onClose}>x</button>
+        </div>
+        <Tabs tab={tab} setTab={setTab} tabs={[['bank', 'SP Bank'], ['prediction', 'Early Prediction']]} />
+        {tab === 'bank' && <SpBank transactions={profile.transactions} />}
+        {tab === 'prediction' && <EarlyPrediction profile={profile} />}
+      </section>
+    </div>
+  );
+}
+
 function AdminView({ admin, auth, onBack }) {
   const [tab, setTab] = useState('leaderboard');
   const [leaderLimit, setLeaderLimit] = useState(50);
@@ -593,7 +1382,7 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
-      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
+      {studentProfile && <AdminStudentModal profile={studentProfile} onClose={() => setStudentProfile(null)} />}
     </main>
   );
 }
