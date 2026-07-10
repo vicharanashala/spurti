@@ -1,5 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { toPng } from 'html-to-image';
+import vicharanshalaLogo from '../assets/vicharanshala_logo.png';
+import iitRoparLogo from '../assets/iit_ropar_logo.png';
 
 export default function ShareCard({ student, badges = [], onClose }) {
   const [copied, setCopied] = useState(false);
@@ -129,13 +131,13 @@ export default function ShareCard({ student, badges = [], onClose }) {
           <div className="achievement-card" ref={cardRef}>
             <div className="achievement-logos">
               <img
-                src="https://avatars.githubusercontent.com/u/197844754?s=200&v=4"
+                src={vicharanshalaLogo}
                 alt="VLED Logo"
                 className="achievement-logo"
                 crossOrigin="anonymous"
               />
               <img
-                src="https://upload.wikimedia.org/wikipedia/en/b/b5/Indian_Institute_of_Technology_Ropar_logo.png"
+                src={iitRoparLogo}
                 alt="IIT Ropar Logo"
                 className="achievement-logo"
                 crossOrigin="anonymous"
