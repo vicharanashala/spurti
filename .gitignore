@@ -1,24 +1,42 @@
 node_modules/
 dist/
-.env
-.env.*
-!.env.example
-!.env.ssh.example
 .DS_Store
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Environment variables — NEVER commit these
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.ssh.example
+
 # raw uploaded session data (not source)
 data/uploads/
+data/*.json
 
 # editor backups
 *.bak
 *.bak.*
+*~
 
 # pipeline secrets — never commit
 pipeline/.env
+pipeline/.env.*
 
 # runtime log + local DB backups (not for the repo)
 server.log
 sp-runs/
+
+# MongoDB local data
+*.log
+
+# OS temporary files
+Thumbs.db
+
+# Local dev seed scripts
+server/scripts/seedMarketplaceStudents.js
+
+# Product documentation — contains internal design notes
+product.md
