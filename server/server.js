@@ -342,6 +342,70 @@ api.post('/ping', async (req, res) => {
   } catch (err) {
     if (err?.name !== 'ValidationError') console.error('ping log failed:', err?.message);
   }
+
+  // Live Session Punctuality Bonus Engine (Early Bird SP)
+  try {
+    const now = new Date();
+    const marginBefore = 15 * 60 * 1000; // 15 mins before start
+    const marginAfter = 5 * 60 * 1000;  // 5 mins after start (Early Bird Window)
+
+    const activeSession = await Session.findOne({
+      startDateTime: {
+        $gte: new Date(now.getTime() - marginAfter),
+        $lte: new Date(now.getTime() + marginBefore)
+      }
+    }).lean();
+
+    if (activeSession) {
+      const student = await Student.findOne({
+        $or: [
+          { email: normalized },
+          { alternateEmail: normalized }
+        ]
+      });
+
+      if (student && student.status === 'active') {
+        const canonicalEmail = student.email.toLowerCase();
+
+        // Guardrail: check composite index (email, sessionLabel, category) to prevent duplicates
+        const existingTx = await SPTransaction.findOne({
+          email: canonicalEmail,
+          sessionLabel: activeSession.label,
+          category: 'punctuality_bonus'
+        }).lean();
+
+        if (!existingTx) {
+          const bonusSp = 2;
+          const newBalance = (student.totalSp || 100) + bonusSp;
+
+          // Record instant transaction
+          await SPTransaction.create({
+            email: canonicalEmail,
+            studentId: student._id,
+            category: 'punctuality_bonus',
+            sessionLabel: activeSession.label,
+            deltaMode: 'absolute',
+            deltaValue: bonusSp,
+            appliedDelta: bonusSp,
+            balanceAfter: newBalance,
+            reason: `Early Bird Punctuality Bonus for ${activeSession.label}`,
+            dateTime: now
+          });
+
+          // Atomically update student record
+          student.totalSp = newBalance;
+          student.highestSpEver = Math.max(student.highestSpEver || 0, newBalance);
+          student.level = levelFor(student.highestSpEver);
+          student.trophyLeague = leagueBand(student.totalSp);
+          student.legendBadgeUnlocked = legendBadge(student.highestSpEver);
+          await student.save();
+        }
+      }
+    }
+  } catch (pingErr) {
+    console.error('Punctuality engine processing failed:', pingErr.message);
+  }
+
   if (page === 'record' || page.startsWith('admin')) {
     liveViewers.set(normalized, { name, page, lastSeen: new Date() });
   }
