@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { getRankDeltas } from './services/analyticsService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -178,13 +179,14 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents, deltas] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
+    getRankDeltas()
   ]);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
@@ -202,7 +204,8 @@ async function studentPayload(student) {
     maskedEmail: maskEmail(row.email),
     totalSp: row.totalSp,
     level: levelFor(Math.max(Number(row.highestSpEver) || 0, Number(row.totalSp) || 0)),
-    isCurrentStudent: row.email === email
+    isCurrentStudent: row.email === email,
+    rankDelta: deltas[row.email.toLowerCase()] || 0
   });
   return {
     student: {
@@ -217,6 +220,7 @@ async function studentPayload(student) {
       excusedReason: student.excusedReason,
       totalSp: student.totalSp,
       rank: rankInfo?.rank || null,
+      rankDelta: deltas[email.toLowerCase()] || 0,
       cohortSize: rankInfo?.cohortSize || null,
       highestSpEver,
       level: levelFor(highestSpEver),
@@ -311,14 +315,18 @@ api.get('/leaderboard', async (req, res) => {
   const type = String(req.query.leaderboardType || 'overall');
   const filter = { status: { $ne: 'excused' } };
   if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
-  const students = await Student.find(filter).sort({ totalSp: -1, name: 1 }).limit(50).lean();
+  const [students, deltas] = await Promise.all([
+    Student.find(filter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
+    getRankDeltas()
+  ]);
   res.json(students.map((s, i) => ({
     rank: i + 1,
     name: s.name,
     maskedEmail: maskEmail(s.email),
     totalSp: s.totalSp,
     level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
-    trophyLeague: leagueBand(s.totalSp)
+    trophyLeague: leagueBand(s.totalSp),
+    rankDelta: deltas[s.email.toLowerCase()] || 0
   })));
 });
 
