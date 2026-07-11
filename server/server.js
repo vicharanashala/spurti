@@ -12,7 +12,6 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
-import Question from './models/Question.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -250,7 +249,7 @@ async function checkAndAwardPerfectWeekBonus(student) {
     const spEarned = dailySp[dateStr] || 0;
     days.push({
       dateStr,
-      success: spEarned >= 20
+      success: spEarned === 20
     });
     curr.setDate(curr.getDate() + 1);
   }
@@ -378,7 +377,8 @@ async function studentPayload(student) {
       surveyCompleted: Boolean(freshStudent.surveyCompleted),
       poll2Completed: Boolean(freshStudent.poll2Completed),
       streak: streakInfo.currentStreak,
-      bonusesAwarded: streakInfo.bonusesAwarded
+      bonusesAwarded: streakInfo.bonusesAwarded,
+      spinsUsed: freshStudent.spinsUsed || 0
     },
     transactions,
     polls,
@@ -493,6 +493,100 @@ api.post('/ping', async (req, res) => {
   res.json({ ok: true });
 });
 
+api.post('/spin-wheel', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    let student;
+    if (email) {
+      student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+    } else {
+      const { studentId } = req.body || {};
+      if (studentId) {
+        student = await Student.findById(studentId);
+      }
+    }
+
+    if (!student) return res.status(401).json({ error: 'Unauthorized or student not found' });
+    if (student.status === 'excused') return res.status(403).json({ error: 'Account excused' });
+
+    const streakInfo = await checkAndAwardPerfectWeekBonus(student);
+    const bonusesAwarded = streakInfo.bonusesAwarded;
+    const spinsUsed = student.spinsUsed || 0;
+
+    if (spinsUsed >= bonusesAwarded) {
+      return res.status(400).json({ error: 'No available spins. Complete a Perfect Week to earn a spin!' });
+    }
+
+    const rewards = [
+      { type: 'sp_5', label: '+5 SP', value: 5 },
+      { type: 'sp_10', label: '+10 SP', value: 10 },
+      { type: 'double_sp', label: 'Double SP Day' },
+      { type: 'sp_15', label: '+15 SP', value: 15 },
+      { type: 'sp_20', label: '+20 SP', value: 20 }
+    ];
+
+    const randomIndex = Math.floor(Math.random() * rewards.length);
+    const chosenReward = rewards[randomIndex];
+
+    let delta = 0;
+    let detailText = '';
+
+    if (chosenReward.type === 'double_sp') {
+      const todayStr = getISTDateStr(new Date());
+      const emails = [student.email];
+      if (student.alternateEmail) {
+        emails.push(student.alternateEmail);
+      }
+      const transactions = await SPTransaction.find({
+        email: { $in: emails.map(e => e.toLowerCase()) }
+      }).lean();
+
+      let sum = 0;
+      for (const tx of transactions) {
+        if (tx.category === 'initial' || (tx.reason && tx.reason.includes('Spin Wheel'))) {
+          continue;
+        }
+        if (getISTDateStr(tx.dateTime) === todayStr) {
+          sum += (tx.appliedDelta || 0);
+        }
+      }
+      delta = Math.max(10, sum);
+      detailText = `Double SP Day (+${delta} SP based on today's ${sum} SP earned)`;
+    } else {
+      delta = chosenReward.value;
+      detailText = chosenReward.label;
+    }
+
+    student.spinsUsed = spinsUsed + 1;
+    await student.save();
+
+    await awardSp(
+      student,
+      delta,
+      'manual',
+      `Spin Wheel Reward: ${detailText}`,
+      '',
+      new Date()
+    );
+
+    res.json({
+      success: true,
+      reward: {
+        index: randomIndex,
+        type: chosenReward.type,
+        label: chosenReward.label,
+        detail: detailText,
+        value: delta
+      },
+      spinsUsed: student.spinsUsed,
+      totalSp: student.totalSp + delta
+    });
+  } catch (err) {
+    console.error('spin-wheel error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 // --- Motivation Dashboard Endpoints ---
 function getISTDateStr(dateInput) {
   const d = new Date(dateInput);
@@ -545,7 +639,7 @@ api.get('/growth-tree/:studentId', async (req, res) => {
     while (curr <= end) {
       const dateStr = curr.toISOString().split('T')[0];
       const sp = dailySp[dateStr] || 0;
-      if (sp >= 20) {
+      if (sp === 20) {
         successfulDays++;
       }
       totalDays++;
@@ -560,7 +654,8 @@ api.get('/growth-tree/:studentId', async (req, res) => {
       hasFlowers: successfulDays >= 7,
       hasFruits: successfulDays >= 30,
       streak: streakInfo.currentStreak,
-      bonusesAwarded: streakInfo.bonusesAwarded
+      bonusesAwarded: streakInfo.bonusesAwarded,
+      spinsUsed: student.spinsUsed || 0
     });
   } catch (err) {
     console.error('growth-tree error:', err);
@@ -613,7 +708,7 @@ api.get('/chain-calendar/:studentId', async (req, res) => {
       calendarDays.push({
         date: dateStr,
         spEarned,
-        success: spEarned >= 20
+        success: spEarned === 20
       });
       curr.setDate(curr.getDate() + 1);
     }
@@ -687,359 +782,6 @@ function registerSurveyRoutes(base, cfg) {
 }
 registerSurveyRoutes('/survey', SURVEY);
 registerSurveyRoutes('/poll2', POLL2);
-
-// --- Doubt Discussion Endpoints ---
-async function authGuard(req, res, next) {
-  try {
-    const adminOk = isAdmin(req);
-    if (adminOk) {
-      req.isAdmin = true;
-      return next();
-    }
-    const email = await studentEmailFromRequest(req);
-    if (!email) return res.status(401).json({ error: 'Unauthorized' });
-    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
-    if (!student) return res.status(404).json({ error: 'Student not found' });
-    if (student.status === 'excused') return res.status(403).json({ error: 'Account excused' });
-    req.student = student;
-    req.isAdmin = false;
-    next();
-  } catch (err) {
-    console.error('authGuard error:', err);
-    res.status(500).json({ error: 'Authentication internal error' });
-  }
-}
-
-api.get('/doubts', authGuard, async (req, res) => {
-  try {
-    const { q, tag, showSpam } = req.query;
-    const filter = {};
-    if (!req.isAdmin || showSpam !== 'true') {
-      filter.isSpam = false;
-    }
-    if (tag) {
-      filter.tags = tag;
-    }
-    if (q) {
-      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      filter.$or = [
-        { title: { $regex: escaped, $options: 'i' } },
-        { description: { $regex: escaped, $options: 'i' } },
-        { tags: { $regex: escaped, $options: 'i' } }
-      ];
-    }
-    const questions = await Question.find(filter).sort({ pinned: -1, createdAt: -1 }).lean();
-    res.json(questions);
-  } catch (err) {
-    console.error('get doubts error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-api.get('/doubts/:id', authGuard, async (req, res) => {
-  try {
-    const question = await Question.findById(req.params.id).lean();
-    if (!question) return res.status(404).json({ error: 'Question not found' });
-    if (question.isSpam && !req.isAdmin) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-    res.json(question);
-  } catch (err) {
-    console.error('get doubt detail error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-api.post('/doubts', authGuard, async (req, res) => {
-  try {
-    if (!req.student) return res.status(403).json({ error: 'Only students can ask questions' });
-    const { title, description, tags } = req.body || {};
-    if (!title || !description) return res.status(400).json({ error: 'Title and description required' });
-
-    const question = await Question.create({
-      title,
-      description,
-      tags: tags || [],
-      author: {
-        email: req.student.email,
-        name: req.student.name
-      }
-    });
-
-    const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
-    await awardSp(
-      req.student,
-      1,
-      'manual',
-      `Doubt Discussion: Asked a question (Title: "${shortTitle}")`
-    );
-
-    res.status(201).json(question);
-  } catch (err) {
-    console.error('create doubt error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-api.post('/doubts/:id/answers', authGuard, async (req, res) => {
-  try {
-    if (!req.student) return res.status(403).json({ error: 'Only students can answer questions' });
-    const { body } = req.body || {};
-    if (!body) return res.status(400).json({ error: 'Answer body is required' });
-
-    const question = await Question.findById(req.params.id);
-    if (!question) return res.status(404).json({ error: 'Question not found' });
-    if (question.isSpam) return res.status(400).json({ error: 'Cannot answer spam question' });
-
-    question.answers.push({
-      body,
-      author: {
-        email: req.student.email,
-        name: req.student.name
-      }
-    });
-
-    await question.save();
-    res.status(201).json(question);
-  } catch (err) {
-    console.error('add answer error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-api.put('/doubts/:id/answers/:answerId', authGuard, async (req, res) => {
-  try {
-    if (!req.student) return res.status(403).json({ error: 'Only students can edit answers' });
-    const { body } = req.body || {};
-    if (!body) return res.status(400).json({ error: 'Answer body is required' });
-
-    const question = await Question.findById(req.params.id);
-    if (!question) return res.status(404).json({ error: 'Question not found' });
-
-    const answer = question.answers.id(req.params.answerId);
-    if (!answer) return res.status(404).json({ error: 'Answer not found' });
-
-    const emailMatch = answer.author.email === req.student.email.toLowerCase() ||
-                       (req.student.alternateEmail && answer.author.email === req.student.alternateEmail.toLowerCase());
-    if (!emailMatch) {
-      return res.status(403).json({ error: 'Cannot edit someone else\'s answer' });
-    }
-
-    answer.body = body;
-    await question.save();
-    res.json(question);
-  } catch (err) {
-    console.error('edit answer error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-api.post('/doubts/:id/answers/:answerId/comments', authGuard, async (req, res) => {
-  try {
-    if (!req.student) return res.status(403).json({ error: 'Only students can comment' });
-    const { body } = req.body || {};
-    if (!body) return res.status(400).json({ error: 'Comment body is required' });
-
-    const question = await Question.findById(req.params.id);
-    if (!question) return res.status(404).json({ error: 'Question not found' });
-
-    const answer = question.answers.id(req.params.answerId);
-    if (!answer) return res.status(404).json({ error: 'Answer not found' });
-
-    answer.comments.push({
-      body,
-      author: {
-        email: req.student.email,
-        name: req.student.name
-      }
-    });
-
-    await question.save();
-    res.status(201).json(question);
-  } catch (err) {
-    console.error('add comment error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-api.post('/doubts/:id/answers/:answerId/accept', authGuard, async (req, res) => {
-  try {
-    if (!req.student) return res.status(403).json({ error: 'Only students can accept answers' });
-
-    const question = await Question.findById(req.params.id);
-    if (!question) return res.status(404).json({ error: 'Question not found' });
-
-    const emailMatch = question.author.email === req.student.email.toLowerCase() ||
-                       (req.student.alternateEmail && question.author.email === req.student.alternateEmail.toLowerCase());
-    if (!emailMatch) {
-      return res.status(403).json({ error: 'Only the question author can accept answers' });
-    }
-
-    const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
-
-    const prevAccepted = question.answers.find(a => a.isAccepted);
-    if (prevAccepted) {
-      if (prevAccepted._id.toString() === req.params.answerId) {
-        return res.json(question);
-      }
-      prevAccepted.isAccepted = false;
-      const prevContributor = await Student.findOne({
-        $or: [{ email: prevAccepted.author.email }, { alternateEmail: prevAccepted.author.email }]
-      });
-      if (prevContributor) {
-        await awardSp(
-          prevContributor,
-          -3,
-          'manual',
-          `Doubt Discussion: Answer unaccepted (Title: "${shortTitle}")`
-        );
-      }
-    }
-
-    const answer = question.answers.id(req.params.answerId);
-    if (!answer) return res.status(404).json({ error: 'Answer not found' });
-    answer.isAccepted = true;
-    await question.save();
-
-    const contributor = await Student.findOne({
-      $or: [{ email: answer.author.email }, { alternateEmail: answer.author.email }]
-    });
-    if (contributor) {
-      await awardSp(
-        contributor,
-        3,
-        'manual',
-        `Doubt Discussion: Answer accepted (Title: "${shortTitle}")`
-      );
-    }
-
-    res.json(question);
-  } catch (err) {
-    console.error('accept answer error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-api.post('/doubts/:id/answers/:answerId/unaccept', authGuard, async (req, res) => {
-  try {
-    if (!req.student) return res.status(403).json({ error: 'Only students can unaccept answers' });
-
-    const question = await Question.findById(req.params.id);
-    if (!question) return res.status(404).json({ error: 'Question not found' });
-
-    const emailMatch = question.author.email === req.student.email.toLowerCase() ||
-                       (req.student.alternateEmail && question.author.email === req.student.alternateEmail.toLowerCase());
-    if (!emailMatch) {
-      return res.status(403).json({ error: 'Only the question author can unaccept answers' });
-    }
-
-    const answer = question.answers.id(req.params.answerId);
-    if (!answer) return res.status(404).json({ error: 'Answer not found' });
-
-    if (answer.isAccepted) {
-      answer.isAccepted = false;
-      await question.save();
-
-      const contributor = await Student.findOne({
-        $or: [{ email: answer.author.email }, { alternateEmail: answer.author.email }]
-      });
-      if (contributor) {
-        const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
-        await awardSp(
-          contributor,
-          -3,
-          'manual',
-          `Doubt Discussion: Answer unaccepted (Title: "${shortTitle}")`
-        );
-      }
-    }
-
-    res.json(question);
-  } catch (err) {
-    console.error('unaccept answer error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-api.post('/doubts/:id/pin', adminGuard, async (req, res) => {
-  try {
-    const question = await Question.findByIdAndUpdate(req.params.id, { pinned: true }, { new: true });
-    if (!question) return res.status(404).json({ error: 'Question not found' });
-    res.json(question);
-  } catch (err) {
-    console.error('pin question error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-api.post('/doubts/:id/unpin', adminGuard, async (req, res) => {
-  try {
-    const question = await Question.findByIdAndUpdate(req.params.id, { pinned: false }, { new: true });
-    if (!question) return res.status(404).json({ error: 'Question not found' });
-    res.json(question);
-  } catch (err) {
-    console.error('unpin question error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-api.post('/doubts/:id/spam', adminGuard, async (req, res) => {
-  try {
-    const question = await Question.findById(req.params.id);
-    if (!question) return res.status(404).json({ error: 'Question not found' });
-
-    if (!question.isSpam) {
-      question.isSpam = true;
-      await question.save();
-
-      const author = await Student.findOne({
-        $or: [{ email: question.author.email }, { alternateEmail: question.author.email }]
-      });
-      if (author) {
-        const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
-        await awardSp(
-          author,
-          -2,
-          'manual',
-          `Doubt Discussion: Spam penalty (Title: "${shortTitle}")`
-        );
-      }
-    }
-    res.json(question);
-  } catch (err) {
-    console.error('spam question error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-api.post('/doubts/:id/unspam', adminGuard, async (req, res) => {
-  try {
-    const question = await Question.findById(req.params.id);
-    if (!question) return res.status(404).json({ error: 'Question not found' });
-
-    if (question.isSpam) {
-      question.isSpam = false;
-      await question.save();
-
-      const author = await Student.findOne({
-        $or: [{ email: question.author.email }, { alternateEmail: question.author.email }]
-      });
-      if (author) {
-        const shortTitle = question.title.length > 50 ? question.title.substring(0, 50) + '...' : question.title;
-        await awardSp(
-          author,
-          2,
-          'manual',
-          `Doubt Discussion: Spam penalty refunded (Title: "${shortTitle}")`
-        );
-      }
-    }
-    res.json(question);
-  } catch (err) {
-    console.error('unspam question error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
 
 api.get('/admin/stats', adminGuard, async (_req, res) => {
   const [yetToOnboard, excusedStudents, sessions, txns, activeStudents] = await Promise.all([

@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react';
 
-export default function MotivationDashboard({ student }) {
+export default function MotivationDashboard({ student, onRefreshProfile }) {
   const [treeData, setTreeData] = useState(null);
   const [calendarData, setCalendarData] = useState(null);
   const [currentMonthDate, setCurrentMonthDate] = useState(new Date());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const [showSpinModal, setShowSpinModal] = useState(false);
+  const [spinning, setSpinning] = useState(false);
+  const [rotationAngle, setRotationAngle] = useState(0);
+  const [rewardResult, setRewardResult] = useState(null);
 
   useEffect(() => {
     if (!student?._id) return;
@@ -119,8 +124,85 @@ export default function MotivationDashboard({ student }) {
     setCurrentMonthDate(new Date(year, month + 1, 1));
   };
 
+  const handleSpin = async () => {
+    if (spinning) return;
+    setSpinning(true);
+    setRotationAngle(0);
+    setRewardResult(null);
+
+    try {
+      const res = await fetch('/api/spin-wheel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: student._id })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to spin the wheel.');
+      }
+      const data = await res.json();
+
+      // Mapping backend reward indices to wheel sector center angles:
+      // index 0 (+5 SP) -> Sector 1 (36 deg)
+      // index 1 (+10 SP) -> Sector 2 (108 deg)
+      // index 3 (+15 SP) -> Sector 3 (180 deg)
+      // index 4 (+20 SP) -> Sector 4 (252 deg)
+      // index 2 (Double SP) -> Sector 5 (324 deg)
+      const centerAngles = {
+        0: 36,
+        1: 108,
+        3: 180,
+        4: 252,
+        2: 324
+      };
+      const chosenAngle = centerAngles[data.reward.index];
+      const targetAngle = 1800 + (360 - chosenAngle);
+
+      // Trigger spin transition
+      setRotationAngle(targetAngle);
+
+      setTimeout(() => {
+        setSpinning(false);
+        setRewardResult(data.reward);
+        if (onRefreshProfile) onRefreshProfile();
+        setTreeData(prev => ({
+          ...prev,
+          spinsUsed: data.spinsUsed
+        }));
+      }, 4600); // Wait 4.5s transition + 100ms padding
+
+    } catch (err) {
+      alert(err.message);
+      setSpinning(false);
+    }
+  };
+
+  const closeRewardModal = () => {
+    setShowSpinModal(false);
+    setRewardResult(null);
+    setRotationAngle(0);
+  };
+
+  const availableSpins = (treeData.bonusesAwarded || 0) - (treeData.spinsUsed || 0);
+
   return (
     <section className="motivation-dashboard">
+      {/* Spin the Wheel Banner */}
+      {availableSpins > 0 && (
+        <div className="spin-wheel-banner">
+          <div className="spin-banner-left">
+            <span className="spin-banner-icon">🎲</span>
+            <div>
+              <strong className="spin-banner-title">Spin the Lucky Wheel!</strong>
+              <span className="spin-banner-desc">You completed a Perfect Week and earned 1 spin. Try your luck!</span>
+            </div>
+          </div>
+          <button onClick={() => setShowSpinModal(true)} className="spin-wheel-trigger-btn">
+            🎲 Spin Wheel ({availableSpins} left)
+          </button>
+        </div>
+      )}
+
       {/* Perfect Week Bonus Banner/Notification */}
       {treeData.bonusesAwarded > 0 && (
         <div className="perfect-week-banner" style={{ background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', padding: '12px 16px', borderRadius: '8px', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
@@ -253,12 +335,83 @@ export default function MotivationDashboard({ student }) {
 
         <div className="calendar-legend">
           <div className="legend-item"><span className="legend-color success" /> Successful Day (= 20 SP)</div>
-          <div className="legend-item"><span className="legend-color missed" /> Missed Day (&lt; 20 SP)</div>
+          <div className="legend-item"><span className="legend-color missed" /> Missed Day (≠ 20 SP)</div>
         </div>
         <p className="calendar-encouragement">
           Maintain your streak! Target earning <strong>20 SP</strong> daily through sessions, attendance, and polls to keep the chain green.
         </p>
       </div>
+
+      {showSpinModal && (
+        <div className="spin-wheel-overlay" onClick={e => e.target === e.currentTarget && !spinning && closeRewardModal()}>
+          <div className="spin-wheel-modal">
+            {!spinning && !rewardResult && (
+              <button onClick={closeRewardModal} className="spin-wheel-close-btn">&times;</button>
+            )}
+            
+            <h2 className="spin-wheel-title">🎲 Spin the Lucky Wheel!</h2>
+            <p className="spin-wheel-subtitle">Win bonus SP or double your points earned today!</p>
+
+            <div className="wheel-container">
+              <div className="wheel-pointer"></div>
+              <svg 
+                id="lucky-wheel"
+                width="250" 
+                height="250" 
+                viewBox="0 0 200 200" 
+                style={{ 
+                  transform: `rotate(${rotationAngle}deg)`
+                }}
+              >
+                <circle cx="100" cy="100" r="98" fill="#1e293b" stroke="#f1f5f9" strokeWidth="4" />
+                
+                {/* 5 sectors with correct R=98 coordinates and shades of red */}
+                <path d="M 100 100 L 100 2 A 98 98 0 0 1 193.2 69.7 Z" fill="#fca5a5" stroke="#0f172a" strokeWidth="1" />
+                <path d="M 100 100 L 193.2 69.7 A 98 98 0 0 1 157.6 179.3 Z" fill="#f87171" stroke="#0f172a" strokeWidth="1" />
+                <path d="M 100 100 L 157.6 179.3 A 98 98 0 0 1 42.4 179.3 Z" fill="#ef4444" stroke="#0f172a" strokeWidth="1" />
+                <path d="M 100 100 L 42.4 179.3 A 98 98 0 0 1 6.8 69.7 Z" fill="#dc2626" stroke="#0f172a" strokeWidth="1" />
+                <path d="M 100 100 L 6.8 69.7 A 98 98 0 0 1 100 2 Z" fill="#991b1b" stroke="#0f172a" strokeWidth="1" />
+
+                {/* Sector text labels with high-contrast color depending on background shade */}
+                <text x="145" y="55" fill="#1e293b" fontSize="10" fontWeight="bold" transform="rotate(36, 145, 55)" textAnchor="middle">+5 SP</text>
+                <text x="165" y="125" fill="#fff" fontSize="10" fontWeight="bold" transform="rotate(108, 165, 125)" textAnchor="middle">+10 SP</text>
+                <text x="100" y="170" fill="#fff" fontSize="10" fontWeight="bold" transform="rotate(180, 100, 170)" textAnchor="middle">+15 SP</text>
+                <text x="35" y="125" fill="#fff" fontSize="10" fontWeight="bold" transform="rotate(252, 35, 125)" textAnchor="middle">+20 SP</text>
+                <text x="55" y="55" fill="#fff" fontSize="9" fontWeight="bold" transform="rotate(324, 55, 55)" textAnchor="middle">⭐ 2x SP</text>
+
+                <circle cx="100" cy="100" r="18" fill="#ffffff" stroke="#0f172a" strokeWidth="3" />
+                <circle cx="100" cy="100" r="8" fill="#e2e8f0" />
+              </svg>
+            </div>
+
+            {!spinning && !rewardResult && (
+              <button onClick={handleSpin} className="spin-wheel-btn">
+                🎰 SPIN THE WHEEL!
+              </button>
+            )}
+
+            {spinning && (
+              <div className="spin-wheel-loading">
+                🔮 Spin in progress, wishing you luck...
+              </div>
+            )}
+
+            {rewardResult && (
+              <div className="reward-result-panel">
+                <div className="reward-result-emoji">🎉</div>
+                <h3 className="reward-result-title">Congratulations!</h3>
+                <p className="reward-result-desc">
+                  You won: <strong className="reward-result-value">{rewardResult.label}</strong>
+                  {rewardResult.type === 'double_sp' ? ` (+${rewardResult.value} SP added to your profile)` : ` (+${rewardResult.value} SP applied to your account)`}
+                </p>
+                <button onClick={closeRewardModal} className="reward-result-btn">
+                  Awesome!
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
