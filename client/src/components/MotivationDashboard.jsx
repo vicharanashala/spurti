@@ -1,7 +1,18 @@
 import React, { useState, useEffect } from 'react';
 
+const MILESTONE_DEFINITIONS = [
+  { name: 'Beginner', days: 3, icon: '🔥', desc: 'Beginner' },
+  { name: 'Consistent', days: 7, icon: '🔥🔥', desc: 'Consistent' },
+  { name: 'Dedicated', days: 15, icon: '🔥🔥🔥', desc: 'Dedicated' },
+  { name: 'Scholar', days: 30, icon: '🔥🔥🔥🔥', desc: 'Scholar' },
+  { name: 'Master', days: 60, icon: '👑', desc: 'Master' },
+  { name: 'Legend', days: 100, icon: '💎', desc: 'Legend' }
+];
+
 export default function MotivationDashboard({ student, onRefreshProfile }) {
   const [treeData, setTreeData] = useState(null);
+  const [milestones, setMilestones] = useState({ currentStreak: 0, badges: [] });
+  const [friendsActivity, setFriendsActivity] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -16,15 +27,23 @@ export default function MotivationDashboard({ student, onRefreshProfile }) {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const treeRes = await fetch(`/api/growth-tree/${student._id}`);
+        const [treeRes, milestonesRes, friendsRes] = await Promise.all([
+          fetch(`/api/growth-tree/${student._id}`),
+          fetch(`/api/badges/milestones/${student._id}`),
+          fetch(`/api/friends/activity/${student._id}`)
+        ]);
 
-        if (!treeRes.ok) {
+        if (!treeRes.ok || !milestonesRes.ok || !friendsRes.ok) {
           throw new Error('Failed to load motivation data');
         }
 
         const tData = await treeRes.json();
+        const mData = await milestonesRes.json();
+        const fData = await friendsRes.json();
 
         setTreeData(tData);
+        setMilestones(mData);
+        setFriendsActivity(fData);
         setError(null);
       } catch (err) {
         console.error('Error fetching motivation data:', err);
@@ -114,12 +133,13 @@ export default function MotivationDashboard({ student, onRefreshProfile }) {
   };
 
   const availableSpins = (treeData.bonusesAwarded || 0) - (treeData.spinsUsed || 0);
+  const unlockedBadges = milestones.badges || [];
 
   return (
-    <section className="motivation-dashboard">
+    <section className="motivation-dashboard" style={{ width: '100%' }}>
       {/* Spin the Wheel Banner */}
       {availableSpins > 0 && (
-        <div className="spin-wheel-banner">
+        <div className="spin-wheel-banner" style={{ marginBottom: '24px' }}>
           <div className="spin-banner-left">
             <span className="spin-banner-icon">🎲</span>
             <div>
@@ -133,82 +153,150 @@ export default function MotivationDashboard({ student, onRefreshProfile }) {
         </div>
       )}
 
-      {/* Perfect Week Bonus Banner/Notification */}
-      {treeData.bonusesAwarded > 0 && (
-        <div className="perfect-week-banner" style={{ background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', padding: '12px 16px', borderRadius: '8px', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
-          <span style={{ fontSize: '24px' }}>🏆</span>
-          <div>
-            <strong style={{ display: 'block', fontSize: '13px' }}>Perfect Week Streak Active!</strong>
-            <span style={{ fontSize: '11px', opacity: 0.95 }}>You have earned {treeData.bonusesAwarded} Perfect Week {treeData.bonusesAwarded === 1 ? 'Bonus' : 'Bonuses'} (+5 SP each) by staying active for {treeData.streak} consecutive days!</span>
-          </div>
-        </div>
-      )}
-
-      {/* 1. Growth Tree Section */}
-      <div className="panel growth-tree-panel">
-        <div className="panel-head">
-          <h2>🌱 Growth Tree</h2>
-        </div>
+      {/* Two main layout columns: Perfect Week vs Daily Streak */}
+      <div className="motivation-layout">
         
-        <div className="tree-container">
-          <GrowthTreeSvg stage={treeData.successfulDays} />
-          
-          <div className="tree-details">
-            <p className="tree-status-text">
-              Stage: <strong>{treeData.successfulDays} Successful Days</strong>
-            </p>
+        {/* Left Section: Perfect Week */}
+        <div className="motivation-section perfect-week-section">
+          <h2 className="section-title">🏆 Perfect Week (20 SP/Day)</h2>
 
-            {/* Streak and Payout Badges */}
-            <div className="streak-badges-row" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '4px 0 8px 0' }}>
-              <span className="streak-badge" style={{ background: '#fff1f2', color: '#e11d48', padding: '3px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                🔥 Streak: {treeData.streak || 0} {treeData.streak === 1 ? 'Day' : 'Days'}
-              </span>
-              {treeData.bonusesAwarded > 0 && (
-                <span className="bonus-badge" style={{ background: '#ecfdf5', color: '#059669', padding: '3px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                  🎉 {treeData.bonusesAwarded}x Perfect Week
-                </span>
-              )}
+          {/* Perfect Week Bonus Banner/Notification */}
+          {treeData.bonusesAwarded > 0 && (
+            <div className="perfect-week-banner" style={{ background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', padding: '12px 16px', borderRadius: '8px', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
+              <span style={{ fontSize: '24px' }}>🏆</span>
+              <div>
+                <strong style={{ display: 'block', fontSize: '13px' }}>Perfect Week Streak Active!</strong>
+                <span style={{ fontSize: '11px', opacity: 0.95 }}>You have earned {treeData.bonusesAwarded} Perfect Week {treeData.bonusesAwarded === 1 ? 'Bonus' : 'Bonuses'} (+5 SP each) by staying active for {treeData.streak} consecutive days!</span>
+              </div>
+            </div>
+          )}
+
+          {/* Growth Tree Panel */}
+          <div className="panel growth-tree-panel" style={{ margin: 0 }}>
+            <div className="panel-head">
+              <h2>🌱 Growth Tree</h2>
             </div>
             
-            {/* Growth Progress Bar */}
-            <div className="tree-progress-container">
-              <div 
-                className="tree-progress-bar" 
-                style={{ width: `${Math.min(100, (treeData.successfulDays / 30) * 100)}%` }} 
-              />
-              <span className="tree-progress-label">
-                {treeData.successfulDays >= 30 
-                  ? 'Fully Grown! 🌳' 
-                  : `${treeData.successfulDays}/30 Days to Mature Tree`
-                }
+            <div className="tree-container">
+              <GrowthTreeSvg stage={treeData.successfulDays} />
+              
+              <div className="tree-details">
+                <p className="tree-status-text">
+                  Stage: <strong>{treeData.successfulDays} Successful Days</strong>
+                </p>
+
+                {/* Streak and Payout Badges */}
+                <div className="streak-badges-row" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '4px 0 8px 0' }}>
+                  <span className="streak-badge" style={{ background: '#fff1f2', color: '#e11d48', padding: '3px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                    🔥 Streak: {treeData.streak || 0} {treeData.streak === 1 ? 'Day' : 'Days'}
+                  </span>
+                  {treeData.bonusesAwarded > 0 && (
+                    <span className="bonus-badge" style={{ background: '#ecfdf5', color: '#059669', padding: '3px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                      🎉 {treeData.bonusesAwarded}x Perfect Week
+                    </span>
+                  )}
+                </div>
+                
+                {/* Growth Progress Bar */}
+                <div className="tree-progress-container">
+                  <div 
+                    className="tree-progress-bar" 
+                    style={{ width: `${Math.min(100, (treeData.successfulDays / 30) * 100)}%` }} 
+                  />
+                  <span className="tree-progress-label">
+                    {treeData.successfulDays >= 30 
+                      ? 'Fully Grown! 🌳' 
+                      : `${treeData.successfulDays}/30 Days to Mature Tree`
+                    }
+                  </span>
+                </div>
+
+                {/* Milestones */}
+                <div className="milestones-list">
+                  <div className={`milestone-item ${treeData.hasFlowers ? 'unlocked' : 'locked'}`}>
+                    <span className="milestone-icon">🌸</span>
+                    <div className="milestone-desc">
+                      <strong>Week 1 (7 Days)</strong>
+                      <p>{treeData.hasFlowers ? 'Flowers Bloomed!' : 'Keep earning to unlock flowers'}</p>
+                    </div>
+                  </div>
+                  <div className={`milestone-item ${treeData.hasFruits ? 'unlocked' : 'locked'}`}>
+                    <span className="milestone-icon">🍎</span>
+                    <div className="milestone-desc">
+                      <strong>Month 1 (30 Days)</strong>
+                      <p>{treeData.hasFruits ? 'Fruits Grown!' : 'Reach 30 days to grow fruits'}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p className="helper-note">
+              Your virtual tree grows every day you earn <strong>= 20 SP</strong>. If you miss a day, the growth pauses. Let's make it blossom!
+            </p>
+          </div>
+        </div>
+
+        {/* Right Section: Daily Streak */}
+        <div className="motivation-section daily-streak-section">
+          <h2 className="section-title">🔥 Daily Streak (10 SP/Day)</h2>
+
+          {/* Milestone Badges Panel */}
+          <div className="panel milestones-panel" style={{ margin: 0 }}>
+            <div className="panel-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2>🏅 Milestone Badges</h2>
+              <span className="streak-badge" style={{ background: '#fff7ed', color: '#ea580c', padding: '4px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '800' }}>
+                🔥 Active Streak: {milestones.currentStreak} {milestones.currentStreak === 1 ? 'Day' : 'Days'}
               </span>
             </div>
+            
+            <p className="helper-note" style={{ margin: '8px 0 16px 0' }}>
+              Maintain consecutive days of earning <strong>&ge; 10 SP</strong> to unlock these exclusive status badges!
+            </p>
 
-            {/* Milestones */}
-            <div className="milestones-list">
-              <div className={`milestone-item ${treeData.hasFlowers ? 'unlocked' : 'locked'}`}>
-                <span className="milestone-icon">🌸</span>
-                <div className="milestone-desc">
-                  <strong>Week 1 (7 Days)</strong>
-                  <p>{treeData.hasFlowers ? 'Flowers Bloomed!' : 'Keep earning to unlock flowers'}</p>
+            <div className="badges-grid">
+              {MILESTONE_DEFINITIONS.map(badge => {
+                const isUnlocked = unlockedBadges.includes(badge.name);
+                return (
+                  <div key={badge.name} className={`badge-card ${isUnlocked ? 'unlocked' : 'locked'}`}>
+                    <div className="badge-icon">
+                      {badge.icon}
+                    </div>
+                    <div className="badge-details">
+                      <strong className="badge-title">{badge.name}</strong>
+                      <span className="badge-days">{badge.days} Days</span>
+                      <span className="badge-status">{isUnlocked ? 'Unlocked 🔓' : 'Locked 🔒'}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Friends Activity Panel */}
+          <div className="panel friends-panel" style={{ margin: 0 }}>
+            <div className="panel-head">
+              <h2>👥 Friends Activity</h2>
+            </div>
+            <p className="helper-note" style={{ margin: '8px 0 16px 0' }}>
+              See how your peers are doing! Only streak counts are visible to respect everyone's privacy.
+            </p>
+
+            <div className="friends-list">
+              {friendsActivity.map((friend, idx) => (
+                <div key={idx} className={`friend-item ${friend.isSelf ? 'is-self' : ''}`}>
+                  <span className="friend-name">
+                    {friend.isSelf ? 'You' : friend.name}
+                  </span>
+                  <span className="friend-streak">
+                    🔥 {friend.streak} {friend.streak === 1 ? 'Day' : 'Days'}
+                  </span>
                 </div>
-              </div>
-              <div className={`milestone-item ${treeData.hasFruits ? 'unlocked' : 'locked'}`}>
-                <span className="milestone-icon">🍎</span>
-                <div className="milestone-desc">
-                  <strong>Month 1 (30 Days)</strong>
-                  <p>{treeData.hasFruits ? 'Fruits Grown!' : 'Reach 30 days to grow fruits'}</p>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </div>
-        <p className="helper-note">
-          Your virtual tree grows every day you earn <strong>= 20 SP</strong>. If you miss a day, the growth pauses. Let's make it blossom!
-        </p>
+
       </div>
-
-
 
       {showSpinModal && (
         <div className="spin-wheel-overlay" onClick={e => e.target === e.currentTarget && !spinning && closeRewardModal()}>
@@ -413,3 +501,4 @@ function GrowthTreeSvg({ stage }) {
     </svg>
   );
 }
+

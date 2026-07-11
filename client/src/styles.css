@@ -1059,4 +1059,123 @@ input {
   from { transform: scale(0.8); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
 }
+
+/* --- Motivation Dashboard Layout --- */
+.motivation-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  width: 100%;
+}
+@media (max-width: 900px) {
+  .motivation-layout {
+    grid-template-columns: 1fr;
+  }
+}
+.motivation-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.section-title {
+  font-size: 20px;
+  font-weight: 800;
+  margin: 0 0 10px 0;
+  color: var(--text);
+  border-bottom: 2px solid var(--line);
+  padding-bottom: 8px;
+}
+
+/* --- Milestone Badges Styles --- */
+.badges-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.badge-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card-bg, #fbfdff);
+  text-align: center;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.badge-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--primary);
+  box-shadow: var(--shadow);
+}
+.badge-card.unlocked {
+  border-top: 4px solid var(--green, #10b981);
+}
+.badge-card.locked {
+  border-top: 4px solid var(--muted, #64748b);
+  opacity: 0.6;
+}
+.badge-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+.badge-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.badge-title {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: bold;
+}
+.badge-days {
+  font-size: 11px;
+  color: var(--muted);
+}
+.badge-status {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--primary);
+  margin-top: 4px;
+}
+
+/* --- Friends Activity Styles --- */
+.friends-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.friend-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card-bg, #fbfdff);
+  transition: background-color 0.2s;
+}
+.friend-item.is-self {
+  border-color: var(--primary);
+  background: var(--primary-light, rgba(239, 68, 68, 0.05));
+  font-weight: bold;
+}
+.friend-item:hover {
+  background: var(--bar-row-bg, #f1f5f9);
+}
+:root[data-theme="dark"] .friend-item:hover {
+  background: #1e293b;
+}
+.friend-name {
+  font-size: 14px;
+  color: var(--text);
+}
+.friend-streak {
+  font-size: 14px;
+  color: #ef4444;
+  font-weight: 800;
+}
 

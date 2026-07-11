@@ -25,7 +25,8 @@ const studentSchema = new mongoose.Schema({
   // independent flag so it never disturbs the first survey's completion state.
   poll2Completed: { type: Boolean, default: false, index: true },
   poll2CompletedAt: { type: Date, default: null },
-  spinsUsed: { type: Number, default: 0 }
+  spinsUsed: { type: Number, default: 0 },
+  milestoneBadges: { type: [String], default: [] }
 }, { timestamps: true });
 
 studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });

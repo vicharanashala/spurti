@@ -378,7 +378,8 @@ async function studentPayload(student) {
       poll2Completed: Boolean(freshStudent.poll2Completed),
       streak: streakInfo.currentStreak,
       bonusesAwarded: streakInfo.bonusesAwarded,
-      spinsUsed: freshStudent.spinsUsed || 0
+      spinsUsed: freshStudent.spinsUsed || 0,
+      milestoneBadges: freshStudent.milestoneBadges || []
     },
     transactions,
     polls,
@@ -588,6 +589,180 @@ api.post('/spin-wheel', async (req, res) => {
 });
 
 // --- Motivation Dashboard Endpoints ---
+
+// --- Milestone Badges & Friends Activity Helpers ---
+async function getStudentDailySp(student) {
+  const emails = [student.email];
+  if (student.alternateEmail) {
+    emails.push(student.alternateEmail);
+  }
+  const transactions = await SPTransaction.find({
+    email: { $in: emails.map(e => e.toLowerCase()) }
+  }).sort({ dateTime: 1, createdAt: 1 }).lean();
+
+  const dailySp = {};
+  for (const tx of transactions) {
+    const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+    const isSpinWheelReward = tx.category === 'manual' && tx.reason && tx.reason.includes('Spin Wheel Reward');
+    if (isPerfectWeekBonus || isSpinWheelReward || tx.category === 'initial') {
+      continue;
+    }
+    const dateStr = getISTDateStr(tx.dateTime);
+    if (dateStr) {
+      dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
+    }
+  }
+  return dailySp;
+}
+
+async function getStudentStreak10(student, dailySp) {
+  const startDateStr = getISTDateStr(student.internshipStartDate);
+  const todayStr = getISTDateStr(new Date());
+
+  if (!startDateStr || !todayStr) return 0;
+
+  const start = new Date(startDateStr);
+  const end = new Date(todayStr);
+
+  const days = [];
+  let curr = new Date(start);
+  while (curr <= end) {
+    const dateStr = curr.toISOString().split('T')[0];
+    const sp = dailySp[dateStr] || 0;
+    days.push({
+      dateStr,
+      success: sp >= 10
+    });
+    curr.setDate(curr.getDate() + 1);
+  }
+
+  let activeRuns = [];
+  let currentRun = [];
+
+  for (const day of days) {
+    if (day.success) {
+      currentRun.push(day.dateStr);
+    } else {
+      if (currentRun.length > 0) {
+        activeRuns.push(currentRun);
+        currentRun = [];
+      }
+    }
+  }
+  if (currentRun.length > 0) {
+    activeRuns.push(currentRun);
+  }
+
+  let currentStreak = 0;
+  if (days.length > 0) {
+    const lastDay = days[days.length - 1];
+    if (lastDay.success) {
+      const lastRun = activeRuns[activeRuns.length - 1] || [];
+      currentStreak = lastRun.length;
+    } else if (days.length > 1) {
+      const yesterday = days[days.length - 2];
+      if (yesterday.success) {
+        const lastRun = activeRuns.find(run => run.includes(yesterday.dateStr)) || [];
+        currentStreak = lastRun.length;
+      }
+    }
+  }
+  return currentStreak;
+}
+
+api.get('/badges/milestones/:studentId', async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const dailySp = await getStudentDailySp(student);
+    const currentStreak = await getStudentStreak10(student, dailySp);
+
+    const badgesToAward = [];
+    if (currentStreak >= 3) badgesToAward.push('Beginner');
+    if (currentStreak >= 7) badgesToAward.push('Consistent');
+    if (currentStreak >= 15) badgesToAward.push('Dedicated');
+    if (currentStreak >= 30) badgesToAward.push('Scholar');
+    if (currentStreak >= 60) badgesToAward.push('Master');
+    if (currentStreak >= 100) badgesToAward.push('Legend');
+
+    let updated = false;
+    if (!student.milestoneBadges) {
+      student.milestoneBadges = [];
+    }
+    for (const b of badgesToAward) {
+      if (!student.milestoneBadges.includes(b)) {
+        student.milestoneBadges.push(b);
+        updated = true;
+      }
+    }
+    if (updated) {
+      await student.save();
+    }
+
+    res.json({
+      studentId: student._id,
+      currentStreak,
+      badges: student.milestoneBadges
+    });
+  } catch (err) {
+    console.error('milestones error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.get('/friends/activity/:studentId', async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    let friends = [];
+    if (student.leaderboardGroup) {
+      friends = await Student.find({
+        _id: { $ne: student._id },
+        status: 'active',
+        leaderboardGroup: student.leaderboardGroup
+      }).limit(4);
+    }
+    
+    if (friends.length < 4) {
+      const extraNeeded = 4 - friends.length;
+      const extraFriends = await Student.find({
+        _id: { $ne: student._id, $nin: friends.map(f => f._id) },
+        status: 'active'
+      }).limit(extraNeeded);
+      friends = friends.concat(extraFriends);
+    }
+
+    const activityList = [];
+
+    const selfDailySp = await getStudentDailySp(student);
+    const selfStreak = await getStudentStreak10(student, selfDailySp);
+    activityList.push({
+      name: 'You',
+      streak: selfStreak,
+      isSelf: true
+    });
+
+    for (const friend of friends) {
+      const friendDailySp = await getStudentDailySp(friend);
+      const friendStreak = await getStudentStreak10(friend, friendDailySp);
+      activityList.push({
+        name: friend.name,
+        streak: friendStreak,
+        isSelf: false
+      });
+    }
+
+    activityList.sort((a, b) => b.streak - a.streak);
+
+    res.json(activityList);
+  } catch (err) {
+    console.error('friends activity error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 function getISTDateStr(dateInput) {
   const d = new Date(dateInput);
   if (isNaN(d.getTime())) return '';

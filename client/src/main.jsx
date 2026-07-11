@@ -294,7 +294,7 @@ function StudentView({ profile, onBack, onRefreshProfile }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['motivation','Motivation & Rewards']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && (
@@ -302,7 +302,11 @@ function StudentView({ profile, onBack, onRefreshProfile }) {
           <div className="dashboard-col main-col">
             <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />
           </div>
-          <div className="dashboard-col side-col">
+        </div>
+      )}
+      {tab === 'motivation' && (
+        <div className="dashboard-row">
+          <div className="dashboard-col main-col" style={{ width: '100%', maxWidth: '1200px', margin: '0 auto' }}>
             <MotivationDashboard student={student} onRefreshProfile={onRefreshProfile} />
           </div>
         </div>
@@ -440,6 +444,20 @@ function buildBadges(profile) {
   if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
   if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
   if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
+  
+  if (profile.student.milestoneBadges && Array.isArray(profile.student.milestoneBadges)) {
+    profile.student.milestoneBadges.forEach(badge => {
+      let emoji = '🔥';
+      if (badge === 'Beginner') emoji = '🔥 Beginner';
+      else if (badge === 'Consistent') emoji = '🔥🔥 Consistent';
+      else if (badge === 'Dedicated') emoji = '🔥🔥🔥 Dedicated';
+      else if (badge === 'Scholar') emoji = '🔥🔥🔥🔥 Scholar';
+      else if (badge === 'Master') emoji = '👑 Master';
+      else if (badge === 'Legend') emoji = '💎 Legend';
+      badges.push(emoji);
+    });
+  }
+
   return badges.length ? badges : ['Getting Started'];
 }
 
