@@ -281,9 +281,26 @@ async function run() {
       }
     }
   }
+  // Award a Perfect Week Bonus to at least one student so the Spin Lucky Wheel button is visible
+  const targetStudent = students.find(s => s.email === 'adityasinha21024@gmail.com') || students[0];
+  if (targetStudent) {
+    const targetEmail = targetStudent.email;
+    const reasonText = 'Perfect Week Bonus: 7 consecutive days ending 2026-05-22';
+    const delta = 5;
+    await addTransaction(targetStudent, 'manual', '', delta, reasonText, new Date('2026-05-22T12:00:00.000Z'), balances);
+    console.log(`[SEED/REBUILD] Awarded Perfect Week Bonus to student: ${targetEmail}`);
+  }
 
   for (const student of students) {
-    await Student.updateOne({ _id: student._id }, { $set: { totalSp: balances.get(student.email) || 100 } });
+    await Student.updateOne(
+      { _id: student._id },
+      { 
+        $set: { 
+          totalSp: balances.get(student.email) || 100,
+          spinsUsed: student.email === targetStudent.email ? 0 : (student.spinsUsed || 0)
+        } 
+      }
+    );
   }
 
   console.log(`Rebuilt ${students.length} students`);
