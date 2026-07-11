@@ -631,7 +631,7 @@ async function getStudentStreak10(student, dailySp) {
     const sp = dailySp[dateStr] || 0;
     days.push({
       dateStr,
-      success: sp >= 10
+      success: sp === 10
     });
     curr.setDate(curr.getDate() + 1);
   }

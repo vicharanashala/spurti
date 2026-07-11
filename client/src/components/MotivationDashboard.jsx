@@ -250,7 +250,7 @@ export default function MotivationDashboard({ student, onRefreshProfile }) {
             </div>
             
             <p className="helper-note" style={{ margin: '8px 0 16px 0' }}>
-              Maintain consecutive days of earning <strong>&ge; 10 SP</strong> to unlock these exclusive status badges!
+              Maintain consecutive days of earning <strong>= 10 SP</strong> to unlock these exclusive status badges!
             </p>
 
             <div className="badges-grid">
