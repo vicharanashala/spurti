@@ -2,8 +2,6 @@ import React, { useState, useEffect } from 'react';
 
 export default function MotivationDashboard({ student }) {
   const [treeData, setTreeData] = useState(null);
-  const [calendarData, setCalendarData] = useState(null);
-  const [currentMonthDate, setCurrentMonthDate] = useState(new Date());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -13,20 +11,15 @@ export default function MotivationDashboard({ student }) {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const [treeRes, calRes] = await Promise.all([
-          fetch(`/api/growth-tree/${student._id}`),
-          fetch(`/api/chain-calendar/${student._id}`)
-        ]);
+        const treeRes = await fetch(`/api/growth-tree/${student._id}`);
 
-        if (!treeRes.ok || !calRes.ok) {
+        if (!treeRes.ok) {
           throw new Error('Failed to load motivation data');
         }
 
         const tData = await treeRes.json();
-        const cData = await calRes.json();
 
         setTreeData(tData);
-        setCalendarData(cData);
         setError(null);
       } catch (err) {
         console.error('Error fetching motivation data:', err);
@@ -48,76 +41,13 @@ export default function MotivationDashboard({ student }) {
     );
   }
 
-  if (error || !treeData || !calendarData) {
+  if (error || !treeData) {
     return (
       <div className="panel motivation-panel error-state">
         <p className="error">⚠️ {error || 'Could not load motivation dashboard'}</p>
       </div>
     );
   }
-
-  // Generate calendar days for the current selected month
-  const year = currentMonthDate.getFullYear();
-  const month = currentMonthDate.getMonth();
-
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const rawStartDay = new Date(year, month, 1).getDay();
-  // Adjust so Monday is 0 and Sunday is 6
-  const startOffset = rawStartDay === 0 ? 6 : rawStartDay - 1;
-
-  // Helper to format date as YYYY-MM-DD in local time
-  const getISTDateStr = (dateInput) => {
-    const d = new Date(dateInput);
-    if (isNaN(d.getTime())) return '';
-    const localTime = d.getTime() + 19800000; // Shift to IST (+5.5 hrs)
-    return new Date(localTime).toISOString().split('T')[0];
-  };
-
-  const todayStr = getISTDateStr(new Date());
-  const internshipStartStr = getISTDateStr(student.internshipStartDate);
-
-  const cells = [];
-  // Padding cells
-  for (let i = 0; i < startOffset; i++) {
-    cells.push({ isPadding: true, id: `pad-${i}` });
-  }
-
-  // Day cells
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const record = calendarData.calendarDays.find(item => item.date === dateStr);
-    
-    const spEarned = record ? record.spEarned : 0;
-    const success = record ? record.success : false;
-    const isToday = dateStr === todayStr;
-    const isFuture = new Date(dateStr) > new Date(todayStr);
-    const isBeforeStart = internshipStartStr ? new Date(dateStr) < new Date(internshipStartStr) : false;
-
-    cells.push({
-      isPadding: false,
-      id: dateStr,
-      dayNum: d,
-      dateStr,
-      spEarned,
-      success,
-      isToday,
-      isFuture,
-      isBeforeStart
-    });
-  }
-
-  const monthNames = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ];
-
-  const handlePrevMonth = () => {
-    setCurrentMonthDate(new Date(year, month - 1, 1));
-  };
-
-  const handleNextMonth = () => {
-    setCurrentMonthDate(new Date(year, month + 1, 1));
-  };
 
   return (
     <section className="motivation-dashboard">
@@ -170,70 +100,6 @@ export default function MotivationDashboard({ student }) {
         </div>
         <p className="helper-note">
           Your virtual tree grows every day you earn <strong>= 20 SP</strong>. If you miss a day, the growth pauses. Let's make it blossom!
-        </p>
-      </div>
-
-      {/* 2. Chain Calendar Section */}
-      <div className="panel chain-calendar-panel">
-        <div className="panel-head">
-          <h2>📅 Don't Break the Chain</h2>
-          <div className="month-controls">
-            <button className="icon-btn" onClick={handlePrevMonth} aria-label="Previous Month">◀</button>
-            <span className="month-label">{monthNames[month]} {year}</span>
-            <button className="icon-btn" onClick={handleNextMonth} aria-label="Next Month">▶</button>
-          </div>
-        </div>
-
-        <div className="calendar-grid">
-          {/* Weekday Headers */}
-          {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((h, i) => (
-            <span key={`head-${i}`} className="weekday-header">{h}</span>
-          ))}
-
-          {/* Days */}
-          {cells.map(cell => {
-            if (cell.isPadding) {
-              return <div key={cell.id} className="calendar-cell padding-cell" />;
-            }
-
-            let cellClass = 'calendar-cell';
-            if (cell.isBeforeStart) {
-              cellClass += ' before-start';
-            } else if (cell.isFuture) {
-              cellClass += ' future-cell';
-            } else if (cell.success) {
-              cellClass += ' success-cell';
-            } else {
-              cellClass += ' missed-cell';
-            }
-
-            if (cell.isToday) {
-              cellClass += ' today-cell';
-            }
-
-            return (
-              <div 
-                key={cell.id} 
-                className={cellClass}
-                title={`${cell.dateStr}: ${cell.spEarned} SP ${cell.success ? '(Success!)' : ''}`}
-              >
-                <span className="day-number">{cell.dayNum}</span>
-                {!cell.isPadding && !cell.isFuture && !cell.isBeforeStart && cell.spEarned !== 0 && (
-                  <span className={`sp-indicator ${cell.spEarned > 0 ? 'positive' : 'negative'}`}>
-                    {cell.spEarned > 0 ? `+${cell.spEarned}` : cell.spEarned}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="calendar-legend">
-          <div className="legend-item"><span className="legend-color success" /> Successful Day (= 20 SP)</div>
-          <div className="legend-item"><span className="legend-color missed" /> Missed Day (&lt; 20 SP)</div>
-        </div>
-        <p className="calendar-encouragement">
-          Maintain your streak! Target earning <strong>20 SP</strong> daily through sessions, attendance, and polls to keep the chain green.
         </p>
       </div>
     </section>

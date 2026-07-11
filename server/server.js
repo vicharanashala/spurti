@@ -389,59 +389,6 @@ api.get('/growth-tree/:studentId', async (req, res) => {
   }
 });
 
-api.get('/chain-calendar/:studentId', async (req, res) => {
-  try {
-    const student = await Student.findById(req.params.studentId).lean();
-    if (!student) return res.status(404).json({ error: 'Student not found' });
-
-    const emails = [student.email];
-    if (student.alternateEmail) {
-      emails.push(student.alternateEmail);
-    }
-    const transactions = await SPTransaction.find({
-      email: { $in: emails.map(e => e.toLowerCase()) }
-    }).sort({ dateTime: 1, createdAt: 1 }).lean();
-
-    const dailySp = {};
-    for (const tx of transactions) {
-      const dateStr = getISTDateStr(tx.dateTime);
-      if (dateStr) {
-        dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
-      }
-    }
-
-    const startDateStr = getISTDateStr(student.internshipStartDate);
-    const todayStr = getISTDateStr(new Date());
-
-    if (!startDateStr || !todayStr) {
-      return res.status(400).json({ error: 'Invalid start date or current date' });
-    }
-
-    const start = new Date(startDateStr);
-    const end = new Date(todayStr);
-
-    const calendarDays = [];
-    let curr = new Date(start);
-    while (curr <= end) {
-      const dateStr = curr.toISOString().split('T')[0];
-      const spEarned = dailySp[dateStr] || 0;
-      calendarDays.push({
-        date: dateStr,
-        spEarned,
-        success: spEarned >= 20
-      });
-      curr.setDate(curr.getDate() + 1);
-    }
-
-    res.json({
-      studentId: student._id,
-      calendarDays
-    });
-  } catch (err) {
-    console.error('chain-calendar error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
 
 // --- Survey triangulation (mandatory perception follow-up) ---------------
 // Mark a student's survey as completed. Idempotent; matches on primary or
