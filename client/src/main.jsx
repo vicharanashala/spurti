@@ -262,7 +262,7 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onUpdate, onBack }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -275,13 +275,15 @@ function StudentView({ profile, onBack }) {
           <p className="eyebrow">Student Spurti Bank</p>
           <h1>{student.name}</h1>
         </div>
-        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
+        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong></div>
       </header>
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <WeeklyGoalPlanner profile={profile} onUpdate={onUpdate} />
+      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} onTabChange={setTab} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['missions', 'Missions'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
+      {tab === 'missions' && <DailyMissionPlanner profile={profile} onUpdate={onUpdate} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
   );
@@ -347,7 +349,7 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   );
 }
 
-function StudentPulse({ profile, badges, nextActions }) {
+function StudentPulse({ profile, badges, nextActions, onTabChange }) {
   const { student, cohort, attendance, polls, transactions } = profile;
   const qualified = attendance.filter(a => a.qualified).length;
   const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
@@ -375,6 +377,14 @@ function StudentPulse({ profile, badges, nextActions }) {
         <div className="compare-list">
           <b>{qualified}/{attendance.length} attendance qualified</b>
           <b>{pollAttempted}/{pollTotal} polls attempted</b>
+        </div>
+      </div>
+      <div className="pulse-card" style={{ cursor: 'pointer' }} onClick={() => onTabChange('missions')}>
+        <span>Daily Missions</span>
+        <strong>🔥 {student.dailyMissionStreak || 0} Streak</strong>
+        <div className="compare-list">
+          <b>Longest: {student.longestMissionStreak || 0} days</b>
+          <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Click to plan & earn SP</span>
         </div>
       </div>
       <div className="pulse-card">
@@ -846,5 +856,715 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
+function DailyMissionPlanner({ profile, onUpdate }) {
+  const { student } = profile;
+  const [date, setDate] = useState(() => {
+    // Get local date in IST format YYYY-MM-DD
+    const options = { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' };
+    const formatter = new Intl.DateTimeFormat('en-CA', options);
+    return formatter.format(new Date());
+  });
+
+  const [missions, setMissions] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [streaks, setStreaks] = useState({ daily: 0, weekly: 0, monthly: 0, longest: 0 });
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('list'); // 'list' | 'weekly' | 'monthly'
+
+  // Form State
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingMission, setEditingMission] = useState(null);
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [priority, setPriority] = useState('medium');
+  const [duration, setDuration] = useState(30);
+  const [deadline, setDeadline] = useState('');
+  const [category, setCategory] = useState('coding');
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  // Coach State
+  const [coachFeedback, setCoachFeedback] = useState('');
+  const [coachLoading, setCoachLoading] = useState(false);
+
+  // Insights State
+  const [insights, setInsights] = useState(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+
+  // Analytics State
+  const [analytics, setAnalytics] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
+  // Expanded card state
+  const [expandedMissions, setExpandedMissions] = useState({});
+
+  useEffect(() => {
+    loadMissions(date);
+    loadCoachFeedback(date);
+  }, [date]);
+
+  useEffect(() => {
+    if (activeTab === 'weekly') {
+      loadWeeklyInsights();
+    } else if (activeTab === 'monthly') {
+      loadMonthlyAnalytics();
+    }
+  }, [activeTab, date]);
+
+  const loadMissions = async (targetDate) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/missions?date=${targetDate}`);
+      if (res.ok) {
+        const data = await res.json();
+        setMissions(data.missions || []);
+        setSummary(data.summary);
+        if (data.streaks) setStreaks(data.streaks);
+      }
+    } catch (err) {
+      console.error('Failed to load missions:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadCoachFeedback = async (targetDate) => {
+    setCoachLoading(true);
+    try {
+      const res = await fetch(`${API}/missions/coach-feedback?date=${targetDate}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCoachFeedback(data.coachFeedback);
+      }
+    } catch (err) {
+      console.error('Failed to load coach feedback:', err);
+    } finally {
+      setCoachLoading(false);
+    }
+  };
+
+  const loadWeeklyInsights = async () => {
+    setInsightsLoading(true);
+    try {
+      const res = await fetch(`${API}/missions/weekly-insights?date=${date}`);
+      if (res.ok) {
+        setInsights(await res.json());
+      }
+    } catch (err) {
+      console.error('Failed to load weekly insights:', err);
+    } finally {
+      setInsightsLoading(false);
+    }
+  };
+
+  const loadMonthlyAnalytics = async () => {
+    setAnalyticsLoading(true);
+    try {
+      const res = await fetch(`${API}/missions/monthly-analytics?date=${date}`);
+      if (res.ok) {
+        setAnalytics(await res.json());
+      }
+    } catch (err) {
+      console.error('Failed to load monthly analytics:', err);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  };
+
+  const openAddForm = () => {
+    setEditingMission(null);
+    setTitle('');
+    setDescription('');
+    setPriority('medium');
+    setDuration(30);
+    setDeadline('');
+    setCategory('coding');
+    setFormError('');
+    setFormOpen(true);
+  };
+
+  const openEditForm = (mission) => {
+    setEditingMission(mission);
+    setTitle(mission.title);
+    setDescription(mission.description || '');
+    setPriority(mission.priority);
+    setDuration(mission.duration);
+    setDeadline(mission.deadline || '');
+    setCategory(mission.category);
+    setFormError('');
+    setFormOpen(true);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!title.trim()) {
+      setFormError('Title is required');
+      return;
+    }
+    setSubmitting(true);
+    setFormError('');
+
+    const payload = { title, description, priority, duration, deadline, category, date };
+
+    try {
+      let res;
+      if (editingMission) {
+        res = await fetch(`${API}/missions/${editingMission._id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } else {
+        res = await fetch(`${API}/missions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      }
+
+      if (res.ok) {
+        setFormOpen(false);
+        loadMissions(date);
+        loadCoachFeedback(date);
+        // Trigger profile reload in parent if needed (since SP changed)
+        triggerProfileReload();
+      } else {
+        const errorData = await res.json();
+        setFormError(errorData.error || 'Failed to save mission');
+      }
+    } catch (err) {
+      setFormError('Network error. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Are you sure you want to delete this mission?')) return;
+    try {
+      const res = await fetch(`${API}/missions/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        loadMissions(date);
+        loadCoachFeedback(date);
+        triggerProfileReload();
+      }
+    } catch (err) {
+      console.error('Failed to delete mission:', err);
+    }
+  };
+
+  const handleToggleComplete = async (id) => {
+    try {
+      const res = await fetch(`${API}/missions/${id}/toggle`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        loadMissions(date);
+        loadCoachFeedback(date);
+        triggerProfileReload();
+      }
+    } catch (err) {
+      console.error('Failed to toggle completion:', err);
+    }
+  };
+
+  const handleReorder = async (missionId, direction) => {
+    const index = missions.findIndex(m => m._id === missionId);
+    if (index === -1) return;
+    if (direction === 'up' && index === 0) return;
+    if (direction === 'down' && index === missions.length - 1) return;
+
+    const newMissions = [...missions];
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+
+    // Swap order property
+    const temp = newMissions[index].order;
+    newMissions[index].order = newMissions[targetIndex].order;
+    newMissions[targetIndex].order = temp;
+
+    // Swap items in local array
+    const tempItem = newMissions[index];
+    newMissions[index] = newMissions[targetIndex];
+    newMissions[targetIndex] = tempItem;
+
+    setMissions(newMissions);
+
+    try {
+      await fetch(`${API}/missions/reorder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orders: newMissions.map((m) => ({ id: m._id, order: m.order }))
+        })
+      });
+    } catch (err) {
+      console.error('Failed to save reorder:', err);
+    }
+  };
+
+  const triggerProfileReload = async () => {
+    // Trick to force Parent view to fetch the latest Spurti points from server
+    try {
+      const res = await fetch(`${API}/me`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.authenticated && data.profile && onUpdate) {
+          onUpdate(data.profile);
+        }
+      }
+    } catch {}
+  };
+
+  const changeDate = (days) => {
+    const d = new Date(date + 'T12:00:00');
+    d.setDate(d.getDate() + days);
+    setDate(d.toISOString().split('T')[0]);
+  };
+
+  const toggleDetails = (id) => {
+    setExpandedMissions(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const getQualityColorClass = (score) => {
+    if (score >= 90) return 'high';
+    if (score >= 70) return 'med';
+    return 'low';
+  };
+
+  const getCompletionPercentage = () => {
+    if (!missions.length) return 0;
+    const completed = missions.filter(m => m.completed).length;
+    return Math.round((completed / missions.length) * 100);
+  };
+
+  const getTodaySp = () => {
+    let base = missions.filter(m => m.completed).reduce((sum, m) => sum + (m.spEarned || 0), 0);
+    let bonus = summary?.bonusSpEarned || 0;
+    return base + bonus;
+  };
+
+  return (
+    <div className="mission-planner-layout">
+      {/* Streaks stats row */}
+      <div className="mission-header-stats">
+        <div className="streak-card daily">
+          <span>Daily Streak</span>
+          <strong>🔥 {streaks.daily} days</strong>
+        </div>
+        <div className="streak-card weekly">
+          <span>Weekly Streak</span>
+          <strong>🏆 {streaks.weekly} weeks</strong>
+        </div>
+        <div className="streak-card monthly">
+          <span>Monthly Streak</span>
+          <strong>💎 {streaks.monthly} months</strong>
+        </div>
+        <div className="streak-card longest">
+          <span>Longest Streak</span>
+          <strong>🎖️ {streaks.longest} days</strong>
+        </div>
+      </div>
+
+      {/* Date controls and Add Task button */}
+      <div className="mission-controls">
+        <div className="date-controls">
+          <button className="date-btn" onClick={() => changeDate(-1)}>◀</button>
+          <span>📅 {date === getISTDateString() ? "Today" : date}</span>
+          <button className="date-btn" onClick={() => changeDate(1)}>▶</button>
+        </div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button className="primary quick-add-btn" onClick={openAddForm}>
+            ➕ Add Mission
+          </button>
+        </div>
+      </div>
+
+      {/* Navigation tabs inside Planner */}
+      <div className="tabs">
+        <button className={activeTab === 'list' ? 'active' : ''} onClick={() => setActiveTab('list')}>Missions Checklist</button>
+        <button className={activeTab === 'weekly' ? 'active' : ''} onClick={() => setActiveTab('weekly')}>Weekly Insights</button>
+        <button className={activeTab === 'monthly' ? 'active' : ''} onClick={() => setActiveTab('monthly')}>Monthly Analytics</button>
+      </div>
+
+      {activeTab === 'list' && (
+        <div className="mission-grid">
+          {/* Left panel: Task lists */}
+          <div className="panel" style={{ margin: 0 }}>
+            <div className="panel-head" style={{ marginBottom: '16px' }}>
+              <h2>Missions</h2>
+              <span className="muted">{missions.length} Planned</span>
+            </div>
+
+            {loading ? (
+              <p className="empty">Loading daily missions...</p>
+            ) : !missions.length ? (
+              <p className="empty">No missions added for today. Click 'Add Mission' to start planning your learning goals!</p>
+            ) : (
+              <div className="mission-list">
+                {missions.map((mission, index) => (
+                  <div className="mission-card" key={mission._id}>
+                    <div className="mission-main-row">
+                      <button 
+                        className={`mission-check-btn ${mission.completed ? 'completed' : ''}`}
+                        onClick={() => handleToggleComplete(mission._id)}
+                      >
+                        {mission.completed && '✓'}
+                      </button>
+
+                      <div className="mission-info">
+                        <h3 className={`mission-title ${mission.completed ? 'completed' : ''}`}>
+                          {mission.title}
+                        </h3>
+                        {mission.description && (
+                          <p className="mission-description">{mission.description}</p>
+                        )}
+                        <div className="mission-meta">
+                          <span className={`cat-badge cat-${mission.category}`}>{mission.category.replace('_', ' ')}</span>
+                          <span className={`pri-badge pri-${mission.priority}`}>{mission.priority}</span>
+                          <span className="duration-badge">⏱️ {mission.duration}m</span>
+                          {mission.deadline && (
+                            <span className="deadline-badge">📅 {mission.deadline}</span>
+                          )}
+                          {mission.qualityScore !== null && (
+                            <span className={`quality-pill ${getQualityColorClass(mission.qualityScore)}`}>
+                              ⭐ Q-{mission.qualityScore}
+                            </span>
+                          )}
+                          {mission.completed && mission.spEarned > 0 && (
+                            <span className="sp-earned-pill">+{mission.spEarned} SP</span>
+                          )}
+                        </div>
+
+                        {mission.qualityEvaluation && (
+                          <>
+                            <button className="mission-details-toggle" onClick={() => toggleDetails(mission._id)}>
+                              {expandedMissions[mission._id] ? '▲ Hide AI evaluation' : '▼ View AI evaluation'}
+                            </button>
+
+                            {expandedMissions[mission._id] && (
+                              <div className="mission-evaluation-details">
+                                <div className="eval-metrics-grid">
+                                  <div className="eval-metric-bar">
+                                    <span>Specificity: {mission.qualityEvaluation.specificity}/100</span>
+                                    <div className="metric-track">
+                                      <div className={`metric-fill ${getQualityColorClass(mission.qualityEvaluation.specificity)}`} style={{ width: `${mission.qualityEvaluation.specificity}%` }} />
+                                    </div>
+                                  </div>
+                                  <div className="eval-metric-bar">
+                                    <span>Actionability: {mission.qualityEvaluation.actionability}/100</span>
+                                    <div className="metric-track">
+                                      <div className={`metric-fill ${getQualityColorClass(mission.qualityEvaluation.actionability)}`} style={{ width: `${mission.qualityEvaluation.actionability}%` }} />
+                                    </div>
+                                  </div>
+                                  <div className="eval-metric-bar">
+                                    <span>Learning Value: {mission.qualityEvaluation.learningValue}/100</span>
+                                    <div className="metric-track">
+                                      <div className={`metric-fill ${getQualityColorClass(mission.qualityEvaluation.learningValue)}`} style={{ width: `${mission.qualityEvaluation.learningValue}%` }} />
+                                    </div>
+                                  </div>
+                                </div>
+                                <p className="eval-reasoning">
+                                  <strong>AI Coach feedback:</strong> {mission.qualityEvaluation.reasoning}
+                                </p>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      {/* Reordering and Actions */}
+                      <div className="mission-action-buttons">
+                        <button className="mission-action-btn" onClick={() => handleReorder(mission._id, 'up')} disabled={index === 0}>▲</button>
+                        <button className="mission-action-btn" onClick={() => handleReorder(mission._id, 'down')} disabled={index === missions.length - 1}>▼</button>
+                        <button className="mission-action-btn" onClick={() => openEditForm(mission)}>✏️</button>
+                        <button className="mission-action-btn delete" onClick={() => handleDelete(mission._id)}>🗑️</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Right panel: Coach feedback & Today progress summary */}
+          <div>
+            {/* AI Coach panel */}
+            <div className="coach-card">
+              <span className="coach-avatar">🤖</span>
+              <div className="coach-content">
+                <h4>AI Coach Daily Message</h4>
+                {coachLoading ? (
+                  <p>Coach is writing feedback...</p>
+                ) : (
+                  <p>{coachFeedback || 'Set missions and check them off to get personalized coaching!'}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Today Summary */}
+            <div className="panel" style={{ margin: 0 }}>
+              <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: 850 }}>Today's Performance</h3>
+              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+                <svg className="circular-progress-svg">
+                  <circle className="circular-bg" cx="45" cy="45" r="38" />
+                  <circle 
+                    className="circular-indicator" 
+                    cx="45" 
+                    cy="45" 
+                    r="38" 
+                    strokeDasharray="239" 
+                    strokeDashoffset={239 - (239 * getCompletionPercentage()) / 100}
+                  />
+                  <text x="45" y="50" textAnchor="middle" dominantBaseline="middle" style={{ transform: 'rotate(90deg)', transformOrigin: '45px 45px', fontWeight: 900, fontSize: '13px' }}>
+                    {getCompletionPercentage()}%
+                  </text>
+                </svg>
+              </div>
+
+              <div className="compare-list" style={{ borderTop: '1px solid var(--line)', paddingTop: '12px' }}>
+                <b>Today's SP: <span style={{ color: 'var(--primary)' }}>+{getTodaySp()} SP</span></b>
+                <b>Completed Tasks: {missions.filter(m => m.completed).length} / {missions.length}</b>
+                <b>Avg Quality Score: {summary?.qualityAverage || 0} / 100</b>
+                {summary?.bonusSpEarned > 0 && (
+                  <b style={{ color: 'var(--green)' }}>🎉 +20% Completion Bonus Earned!</b>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'weekly' && (
+        <div>
+          {insightsLoading ? (
+            <p className="empty">Compiling weekly report...</p>
+          ) : !insights ? (
+            <p className="empty">No weekly goal logs found. Check off missions to build insights!</p>
+          ) : (
+            <div className="mission-planner-layout">
+              {/* Insights stats */}
+              <div className="insights-summary-grid">
+                <div className="insight-metric-card">
+                  <span>Completion Rate</span>
+                  <strong>{insights.completionRate}%</strong>
+                  <p>In the last 7 days</p>
+                </div>
+                <div className="insight-metric-card">
+                  <span>Weekly SP Earned</span>
+                  <strong>+{insights.spEarned} SP</strong>
+                  <p>Total daily planner points</p>
+                </div>
+                <div className="insight-metric-card">
+                  <span>Weekly Quality Avg</span>
+                  <strong>{insights.qualityAverage}/100</strong>
+                  <p>Task definition detail level</p>
+                </div>
+              </div>
+
+              {/* Category distribution and AI Suggestions */}
+              <div className="analytics-charts-grid">
+                {/* Horizontal bar chart */}
+                <div className="custom-chart-container">
+                  <h4>Category Distribution</h4>
+                  <div className="cat-bars-list">
+                    {Object.keys(insights.categoryDistribution).map(cat => {
+                      const count = insights.categoryDistribution[cat];
+                      const maxVal = Math.max(1, ...Object.values(insights.categoryDistribution));
+                      const percent = Math.round((count / maxVal) * 100);
+                      return (
+                        <div className="cat-bar-row" key={cat}>
+                          <span className="label">{cat.replace('_', ' ')}</span>
+                          <div className="cat-bar-track">
+                            <div className="cat-bar-fill" style={{ width: `${percent}%` }} />
+                          </div>
+                          <span className="val">{count}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Suggestions / Productivity Score */}
+                <div className="custom-chart-container" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div>
+                    <h4>Weekly Productivity Score</h4>
+                    <strong style={{ fontSize: '38px', color: 'var(--primary)' }}>{insights.weeklyProductivityScore} / 100</strong>
+                    <p className="muted" style={{ fontSize: '13px', margin: '4px 0 0 0' }}>Reflects task specificity, completion rates, and consistent challenge volume.</p>
+                  </div>
+                  <div style={{ borderTop: '1px solid var(--line)', paddingTop: '16px' }}>
+                    <h4 style={{ marginBottom: '8px' }}>AI Insights & Recommendations</h4>
+                    <ul className="next-list">
+                      {insights.aiSuggestions.map((s, idx) => (
+                        <li key={idx} style={{ fontSize: '13px', marginBottom: '6px' }}>{s}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'monthly' && (
+        <div>
+          {analyticsLoading ? (
+            <p className="empty">Analyzing monthly records...</p>
+          ) : !analytics ? (
+            <p className="empty">No historical logs found for the last 30 days.</p>
+          ) : (
+            <div className="mission-planner-layout">
+              {/* Heatmap Grid */}
+              <div className="custom-chart-container">
+                <h4>Category Completion Heatmap (Last 30 Days)</h4>
+                <div className="heatmap-grid">
+                  {Object.keys(analytics.categoryHeatmap).map(cat => {
+                    const stats = analytics.categoryHeatmap[cat];
+                    const rate = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
+                    return (
+                      <div className="heatmap-box" key={cat}>
+                        <span className="box-lbl">{cat.replace('_', ' ')}</span>
+                        <span className="box-val">{stats.completed}/{stats.total}</span>
+                        <div className="heatmap-progress-track">
+                          <div className="heatmap-progress-fill" style={{ width: `${rate}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Quality and SP Growth Graphs */}
+              <div className="analytics-charts-grid">
+                {/* SP Cumulative Growth */}
+                <div className="custom-chart-container">
+                  <h4>Cumulative SP Growth (Last 30 Days)</h4>
+                  <div className="trend-line-container">
+                    {analytics.spGrowth.map((point, idx) => {
+                      const maxVal = Math.max(1, ...analytics.spGrowth.map(p => p.value));
+                      const heightPercent = Math.round((point.value / maxVal) * 160); // Max height 160px
+                      return (
+                        <div className="trend-bar" style={{ height: `${heightPercent}px` }} key={idx}>
+                          <div className="trend-tooltip">
+                            {point.date}: {point.value} SP
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Performance Analytics summary */}
+                <div className="custom-chart-container" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <h4>Streak & Categorical Milestones</h4>
+                  <div className="compare-list">
+                    <b>🔥 Longest Streak Achieved: <span style={{ color: 'var(--primary)' }}>{analytics.longestStreak} days</span></b>
+                    <b>🌟 Strongest Task Type: <span style={{ color: 'var(--green)' }}>{analytics.bestPerformingCategory}</span></b>
+                    <b>⚠️ Focus Needed Category: <span style={{ color: 'var(--red)' }}>{analytics.weakestCategory}</span></b>
+                    <b>📋 Most Frequent Activity: <span style={{ textTransform: 'capitalize' }}>{analytics.mostCommonTaskType}</span></b>
+                  </div>
+                  <p className="muted" style={{ fontSize: '13px', borderTop: '1px solid var(--line)', paddingTop: '12px', marginTop: '6px' }}>
+                    Streaks are updated daily as you complete your missions. Weekly completion rate target is 80%+ to maintain high league performance.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Add / Edit Task Modal */}
+      {formOpen && (
+        <div className="mission-form-overlay">
+          <form className="mission-form-modal" onSubmit={handleSubmit}>
+            <div className="form-header">
+              <h3>{editingMission ? '✏️ Edit Daily Mission' : '➕ Plan New Mission'}</h3>
+              <button type="button" className="form-close-btn" onClick={() => setFormOpen(false)}>×</button>
+            </div>
+            <div className="form-body">
+              <div className="form-group">
+                <label>Mission Title</label>
+                <input 
+                  value={title} 
+                  onChange={e => setTitle(e.target.value)} 
+                  placeholder="e.g. Solve 5 Binary Search problems on LeetCode"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Description (Optional details, deliverables, repository links)</label>
+                <textarea 
+                  value={description} 
+                  onChange={e => setDescription(e.target.value)} 
+                  placeholder="e.g. Solve Search in Rotated Array, Find Minimum. Push solutions to repo 'dsa-practice'."
+                  rows={3}
+                />
+              </div>
+
+              <div className="form-row-2">
+                <div className="form-group">
+                  <label>Category</label>
+                  <select value={category} onChange={e => setCategory(e.target.value)}>
+                    <option value="coding">Coding</option>
+                    <option value="dsa">DSA</option>
+                    <option value="reading">Reading</option>
+                    <option value="assignment">Assignment</option>
+                    <option value="project">Project</option>
+                    <option value="research">Research</option>
+                    <option value="communication">Communication</option>
+                    <option value="interview_prep">Interview Prep</option>
+                    <option value="ai">AI</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Priority</label>
+                  <select value={priority} onChange={e => setPriority(e.target.value)}>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-row-2">
+                <div className="form-group">
+                  <label>Estimated Duration (Min)</label>
+                  <input 
+                    type="number" 
+                    min="5" 
+                    max="480"
+                    value={duration} 
+                    onChange={e => setDuration(Number(e.target.value))} 
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Deadline (Optional time/date)</label>
+                  <input 
+                    value={deadline} 
+                    onChange={e => setDeadline(e.target.value)} 
+                    placeholder="e.g. 17:00 IST or Tonight"
+                  />
+                </div>
+              </div>
+
+              {formError && <p className="error">{formError}</p>}
+
+              <div className="form-actions">
+                <button type="button" className="secondary" onClick={() => setFormOpen(false)}>Cancel</button>
+                <button type="submit" className="primary" disabled={submitting}>
+                  {submitting ? 'Evaluating with AI...' : editingMission ? 'Save Mission' : 'Plan Mission'}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);
