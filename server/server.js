@@ -12,6 +12,7 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import CorrectionRequest from './models/CorrectionRequest.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import { getRankDeltas } from './services/analyticsService.js';
 
@@ -688,6 +689,160 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
+
+// ---------------------------------------------------------------------------
+// Public: expose session labels so the student correction form can populate
+// the dropdown without requiring admin credentials.
+// ---------------------------------------------------------------------------
+api.get('/sessions', async (_req, res) => {
+  try {
+    const sessions = await Session.find().sort({ endDateTime: 1 }).lean();
+    res.json(sessions.map(s => ({ label: s.label })));
+  } catch (err) {
+    console.error('GET /sessions error:', err.message);
+    res.status(500).json({ error: 'Failed to load sessions' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// CORRECTION PORTAL — Student endpoint
+// POST /api/corrections/submit
+// Authenticated via the existing Samagama cookie flow (same as /api/me).
+// ---------------------------------------------------------------------------
+api.post('/corrections/submit', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated. Please open Spurti from Samagama.' });
+
+    const { sessionLabel, category, studentReason, proofType, proofUrl, studentComment } = req.body || {};
+
+    if (!sessionLabel || String(sessionLabel).trim() === '') {
+      return res.status(400).json({ error: 'sessionLabel is required.' });
+    }
+    if (!category || !['attendance', 'poll'].includes(category)) {
+      return res.status(400).json({ error: 'category must be "attendance" or "poll".' });
+    }
+    if (!studentReason || String(studentReason).trim() === '') {
+      return res.status(400).json({ error: 'studentReason is required.' });
+    }
+    if (!proofType || !['image', 'video'].includes(proofType)) {
+      return res.status(400).json({ error: 'proofType must be "image" or "video".' });
+    }
+    if (!proofUrl || String(proofUrl).trim() === '') {
+      return res.status(400).json({ error: 'proofUrl is required.' });
+    }
+
+    const correctionRequest = await CorrectionRequest.create({
+      email,
+      sessionLabel: String(sessionLabel).trim(),
+      category,
+      studentReason: String(studentReason).trim(),
+      studentComment: String(studentComment || '').trim(),
+      proofType,
+      proofUrl: String(proofUrl).trim(),
+      status: 'pending'
+    });
+
+    res.status(201).json({ ok: true, id: correctionRequest._id });
+  } catch (err) {
+    console.error('POST /corrections/submit error:', err.message);
+    res.status(500).json({ error: 'Failed to submit correction request.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// CORRECTION PORTAL — Admin endpoints (protected by adminGuard)
+// GET  /api/admin/corrections/pending
+// POST /api/admin/corrections/:id/action
+// ---------------------------------------------------------------------------
+
+// Return all pending correction requests sorted oldest-first.
+api.get('/admin/corrections/pending', adminGuard, async (_req, res) => {
+  try {
+    const pending = await CorrectionRequest.find({ status: 'pending' })
+      .sort({ createdAt: 1 })
+      .lean();
+    res.json(pending);
+  } catch (err) {
+    console.error('GET /admin/corrections/pending error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch pending corrections.' });
+  }
+});
+
+// Approve or reject a correction request.
+// Body: { action: 'approved'|'rejected', reviewedBy, adminComment, bonusSp? }
+api.post('/admin/corrections/:id/action', adminGuard, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action, reviewedBy, adminComment, bonusSp } = req.body || {};
+
+    if (!action || !['approved', 'rejected'].includes(action)) {
+      return res.status(400).json({ error: 'action must be "approved" or "rejected".' });
+    }
+    if (!adminComment || String(adminComment).trim() === '') {
+      return res.status(400).json({ error: 'adminComment is required before taking action.' });
+    }
+    if (!reviewedBy || String(reviewedBy).trim() === '') {
+      return res.status(400).json({ error: 'reviewedBy is required.' });
+    }
+
+    const correctionRequest = await CorrectionRequest.findById(id);
+    if (!correctionRequest) return res.status(404).json({ error: 'Correction request not found.' });
+    if (correctionRequest.status !== 'pending') {
+      return res.status(409).json({ error: 'This request has already been processed.' });
+    }
+
+    correctionRequest.status = action;
+    correctionRequest.reviewedBy = String(reviewedBy).trim();
+    correctionRequest.adminComment = String(adminComment).trim();
+    correctionRequest.actionedAt = new Date();
+    await correctionRequest.save();
+
+    if (action === 'approved') {
+      const appliedDelta = Number(bonusSp) > 0 ? Number(bonusSp) : 5;
+      const { email, sessionLabel, studentReason, studentComment } = correctionRequest;
+
+      // Look up the student for their current balance.
+      const student = await Student.findOne({ email });
+      if (!student) {
+        console.warn(`Correction approved but student not found for email: ${email}`);
+        return res.json({ ok: true, warning: 'Request approved but student record not found — SP not credited.' });
+      }
+
+      const newBalance = (student.totalSp || 0) + appliedDelta;
+      const reasonText = `Correction Approved: ${studentReason}` +
+        (studentComment ? ` | Student Remark: ${studentComment}` : '') +
+        ` | Admin Note: ${correctionRequest.adminComment}`;
+
+      // Record the SP transaction.
+      await SPTransaction.create({
+        email: email.toLowerCase(),
+        studentId: student._id,
+        category: 'correction',
+        sessionLabel,
+        deltaMode: 'absolute',
+        deltaValue: appliedDelta,
+        appliedDelta,
+        balanceAfter: newBalance,
+        reason: reasonText,
+        dateTime: new Date()
+      });
+
+      // Atomically update the student's SP balance and derived fields.
+      student.totalSp = newBalance;
+      student.highestSpEver = Math.max(student.highestSpEver || 0, newBalance);
+      student.level = levelFor(student.highestSpEver);
+      student.trophyLeague = leagueBand(student.totalSp);
+      student.legendBadgeUnlocked = legendBadge(student.highestSpEver);
+      await student.save();
+    }
+
+    res.json({ ok: true, action, id: correctionRequest._id });
+  } catch (err) {
+    console.error('POST /admin/corrections/:id/action error:', err.message);
+    res.status(500).json({ error: 'Failed to process correction action.' });
+  }
+});
 
 app.use('/api', api);
 app.use('/spurti/api', api);
