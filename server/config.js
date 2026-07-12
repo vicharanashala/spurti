@@ -23,6 +23,8 @@ export const SESSION_LABELS = [
   '22 May Evening'
 ];
 
+export const STREAK_FREEZE_COST_SP = 20;
+
 export const SESSION_DURATIONS = {
   '15 May Morning': 250,
   '15 May Evening': 225,

@@ -5,14 +5,19 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
-import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
+import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL, STREAK_FREEZE_COST_SP } from './config.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import NotificationPreference from './models/NotificationPreference.js';
+import Notification from './models/Notification.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { getOrCreatePreferences, notify } from './services/notifications.js';
+import { computeStreak } from './services/streaks.js';
+import { appendTransaction, logTransaction } from './services/spLedger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -175,8 +180,158 @@ function excusedPayload(student) {
   };
 }
 
+async function awardSp(student, delta, category, reason, sessionLabel = '', dateTime = new Date()) {
+  const email = student.email.toLowerCase();
+  const updatedStudent = await Student.findOneAndUpdate(
+    { _id: student._id },
+    { $inc: { totalSp: delta } },
+    { new: true }
+  );
+  if (!updatedStudent) {
+    throw new Error('Student not found for SP update');
+  }
+  if (updatedStudent.totalSp > (updatedStudent.highestSpEver || 0)) {
+    updatedStudent.highestSpEver = updatedStudent.totalSp;
+    await updatedStudent.save();
+  }
+  const txn = await SPTransaction.create({
+    email,
+    studentId: student._id,
+    category,
+    sessionLabel,
+    deltaMode: 'absolute',
+    deltaValue: delta,
+    appliedDelta: delta,
+    balanceAfter: updatedStudent.totalSp,
+    reason,
+    dateTime
+  });
+  return txn;
+}
+
+async function checkAndAwardPerfectWeekBonus(student) {
+  const emails = [student.email];
+  if (student.alternateEmail) {
+    emails.push(student.alternateEmail);
+  }
+  const transactions = await SPTransaction.find({
+    email: { $in: emails.map(e => e.toLowerCase()) }
+  }).sort({ dateTime: 1, createdAt: 1 }).lean();
+
+  const dailySp = {};
+  const existingBonusDates = new Set();
+
+  for (const tx of transactions) {
+    const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+    if (isPerfectWeekBonus) {
+      const match = tx.reason.match(/ending (\d{4}-\d{2}-\d{2})/);
+      if (match) {
+        existingBonusDates.add(match[1]);
+      }
+      continue;
+    }
+    if (tx.category === 'initial') {
+      continue;
+    }
+    const dateStr = getISTDateStr(tx.dateTime);
+    if (dateStr) {
+      dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
+    }
+  }
+
+  const startDateStr = getISTDateStr(student.internshipStartDate);
+  const todayStr = getISTDateStr(new Date());
+
+  if (!startDateStr || !todayStr) return { currentStreak: 0, bonusesAwarded: 0 };
+
+  const start = new Date(startDateStr);
+  const end = new Date(todayStr);
+
+  const days = [];
+  let curr = new Date(start);
+  while (curr <= end) {
+    const dateStr = curr.toISOString().split('T')[0];
+    const spEarned = dailySp[dateStr] || 0;
+    days.push({
+      dateStr,
+      success: spEarned === 20
+    });
+    curr.setDate(curr.getDate() + 1);
+  }
+
+  let currentStreak = 0;
+  let activeRuns = [];
+  let currentRun = [];
+
+  for (const day of days) {
+    if (day.success) {
+      currentRun.push(day.dateStr);
+    } else {
+      if (currentRun.length > 0) {
+        activeRuns.push(currentRun);
+        currentRun = [];
+      }
+    }
+  }
+  if (currentRun.length > 0) {
+    activeRuns.push(currentRun);
+  }
+
+  let newlyAwardedCount = 0;
+  for (const run of activeRuns) {
+    const runLength = run.length;
+    const numBonuses = Math.floor(runLength / 7);
+    for (let i = 1; i <= numBonuses; i++) {
+      const bonusDayIndex = i * 7 - 1;
+      const bonusEndDateStr = run[bonusDayIndex];
+
+      if (!existingBonusDates.has(bonusEndDateStr)) {
+        await awardSp(
+          student,
+          5, // +5 SP Perfect Week Bonus
+          'manual',
+          `Perfect Week Bonus: 7 consecutive days ending ${bonusEndDateStr}`,
+          '',
+          new Date(bonusEndDateStr + 'T12:00:00Z')
+        );
+        existingBonusDates.add(bonusEndDateStr);
+        newlyAwardedCount++;
+      }
+    }
+  }
+
+  if (days.length > 0) {
+    const lastDay = days[days.length - 1];
+    if (lastDay.success) {
+      const lastRun = activeRuns[activeRuns.length - 1] || [];
+      currentStreak = lastRun.length;
+    } else if (days.length > 1) {
+      const yesterday = days[days.length - 2];
+      if (yesterday.success) {
+        const lastRun = activeRuns.find(run => run.includes(yesterday.dateStr)) || [];
+        currentStreak = lastRun.length;
+      } else {
+        currentStreak = 0;
+      }
+    } else {
+      currentStreak = 0;
+    }
+  }
+
+  const totalBonusesCount = existingBonusDates.size;
+
+  return {
+    currentStreak,
+    bonusesAwarded: totalBonusesCount,
+    newlyAwardedCount
+  };
+}
+
 async function studentPayload(student) {
-  const email = student.email;
+  const streakInfo = await checkAndAwardPerfectWeekBonus(student);
+  const freshStudent = await Student.findById(student._id).lean();
+
+  const email = freshStudent.email;
   const activeFilter = { status: { $ne: 'excused' } };
   const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
@@ -186,6 +341,7 @@ async function studentPayload(student) {
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
+  const streak = computeStreak(attendance, student.streakProtectedSessions || []);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
@@ -193,8 +349,8 @@ async function studentPayload(student) {
   const currentIndex = allStudents.findIndex(s => s.email === email);
   const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
   // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
-  const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
-  const myGroup = leaderboardGroup(student.internshipStartDate);
+  const highestSpEver = Math.max(Number(freshStudent.highestSpEver) || 0, Number(freshStudent.totalSp) || 0);
+  const myGroup = leaderboardGroup(freshStudent.internshipStartDate);
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
   const mapRow = (row, index) => ({
     rank: index + 1,
@@ -206,36 +362,42 @@ async function studentPayload(student) {
   });
   return {
     student: {
-      _id: String(student._id),
-      name: student.name,
-      email: student.email,
-      alternateEmail: student.alternateEmail,
-      internshipStartDate: student.internshipStartDate,
-      internshipEndDate: student.internshipEndDate,
-      status: student.status || 'active',
-      excusedAt: student.excusedAt,
-      excusedReason: student.excusedReason,
-      totalSp: student.totalSp,
+      _id: String(freshStudent._id),
+      name: freshStudent.name,
+      email: freshStudent.email,
+      alternateEmail: freshStudent.alternateEmail,
+      internshipStartDate: freshStudent.internshipStartDate,
+      internshipEndDate: freshStudent.internshipEndDate,
+      status: freshStudent.status || 'active',
+      excusedAt: freshStudent.excusedAt,
+      excusedReason: freshStudent.excusedReason,
+      totalSp: freshStudent.totalSp,
       rank: rankInfo?.rank || null,
       cohortSize: rankInfo?.cohortSize || null,
       highestSpEver,
       level: levelFor(highestSpEver),
-      trophyLeague: leagueBand(student.totalSp),
+      trophyLeague: leagueBand(freshStudent.totalSp),
       legendBadgeUnlocked: legendBadge(highestSpEver),
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
-      surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      surveyCompleted: Boolean(freshStudent.surveyCompleted),
+      poll2Completed: Boolean(freshStudent.poll2Completed),
+      streak: streakInfo.currentStreak,
+      bonusesAwarded: streakInfo.bonusesAwarded,
+      spinsUsed: freshStudent.spinsUsed || 0,
+      milestoneBadges: freshStudent.milestoneBadges || [],
+      streakFreezesAvailable: freshStudent.streakFreezesAvailable || 0
     },
     transactions,
     polls,
     attendance,
+    streak,
     cohort: {
       averageSp,
       top10Cutoff,
       top50Cutoff,
-      pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - student.totalSp + 1),
-      pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
+      pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - freshStudent.totalSp + 1),
+      pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - freshStudent.totalSp + 1) : 0
     },
     leaderboard: leaderboard.map(mapRow),
     groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
@@ -266,8 +428,152 @@ api.get('/me', async (req, res) => {
   if (!email) return res.status(401).json({ authenticated: false });
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
+  
+  await getOrCreatePreferences(email);
+
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
-  res.json({ authenticated: true, profile: await studentPayload(student) });
+  
+  const profile = await studentPayload(student);
+  let streak = profile.streak;
+  
+  if (!streak.isActive && streak.streakBrokenAt &&
+      streak.streakBrokenAt !== student.lastNotifiedStreakBreak &&
+      !(student.streakProtectedSessions || []).includes(streak.streakBrokenAt)) {
+
+    const claimed = await Student.findOneAndUpdate(
+      {
+        _id: student._id,
+        streakFreezesAvailable: { $gt: 0 },
+        streakProtectedSessions: { $ne: streak.streakBrokenAt }
+      },
+      {
+        $inc: { streakFreezesAvailable: -1 },
+        $addToSet: { streakProtectedSessions: streak.streakBrokenAt }
+      },
+      { new: true }
+    );
+
+    if (claimed) {
+      streak = computeStreak(profile.attendance, claimed.streakProtectedSessions);
+      profile.streak = streak;
+      profile.student.streakFreezesAvailable = claimed.streakFreezesAvailable;
+      notify(email, 'streakReminders', {
+        title: 'Streak freeze used',
+        message: `A streak freeze protected your streak after session ${streak.streakBrokenAt}. You have ${claimed.streakFreezesAvailable} left.`
+      }).catch(() => {});
+    } else {
+      const breakClaimed = await Student.findOneAndUpdate(
+        { _id: student._id, lastNotifiedStreakBreak: { $ne: streak.streakBrokenAt } },
+        { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }
+      );
+      if (breakClaimed) {
+        notify(email, 'streakReminders', {
+          title: 'Streak broken',
+          message: `Your attendance streak ended after session ${streak.streakBrokenAt}. Time for a comeback!`
+        }).catch(() => {});
+      }
+    }
+  }
+
+  res.json({ authenticated: true, profile });
+});
+
+api.post('/streak-freeze/buy', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+
+  const student = await Student.findOneAndUpdate(
+    { email, totalSp: { $gte: STREAK_FREEZE_COST_SP } },
+    { $inc: { totalSp: -STREAK_FREEZE_COST_SP, streakFreezesAvailable: 1 } },
+    { new: true }
+  );
+
+  if (!student) {
+    return res.status(400).json({ error: 'Not enough SP to buy a streak freeze' });
+  }
+
+  await logTransaction(
+    email,
+    'streakFreeze',
+    '',
+    new Date(),
+    -STREAK_FREEZE_COST_SP,
+    'Purchased a streak freeze',
+    student.totalSp
+  ).catch(() => {});
+
+  res.json({ streakFreezesAvailable: student.streakFreezesAvailable, totalSp: student.totalSp });
+});
+
+api.get('/notifications/preferences', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const prefs = await getOrCreatePreferences(email);
+  res.json(prefs);
+});
+
+api.put('/notifications/preferences', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  
+  const { categories } = req.body;
+  if (!categories || typeof categories !== 'object') return res.status(400).json({ error: 'Invalid payload' });
+
+  const allowedCategories = ['weeklyDigest', 'streakReminders', 'peerActivity', 'announcements'];
+  const updateQuery = { $set: {} };
+
+  for (const cat of allowedCategories) {
+    if (categories[cat]) {
+      if (typeof categories[cat].inApp === 'boolean') {
+        updateQuery.$set[`categories.${cat}.inApp`] = categories[cat].inApp;
+      }
+      if (typeof categories[cat].email === 'boolean') {
+        updateQuery.$set[`categories.${cat}.email`] = categories[cat].email;
+      }
+    }
+  }
+
+  if (Object.keys(updateQuery.$set).length === 0) return res.status(400).json({ error: 'No valid preferences to update' });
+
+  const prefs = await NotificationPreference.findOneAndUpdate(
+    { email },
+    updateQuery,
+    { new: true }
+  );
+  res.json(prefs);
+});
+
+api.get('/notifications', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  
+  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  const filter = { email };
+  if (req.query.before) filter.createdAt = { $lt: new Date(req.query.before) };
+
+  const notifications = await Notification.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
+  res.json(notifications);
+});
+
+api.post('/notifications/:id/read', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const notif = await Notification.findOneAndUpdate(
+    { _id: req.params.id, email },
+    { $set: { read: true } },
+    { new: true }
+  );
+  if (!notif) return res.status(404).json({ error: 'Notification not found' });
+  res.json(notif);
+});
+
+api.post('/notifications/read-all', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  await Notification.updateMany({ email, read: false }, { $set: { read: true } });
+  res.json({ ok: true });
 });
 
 api.get('/search', async (req, res) => {
@@ -338,6 +644,475 @@ api.post('/ping', async (req, res) => {
     liveViewers.set(normalized, { name, page, lastSeen: new Date() });
   }
   res.json({ ok: true });
+});
+
+api.post('/spin-wheel', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    let student;
+    if (email) {
+      student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+    } else {
+      const { studentId } = req.body || {};
+      if (studentId) {
+        student = await Student.findById(studentId);
+      }
+    }
+
+    if (!student) return res.status(401).json({ error: 'Unauthorized or student not found' });
+    if (student.status === 'excused') return res.status(403).json({ error: 'Account excused' });
+
+    const streakInfo = await checkAndAwardPerfectWeekBonus(student);
+    const bonusesAwarded = streakInfo.bonusesAwarded;
+    const spinsUsed = student.spinsUsed || 0;
+
+    if (spinsUsed >= bonusesAwarded) {
+      return res.status(400).json({ error: 'No available spins. Complete a Perfect Week to earn a spin!' });
+    }
+
+    const rewards = [
+      { type: 'sp_5', label: '+5 SP', value: 5 },
+      { type: 'sp_10', label: '+10 SP', value: 10 },
+      { type: 'double_sp', label: 'Double SP Day' },
+      { type: 'sp_15', label: '+15 SP', value: 15 },
+      { type: 'sp_20', label: '+20 SP', value: 20 }
+    ];
+
+    const randomIndex = Math.floor(Math.random() * rewards.length);
+    const chosenReward = rewards[randomIndex];
+
+    let delta = 0;
+    let detailText = '';
+
+    if (chosenReward.type === 'double_sp') {
+      const todayStr = getISTDateStr(new Date());
+      const emails = [student.email];
+      if (student.alternateEmail) {
+        emails.push(student.alternateEmail);
+      }
+      const transactions = await SPTransaction.find({
+        email: { $in: emails.map(e => e.toLowerCase()) }
+      }).lean();
+
+      let sum = 0;
+      for (const tx of transactions) {
+        if (tx.category === 'initial' || (tx.reason && tx.reason.includes('Spin Wheel'))) {
+          continue;
+        }
+        if (getISTDateStr(tx.dateTime) === todayStr) {
+          sum += (tx.appliedDelta || 0);
+        }
+      }
+      delta = Math.max(10, sum);
+      detailText = `Double SP Day (+${delta} SP based on today's ${sum} SP earned)`;
+    } else {
+      delta = chosenReward.value;
+      detailText = chosenReward.label;
+    }
+
+    student.spinsUsed = spinsUsed + 1;
+    await student.save();
+
+    await awardSp(
+      student,
+      delta,
+      'manual',
+      `Spin Wheel Reward: ${detailText}`,
+      '',
+      new Date()
+    );
+
+    res.json({
+      success: true,
+      reward: {
+        index: randomIndex,
+        type: chosenReward.type,
+        label: chosenReward.label,
+        detail: detailText,
+        value: delta
+      },
+      spinsUsed: student.spinsUsed,
+      totalSp: student.totalSp + delta
+    });
+  } catch (err) {
+    console.error('spin-wheel error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// --- Motivation Dashboard Endpoints ---
+
+// --- Milestone Badges & Friends Activity Helpers ---
+async function getStudentDailySp(student) {
+  const emails = [student.email];
+  if (student.alternateEmail) {
+    emails.push(student.alternateEmail);
+  }
+  const transactions = await SPTransaction.find({
+    email: { $in: emails.map(e => e.toLowerCase()) }
+  }).sort({ dateTime: 1, createdAt: 1 }).lean();
+
+  const dailySp = {};
+  for (const tx of transactions) {
+    const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+    const isSpinWheelReward = tx.category === 'manual' && tx.reason && tx.reason.includes('Spin Wheel Reward');
+    if (isPerfectWeekBonus || isSpinWheelReward || tx.category === 'initial') {
+      continue;
+    }
+    const dateStr = getISTDateStr(tx.dateTime);
+    if (dateStr) {
+      dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
+    }
+  }
+  return dailySp;
+}
+
+async function getStudentStreak10(student, dailySp) {
+  const startDateStr = getISTDateStr(student.internshipStartDate);
+  const todayStr = getISTDateStr(new Date());
+
+  if (!startDateStr || !todayStr) return 0;
+
+  const start = new Date(startDateStr);
+  const end = new Date(todayStr);
+
+  const days = [];
+  let curr = new Date(start);
+  while (curr <= end) {
+    const dateStr = curr.toISOString().split('T')[0];
+    const sp = dailySp[dateStr] || 0;
+    days.push({
+      dateStr,
+      success: sp === 10
+    });
+    curr.setDate(curr.getDate() + 1);
+  }
+
+  let activeRuns = [];
+  let currentRun = [];
+
+  for (const day of days) {
+    if (day.success) {
+      currentRun.push(day.dateStr);
+    } else {
+      if (currentRun.length > 0) {
+        activeRuns.push(currentRun);
+        currentRun = [];
+      }
+    }
+  }
+  if (currentRun.length > 0) {
+    activeRuns.push(currentRun);
+  }
+
+  let currentStreak = 0;
+  if (days.length > 0) {
+    const lastDay = days[days.length - 1];
+    if (lastDay.success) {
+      const lastRun = activeRuns[activeRuns.length - 1] || [];
+      currentStreak = lastRun.length;
+    } else if (days.length > 1) {
+      const yesterday = days[days.length - 2];
+      if (yesterday.success) {
+        const lastRun = activeRuns.find(run => run.includes(yesterday.dateStr)) || [];
+        currentStreak = lastRun.length;
+      }
+    }
+  }
+  return currentStreak;
+}
+
+api.get('/badges/milestones/:studentId', async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const dailySp = await getStudentDailySp(student);
+    const currentStreak = await getStudentStreak10(student, dailySp);
+
+    const badgesToAward = [];
+    if (currentStreak >= 3) badgesToAward.push('Beginner');
+    if (currentStreak >= 7) badgesToAward.push('Consistent');
+    if (currentStreak >= 15) badgesToAward.push('Dedicated');
+    if (currentStreak >= 30) badgesToAward.push('Scholar');
+    if (currentStreak >= 60) badgesToAward.push('Master');
+    if (currentStreak >= 100) badgesToAward.push('Legend');
+
+    let updated = false;
+    if (!student.milestoneBadges) {
+      student.milestoneBadges = [];
+    }
+    for (const b of badgesToAward) {
+      if (!student.milestoneBadges.includes(b)) {
+        student.milestoneBadges.push(b);
+        updated = true;
+      }
+    }
+    if (updated) {
+      await student.save();
+    }
+
+    res.json({
+      studentId: student._id,
+      currentStreak,
+      badges: student.milestoneBadges
+    });
+  } catch (err) {
+    console.error('milestones error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.get('/streak-leaderboard/:studentId', async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    let groupStudents = [];
+    if (student.leaderboardGroup) {
+      groupStudents = await Student.find({
+        status: 'active',
+        leaderboardGroup: student.leaderboardGroup
+      });
+    }
+
+    if (groupStudents.length < 10) {
+      const extraNeeded = 100 - groupStudents.length;
+      const extraStudents = await Student.find({
+        _id: { $nin: groupStudents.map(s => s._id) },
+        status: 'active'
+      }).limit(extraNeeded);
+      groupStudents = groupStudents.concat(extraStudents);
+    }
+
+    if (!groupStudents.some(s => s._id.toString() === student._id.toString())) {
+      groupStudents.push(student);
+    }
+
+    const allEmails = [];
+    for (const s of groupStudents) {
+      if (s.email) allEmails.push(s.email.toLowerCase());
+      if (s.alternateEmail) allEmails.push(s.alternateEmail.toLowerCase());
+    }
+
+    const allTransactions = await SPTransaction.find({
+      email: { $in: allEmails }
+    }).sort({ dateTime: 1, createdAt: 1 }).lean();
+
+    const txByEmail = {};
+    for (const tx of allTransactions) {
+      if (tx.email) {
+        const emailKey = tx.email.toLowerCase();
+        if (!txByEmail[emailKey]) {
+          txByEmail[emailKey] = [];
+        }
+        txByEmail[emailKey].push(tx);
+      }
+    }
+
+    const activityList = [];
+    for (const s of groupStudents) {
+      const emails = [s.email.toLowerCase()];
+      if (s.alternateEmail) {
+        emails.push(s.alternateEmail.toLowerCase());
+      }
+      
+      const studentTx = [];
+      for (const email of emails) {
+        if (txByEmail[email]) {
+          studentTx.push(...txByEmail[email]);
+        }
+      }
+      studentTx.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
+
+      const dailySp = {};
+      for (const tx of studentTx) {
+        const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+        const isSpinWheelReward = tx.category === 'manual' && tx.reason && tx.reason.includes('Spin Wheel Reward');
+        if (isPerfectWeekBonus || isSpinWheelReward || tx.category === 'initial') {
+          continue;
+        }
+        const dateStr = getISTDateStr(tx.dateTime);
+        if (dateStr) {
+          dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
+        }
+      }
+
+      const streak = await getStudentStreak10(s, dailySp);
+      activityList.push({
+        _id: s._id,
+        name: s.name,
+        streak,
+        isSelf: s._id.toString() === student._id.toString()
+      });
+    }
+
+    activityList.sort((a, b) => {
+      if (b.streak !== a.streak) {
+        return b.streak - a.streak;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+    let currentRank = 1;
+    for (let i = 0; i < activityList.length; i++) {
+      if (i > 0 && activityList[i].streak < activityList[i - 1].streak) {
+        currentRank = i + 1;
+      }
+      activityList[i].rank = currentRank;
+    }
+
+    let top10 = activityList.slice(0, 10);
+    const isSelfInTop10 = top10.some(item => item.isSelf);
+    if (!isSelfInTop10) {
+      const selfItem = activityList.find(item => item.isSelf);
+      if (selfItem) {
+        top10.push(selfItem);
+      }
+    }
+
+    res.json(top10);
+  } catch (err) {
+    console.error('streak leaderboard error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+function getISTDateStr(dateInput) {
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return '';
+  // Shift by 5.5 hours to IST
+  const localTime = d.getTime() + 19800000;
+  return new Date(localTime).toISOString().split('T')[0];
+}
+
+api.get('/growth-tree/:studentId', async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const streakInfo = await checkAndAwardPerfectWeekBonus(student);
+
+    const emails = [student.email];
+    if (student.alternateEmail) {
+      emails.push(student.alternateEmail);
+    }
+    const transactions = await SPTransaction.find({
+      email: { $in: emails.map(e => e.toLowerCase()) }
+    }).sort({ dateTime: 1, createdAt: 1 }).lean();
+
+    const dailySp = {};
+    for (const tx of transactions) {
+      const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+      if (isPerfectWeekBonus || tx.category === 'initial') {
+        continue;
+      }
+      const dateStr = getISTDateStr(tx.dateTime);
+      if (dateStr) {
+        dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
+      }
+    }
+
+    const startDateStr = getISTDateStr(student.internshipStartDate);
+    const todayStr = getISTDateStr(new Date());
+
+    if (!startDateStr || !todayStr) {
+      return res.status(400).json({ error: 'Invalid start date or current date' });
+    }
+
+    const start = new Date(startDateStr);
+    const end = new Date(todayStr);
+
+    let successfulDays = 0;
+    let totalDays = 0;
+    let curr = new Date(start);
+    while (curr <= end) {
+      const dateStr = curr.toISOString().split('T')[0];
+      const sp = dailySp[dateStr] || 0;
+      if (sp === 20) {
+        successfulDays++;
+      }
+      totalDays++;
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    res.json({
+      studentId: student._id,
+      successfulDays,
+      totalDays,
+      growthStage: successfulDays,
+      hasFlowers: successfulDays >= 7,
+      hasFruits: successfulDays >= 30,
+      streak: streakInfo.currentStreak,
+      bonusesAwarded: streakInfo.bonusesAwarded,
+      spinsUsed: student.spinsUsed || 0
+    });
+  } catch (err) {
+    console.error('growth-tree error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.get('/chain-calendar/:studentId', async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const streakInfo = await checkAndAwardPerfectWeekBonus(student);
+
+    const emails = [student.email];
+    if (student.alternateEmail) {
+      emails.push(student.alternateEmail);
+    }
+    const transactions = await SPTransaction.find({
+      email: { $in: emails.map(e => e.toLowerCase()) }
+    }).sort({ dateTime: 1, createdAt: 1 }).lean();
+
+    const dailySp = {};
+    for (const tx of transactions) {
+      const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+      if (isPerfectWeekBonus || tx.category === 'initial') {
+        continue;
+      }
+      const dateStr = getISTDateStr(tx.dateTime);
+      if (dateStr) {
+        dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
+      }
+    }
+
+    const startDateStr = getISTDateStr(student.internshipStartDate);
+    const todayStr = getISTDateStr(new Date());
+
+    if (!startDateStr || !todayStr) {
+      return res.status(400).json({ error: 'Invalid start date or current date' });
+    }
+
+    const start = new Date(startDateStr);
+    const end = new Date(todayStr);
+
+    const calendarDays = [];
+    let curr = new Date(start);
+    while (curr <= end) {
+      const dateStr = curr.toISOString().split('T')[0];
+      const spEarned = dailySp[dateStr] || 0;
+      calendarDays.push({
+        date: dateStr,
+        spEarned,
+        success: spEarned === 20
+      });
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    res.json({
+      studentId: student._id,
+      calendarDays,
+      streak: streakInfo.currentStreak,
+      bonusesAwarded: streakInfo.bonusesAwarded
+    });
+  } catch (err) {
+    console.error('chain-calendar error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 // --- Survey triangulation (mandatory perception follow-up) ---------------
@@ -557,7 +1332,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     };
   });
 
-  const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
+  const categoryTotals = ['initial', 'attendance', 'poll', 'manual', 'streakFreeze'].map(category => {
     const rows = activeTransactions.filter(t => t.category === category);
     return {
       category,
