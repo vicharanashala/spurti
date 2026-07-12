@@ -433,12 +433,20 @@ function Tabs({ tab, setTab, tabs }) {
 }
 
 function SpBank({ transactions }) {
+  const sortedTransactions = useMemo(() => {//sorting the items to ensure that user see the score from current date to previous dates.
+  return [...transactions].sort((a, b) => {
+    const dayA = new Date(a.dateTime).toDateString();
+    const dayB = new Date(b.dateTime).toDateString();
+    if (dayA === dayB) return 0; // Preserve backend order within the same day
+    return new Date(dayB) - new Date(dayA);
+  });
+}, [transactions]);
   return (
     <section className="panel">
       <h2>SP Bank Statement</h2>
       <div className="bank">
         <div className="bank-header"><span>Date & time</span><span>Credit</span><span>Debit</span><span>Balance</span><span>Reason</span></div>
-        {transactions.map(tx => (
+        {sortedTransactions.map(tx => (
           <div className="bank-row" key={tx._id}>
             <span>{new Date(tx.dateTime).toLocaleString()}</span>
             <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
