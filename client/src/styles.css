@@ -1142,40 +1142,183 @@ input {
   margin-top: 4px;
 }
 
-/* --- Friends Activity Styles --- */
-.friends-list {
+/* --- Streak Leaderboard Styles --- */
+.streak-leaderboard-panel {
+  box-shadow: var(--shadow);
+  border-radius: 12px;
+}
+.streak-leaderboard-list {
   display: flex;
   flex-direction: column;
+  gap: 12px;
+}
+
+/* Leaderboard Divider */
+.leaderboard-divider {
+  display: flex;
+  align-items: center;
+  margin: 16px 0;
   gap: 10px;
 }
-.friend-item {
-  display: flex;
-  justify-content: space-between;
+.divider-line {
+  flex: 1;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, var(--line), var(--line) 4px, transparent 4px, transparent 8px);
+}
+.divider-text {
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: var(--muted);
+  letter-spacing: 1px;
+  background: var(--bg);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* Leaderboard Row */
+.leaderboard-row {
+  display: grid;
+  grid-template-columns: 48px 1fr auto;
   align-items: center;
-  padding: 10px 16px;
-  border-radius: 8px;
+  padding: 12px 18px;
+  border-radius: 10px;
   border: 1px solid var(--line);
   background: var(--card-bg, #fbfdff);
-  transition: background-color 0.2s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
 }
-.friend-item.is-self {
-  border-color: var(--primary);
-  background: var(--primary-light, rgba(239, 68, 68, 0.05));
-  font-weight: bold;
-}
-.friend-item:hover {
+
+.leaderboard-row:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
   background: var(--bar-row-bg, #f1f5f9);
 }
-:root[data-theme="dark"] .friend-item:hover {
+
+:root[data-theme="dark"] .leaderboard-row:hover {
   background: #1e293b;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
-.friend-name {
+
+/* Podiums */
+.leaderboard-row.rank-1 {
+  border-left: 4px solid #fbbf24;
+  background: linear-gradient(90deg, rgba(251, 191, 36, 0.07) 0%, var(--card-bg, #fbfdff) 100%);
+}
+.leaderboard-row.rank-2 {
+  border-left: 4px solid #cbd5e1;
+  background: linear-gradient(90deg, rgba(203, 213, 225, 0.07) 0%, var(--card-bg, #fbfdff) 100%);
+}
+.leaderboard-row.rank-3 {
+  border-left: 4px solid #d97706;
+  background: linear-gradient(90deg, rgba(217, 119, 6, 0.07) 0%, var(--card-bg, #fbfdff) 100%);
+}
+
+/* Current Student Row Highlight */
+.leaderboard-row.is-self {
+  border: 2px solid var(--primary);
+  background: linear-gradient(90deg, rgba(239, 68, 68, 0.06) 0%, var(--card-bg, #fbfdff) 100%);
+  animation: borderPulse 3s infinite alternate;
+}
+
+@keyframes borderPulse {
+  0% {
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.1);
+  }
+  100% {
+    box-shadow: 0 0 14px rgba(239, 68, 68, 0.25);
+  }
+}
+
+/* Columns styling */
+.leaderboard-rank-col {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+.rank-medal {
+  font-size: 20px;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+  display: inline-block;
+  animation: medalFloat 3s ease-in-out infinite alternate;
+}
+@keyframes medalFloat {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-2px); }
+}
+.rank-number {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.leaderboard-name-col {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.student-name-text {
   font-size: 14px;
   color: var(--text);
+  font-weight: 600;
 }
-.friend-streak {
-  font-size: 14px;
-  color: #ef4444;
+.leaderboard-row.is-self .student-name-text {
   font-weight: 800;
+  color: var(--primary);
 }
+
+.self-badge {
+  background: var(--primary);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 900;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  box-shadow: 0 2px 4px rgba(239, 68, 68, 0.2);
+}
+
+.leaderboard-streak-col {
+  display: flex;
+  align-items: center;
+}
+
+.streak-days {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: var(--bg);
+}
+
+.streak-days.active-streak {
+  color: #ea580c;
+  font-weight: 700;
+  background: #fff7ed;
+  border: 1px solid #ffedd5;
+}
+:root[data-theme="dark"] .streak-days.active-streak {
+  background: rgba(234, 88, 12, 0.15);
+  border-color: rgba(234, 88, 12, 0.3);
+}
+
+.streak-days.inactive-streak {
+  color: var(--muted);
+  font-weight: 500;
+  opacity: 0.6;
+}
+
+.streak-flame-icon {
+  font-size: 15px;
+  display: inline-block;
+  transition: transform 0.3s ease;
+}
+
+.leaderboard-row:hover .streak-flame-icon {
+  transform: scale(1.25) rotate(-5deg);
+}
+
 

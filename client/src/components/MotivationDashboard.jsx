@@ -12,7 +12,7 @@ const MILESTONE_DEFINITIONS = [
 export default function MotivationDashboard({ student, onRefreshProfile }) {
   const [treeData, setTreeData] = useState(null);
   const [milestones, setMilestones] = useState({ currentStreak: 0, badges: [] });
-  const [friendsActivity, setFriendsActivity] = useState([]);
+  const [streakLeaderboard, setStreakLeaderboard] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -27,23 +27,23 @@ export default function MotivationDashboard({ student, onRefreshProfile }) {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const [treeRes, milestonesRes, friendsRes] = await Promise.all([
+        const [treeRes, milestonesRes, leaderboardRes] = await Promise.all([
           fetch(`/api/growth-tree/${student._id}`),
           fetch(`/api/badges/milestones/${student._id}`),
-          fetch(`/api/friends/activity/${student._id}`)
+          fetch(`/api/streak-leaderboard/${student._id}`)
         ]);
 
-        if (!treeRes.ok || !milestonesRes.ok || !friendsRes.ok) {
+        if (!treeRes.ok || !milestonesRes.ok || !leaderboardRes.ok) {
           throw new Error('Failed to load motivation data');
         }
 
         const tData = await treeRes.json();
         const mData = await milestonesRes.json();
-        const fData = await friendsRes.json();
+        const lData = await leaderboardRes.json();
 
         setTreeData(tData);
         setMilestones(mData);
-        setFriendsActivity(fData);
+        setStreakLeaderboard(lData);
         setError(null);
       } catch (err) {
         console.error('Error fetching motivation data:', err);
@@ -272,26 +272,54 @@ export default function MotivationDashboard({ student, onRefreshProfile }) {
             </div>
           </div>
 
-          {/* Friends Activity Panel */}
-          <div className="panel friends-panel" style={{ margin: 0 }}>
+          {/* Streak Leaderboard Panel */}
+          <div className="panel streak-leaderboard-panel" style={{ margin: 0 }}>
             <div className="panel-head">
-              <h2>👥 Friends Activity</h2>
+              <h2>🔥 Streak Leaderboard</h2>
             </div>
             <p className="helper-note" style={{ margin: '8px 0 16px 0' }}>
-              See how your peers are doing! Only streak counts are visible to respect everyone's privacy.
+              Compete with your onboarding group! Maintain daily active learnings to reach the top.
             </p>
 
-            <div className="friends-list">
-              {friendsActivity.map((friend, idx) => (
-                <div key={idx} className={`friend-item ${friend.isSelf ? 'is-self' : ''}`}>
-                  <span className="friend-name">
-                    {friend.isSelf ? 'You' : friend.name}
-                  </span>
-                  <span className="friend-streak">
-                    🔥 {friend.streak} {friend.streak === 1 ? 'Day' : 'Days'}
-                  </span>
-                </div>
-              ))}
+            <div className="streak-leaderboard-list">
+              {streakLeaderboard.map((item, idx) => {
+                const isTop3 = item.rank <= 3;
+                const rankEmoji = item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : null;
+                const showSeparator = idx === 10;
+
+                return (
+                  <React.Fragment key={item._id || idx}>
+                    {showSeparator && (
+                      <div className="leaderboard-divider">
+                        <span className="divider-line"></span>
+                        <span className="divider-text">Your Position</span>
+                        <span className="divider-line"></span>
+                      </div>
+                    )}
+                    <div className={`leaderboard-row ${item.isSelf ? 'is-self' : ''} ${isTop3 ? `rank-${item.rank}` : ''}`}>
+                      <div className="leaderboard-rank-col">
+                        {rankEmoji ? (
+                          <span className="rank-medal">{rankEmoji}</span>
+                        ) : (
+                          <span className="rank-number">#{item.rank}</span>
+                        )}
+                      </div>
+                      <div className="leaderboard-name-col">
+                        <span className="student-name-text">
+                          {item.isSelf ? 'You' : item.name}
+                        </span>
+                        {item.isSelf && <span className="self-badge">YOU</span>}
+                      </div>
+                      <div className="leaderboard-streak-col">
+                        <span className={`streak-days ${item.streak > 0 ? 'active-streak' : 'inactive-streak'}`}>
+                          <span className="streak-flame-icon">🔥</span>
+                          <strong>{item.streak}</strong> {item.streak === 1 ? 'day' : 'days'}
+                        </span>
+                      </div>
+                    </div>
+                  </React.Fragment>
+                );
+              })}
             </div>
           </div>
         </div>

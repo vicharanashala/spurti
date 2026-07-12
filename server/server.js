@@ -711,54 +711,117 @@ api.get('/badges/milestones/:studentId', async (req, res) => {
   }
 });
 
-api.get('/friends/activity/:studentId', async (req, res) => {
+api.get('/streak-leaderboard/:studentId', async (req, res) => {
   try {
     const student = await Student.findById(req.params.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found' });
 
-    let friends = [];
+    let groupStudents = [];
     if (student.leaderboardGroup) {
-      friends = await Student.find({
-        _id: { $ne: student._id },
+      groupStudents = await Student.find({
         status: 'active',
         leaderboardGroup: student.leaderboardGroup
-      }).limit(4);
-    }
-    
-    if (friends.length < 4) {
-      const extraNeeded = 4 - friends.length;
-      const extraFriends = await Student.find({
-        _id: { $ne: student._id, $nin: friends.map(f => f._id) },
-        status: 'active'
-      }).limit(extraNeeded);
-      friends = friends.concat(extraFriends);
-    }
-
-    const activityList = [];
-
-    const selfDailySp = await getStudentDailySp(student);
-    const selfStreak = await getStudentStreak10(student, selfDailySp);
-    activityList.push({
-      name: 'You',
-      streak: selfStreak,
-      isSelf: true
-    });
-
-    for (const friend of friends) {
-      const friendDailySp = await getStudentDailySp(friend);
-      const friendStreak = await getStudentStreak10(friend, friendDailySp);
-      activityList.push({
-        name: friend.name,
-        streak: friendStreak,
-        isSelf: false
       });
     }
 
-    activityList.sort((a, b) => b.streak - a.streak);
+    if (groupStudents.length < 10) {
+      const extraNeeded = 100 - groupStudents.length;
+      const extraStudents = await Student.find({
+        _id: { $nin: groupStudents.map(s => s._id) },
+        status: 'active'
+      }).limit(extraNeeded);
+      groupStudents = groupStudents.concat(extraStudents);
+    }
 
-    res.json(activityList);
+    if (!groupStudents.some(s => s._id.toString() === student._id.toString())) {
+      groupStudents.push(student);
+    }
+
+    const allEmails = [];
+    for (const s of groupStudents) {
+      if (s.email) allEmails.push(s.email.toLowerCase());
+      if (s.alternateEmail) allEmails.push(s.alternateEmail.toLowerCase());
+    }
+
+    const allTransactions = await SPTransaction.find({
+      email: { $in: allEmails }
+    }).sort({ dateTime: 1, createdAt: 1 }).lean();
+
+    const txByEmail = {};
+    for (const tx of allTransactions) {
+      if (tx.email) {
+        const emailKey = tx.email.toLowerCase();
+        if (!txByEmail[emailKey]) {
+          txByEmail[emailKey] = [];
+        }
+        txByEmail[emailKey].push(tx);
+      }
+    }
+
+    const activityList = [];
+    for (const s of groupStudents) {
+      const emails = [s.email.toLowerCase()];
+      if (s.alternateEmail) {
+        emails.push(s.alternateEmail.toLowerCase());
+      }
+      
+      const studentTx = [];
+      for (const email of emails) {
+        if (txByEmail[email]) {
+          studentTx.push(...txByEmail[email]);
+        }
+      }
+      studentTx.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
+
+      const dailySp = {};
+      for (const tx of studentTx) {
+        const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+        const isSpinWheelReward = tx.category === 'manual' && tx.reason && tx.reason.includes('Spin Wheel Reward');
+        if (isPerfectWeekBonus || isSpinWheelReward || tx.category === 'initial') {
+          continue;
+        }
+        const dateStr = getISTDateStr(tx.dateTime);
+        if (dateStr) {
+          dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
+        }
+      }
+
+      const streak = await getStudentStreak10(s, dailySp);
+      activityList.push({
+        _id: s._id,
+        name: s.name,
+        streak,
+        isSelf: s._id.toString() === student._id.toString()
+      });
+    }
+
+    activityList.sort((a, b) => {
+      if (b.streak !== a.streak) {
+        return b.streak - a.streak;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+    let currentRank = 1;
+    for (let i = 0; i < activityList.length; i++) {
+      if (i > 0 && activityList[i].streak < activityList[i - 1].streak) {
+        currentRank = i + 1;
+      }
+      activityList[i].rank = currentRank;
+    }
+
+    let top10 = activityList.slice(0, 10);
+    const isSelfInTop10 = top10.some(item => item.isSelf);
+    if (!isSelfInTop10) {
+      const selfItem = activityList.find(item => item.isSelf);
+      if (selfItem) {
+        top10.push(selfItem);
+      }
+    }
+
+    res.json(top10);
   } catch (err) {
-    console.error('friends activity error:', err);
+    console.error('streak leaderboard error:', err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
