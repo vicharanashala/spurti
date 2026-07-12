@@ -21,6 +21,8 @@ pipeline/.env
 
 # runtime log + local DB backups (not for the repo)
 server.log
+api.err
+api.log
 sp-runs/
 
 # ── Operational data (not source, often contains PII) ──
@@ -45,3 +47,6 @@ data/exports/
 server/scripts/db-diag.js
 server/scripts/list-dummies.js
 server/scripts/search-dummies.js
+
+# ── Agent session notes (lives in the OpenClaw workspace, not this repo) ──
+memory/

@@ -12,6 +12,7 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import SkillTreeUnlock from './models/SkillTreeUnlock.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel, legendTiers } from './services/levels.js';
 import {
   computeStreak,
@@ -19,6 +20,47 @@ import {
   computeWeeklyXp,
   buildTimelineDots,
 } from './services/progress.js';
+import { buildWrappedStory } from './services/wrapped.js';
+import { buildSkillTreeView, getHighestTitlesPerBranch, SKILL_TREE_BRANCHES } from './services/skillTree.js';
+import weeklyLeaderboardRouter from './routes/weeklyLeaderboard.js';
+import ghostRaceRouter from './routes/ghostRace.js';
+import factionWarRouter from './routes/factionWar.js';
+import { normalizeEmail, studentEmailFromRequest, resolveStudentEmail, setDevStudentCookie, clearDevStudentCookie } from './auth.js';
+
+
+function maskEmail(email = '') {
+  const [local, domain] = String(email).split('@');
+  if (!local) return email;
+  return local.slice(0, 2) + '***@' + (domain || '');
+}
+
+function publicStudent(student) {
+  return {
+    _id: String(student._id),
+    name: student.name,
+    maskedEmail: maskEmail(student.email),
+    maskedAlternateEmail: student.alternateEmail ? maskEmail(student.alternateEmail) : '',
+    status: student.status || 'active',
+    totalSp: student.totalSp
+  };
+}
+
+function monthRange(yyyyMM) {
+  const [y, m] = yyyyMM.split('-').map(Number);
+  return {
+    start: new Date(y, m - 1, 1),
+    end: new Date(y, m, 1),
+  };
+}
+
+function prevCompletedMonth() {
+  const now = new Date();
+  const y = now.getMonth() === 0
+    ? now.getFullYear() - 1 : now.getFullYear();
+  const m = now.getMonth() === 0
+    ? 12 : now.getMonth();
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -40,7 +82,7 @@ function makeSurvey(prefix, completedField) {
     formUrl: process.env[`${prefix}_FORM_URL`] || '',          // .../viewform  (the published form)
     emailEntryId: process.env[`${prefix}_EMAIL_ENTRY`] || '',  // e.g. entry.1234567890  (pre-fills email)
     // Mandatory: 'hard' = blocking modal the student cannot dismiss until they
-    // submit. No SP reward — participation is required, not incentivised.
+    // submit. No SP reward â€” participation is required, not incentivised.
     enforcement: process.env[`${prefix}_ENFORCEMENT`] || 'hard',
     // Auto-expiry. After this instant the modal stops showing (normal Spurti
     // resumes) with no redeploy. ISO 8601 incl. offset, e.g. 2026-06-30T23:59:59+05:30.
@@ -102,62 +144,7 @@ const liveViewers = new Map();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
 
-function maskEmail(email) {
-  const [name, domain] = String(email || '').split('@');
-  if (!name || !domain) return 'hidden email';
-  const start = name.slice(0, Math.min(2, name.length));
-  const end = name.length > 4 ? name.slice(-2) : '';
-  return `${start}${'*'.repeat(Math.max(3, name.length - start.length - end.length))}${end}@${domain}`;
-}
-
-function publicStudent(student) {
-  return {
-    _id: String(student._id),
-    name: student.name,
-    maskedEmail: maskEmail(student.email),
-    maskedAlternateEmail: student.alternateEmail ? maskEmail(student.alternateEmail) : '',
-    status: student.status || 'active',
-    totalSp: student.totalSp
-  };
-}
-
-function parseCookies(header = '') {
-  return Object.fromEntries(String(header).split(';').map(part => {
-    const index = part.indexOf('=');
-    if (index < 0) return null;
-    return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())];
-  }).filter(Boolean));
-}
-
-// Validate the student's Samagama session by forwarding their chatengine_token
-// cookie to Samagama's internal auth endpoint. Returns the email on success.
-async function getSamagamaUser(chatengineToken) {
-  if (!chatengineToken) return null;
-  try {
-    const res = await fetch(SAMAGAMA_AUTH_URL, {
-      headers: { cookie: `chatengine_token=${chatengineToken}` },
-      signal: AbortSignal.timeout(5000)
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-async function studentEmailFromRequest(req) {
-  const cookies = parseCookies(req.headers.cookie || '');
-  const data = await getSamagamaUser(cookies.chatengine_token);
-  // Samagama's /api/auth/me nests the user as { user: { email, ... } };
-  // fall back to a top-level email in case the shape ever flattens.
-  const email = data?.user?.email || data?.email;
-  if (!email) return null;
-  return normalizeEmail(email);
-}
 
 async function rankFor(email) {
   const student = await Student.findOne({ email }).lean();
@@ -193,23 +180,54 @@ async function studentPayload(student) {
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
     Session.find().sort({ endDateTime: 1 }).lean()
   ]);
+
+  // Batch-fetch the skill-tree unlocks for every student on the overall
+  // and group leaderboards so we can attach earned titles to each row.
+  // Empty for students who have never opened the Skill Tree tab.
+  const rowEmails = leaderboard.map(s => s.email).filter(Boolean);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
   const top50Cutoff = allStudents[49]?.totalSp || null;
   const currentIndex = allStudents.findIndex(s => s.email === email);
   const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
-  // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
+  // Spurti Levels & Trophy Leagues â€” derived from existing SP (lifetime highest + current).
   const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
   const myGroup = leaderboardGroup(student.internshipStartDate);
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
+
+  // Batch-fetch unlocks for everyone on the overall + group leaderboards
+  // so each row can carry its highest earned title. Pure decoration.
+  const allRowEmails = Array.from(new Set([
+    ...rowEmails,
+    ...groupStudents.slice(0, 50).map(s => s.email),
+  ].filter(Boolean)));
+  const titlesByEmail = {};
+  if (allRowEmails.length) {
+    const rowsUnlocks = await SkillTreeUnlock
+      .find({ email: { $in: allRowEmails } })
+      .select('email branch nodeIndex')
+      .lean();
+    for (const e of allRowEmails) titlesByEmail[e] = {
+      consistency: [], curiosity: [], momentum: [], excellence: [],
+    };
+    for (const u of rowsUnlocks) {
+      if (titlesByEmail[u.email] && titlesByEmail[u.email][u.branch]) {
+        titlesByEmail[u.email][u.branch].push(u.nodeIndex);
+      }
+    }
+    for (const e of allRowEmails) {
+      titlesByEmail[e] = getHighestTitlesPerBranch(titlesByEmail[e]);
+    }
+  }
   const mapRow = (row, index) => ({
     rank: index + 1,
     name: row.name,
     maskedEmail: maskEmail(row.email),
     totalSp: row.totalSp,
     level: levelFor(Math.max(Number(row.highestSpEver) || 0, Number(row.totalSp) || 0)),
-    isCurrentStudent: row.email === email
+    isCurrentStudent: row.email === email,
+    skillTitles: titlesByEmail[row.email] || null,
   });
   const now = new Date();
   const applicableSessions = sessions.filter(s =>
@@ -295,21 +313,262 @@ api.get('/config', (_req, res) => res.json({
 }));
 
 api.get('/me', async (req, res) => {
-  // Dev override: ?asEmail=... impersonates a student without Samagama auth.
-  // Gated on NODE_ENV !== 'production' so it's auto-disabled in prod.
-  if (process.env.NODE_ENV !== 'production' && req.query.asEmail) {
-    const asEmail = String(req.query.asEmail).toLowerCase().trim();
-    const student = await Student.findOne({ $or: [{ email: asEmail }, { alternateEmail: asEmail }] }).lean();
-    if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found', email: asEmail });
-    if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
-    return res.json({ authenticated: true, profile: await studentPayload(student) });
-  }
-  const email = await studentEmailFromRequest(req);
+  // Auth + dev impersonation: ?asEmail= wins, then real Samagama cookie,
+  // then a localhost-only fallback to dummy1 so the dev experience works
+  // out of the box without a Samagama cookie.
+  const email = await resolveStudentEmail(req);
   if (!email) return res.status(401).json({ authenticated: false });
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
-  if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
+  if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found', email });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
   res.json({ authenticated: true, profile: await studentPayload(student) });
+});
+
+api.get('/wrapped', async (req, res) => {
+  try {
+    // Auth + dev impersonation: ?asEmail= wins, then real Samagama cookie,
+    // then localhost default to dummy1.
+    const email = await resolveStudentEmail(req);
+    if (!email)
+      return res.status(401).json({ error: 'Unauthorized' });
+    const student = await Student.findOne({ email }).lean();
+    if (!student)
+      return res.status(404).json({ error: 'Not found' });
+    if (student.status === 'excused')
+      return res.status(403).json({ error: 'Account excused' });
+
+    const targetMonth = (
+      typeof req.query.month === 'string' &&
+      /^\d{4}-\d{2}$/.test(req.query.month)
+    ) ? req.query.month : prevCompletedMonth();
+
+    const { start, end } = monthRange(targetMonth);
+    const [y, m] = targetMonth.split('-').map(Number);
+    const monthLabel = new Date(y, m - 1, 1)
+      .toLocaleDateString('en-IN',
+        { month: 'long', year: 'numeric' });
+
+    if (new Date(student.internshipStartDate) >= end)
+      return res.json({ available: false, reason: 'no-data' });
+
+    const sessionsInMonth = await Session.find({
+      date: { $gte: start, $lt: end },
+    }).sort({ endDateTime: 1 }).lean();
+
+    const sessionLabels = sessionsInMonth.map(s => s.label);
+
+    const [attendanceInMonth, pollsInMonth, transactions] =
+      await Promise.all([
+        AttendanceRecord.find({
+          email,
+          sessionLabel: { $in: sessionLabels },
+        }).lean(),
+        PollRecord.find({
+          email,
+          sessionLabel: { $in: sessionLabels },
+        }).lean(),
+        SPTransaction.find({
+          email,
+          dateTime: { $gte: start, $lt: end },
+        }).lean(),
+      ]);
+
+    let streakInfo = null, progressInfo = null;
+    try {
+      const { computeStreak, computeProgressBand } =
+        await import('./services/progress.js');
+      // Streak/progress window: all sessions up to and including the
+      // last day of the wrapped month (not "now"), starting from the
+      // student's internship start date. Keying attendance by s.label
+      // (the Session schema field) — s.sessionLabel does not exist.
+      const allSessions = await Session
+        .find().sort({ endDateTime: 1 }).lean();
+      const applicable = allSessions.filter(s =>
+        new Date(s.endDateTime) <= end &&
+        new Date(s.endDateTime) >=
+        new Date(student.internshipStartDate)
+      );
+      const allAtt = await AttendanceRecord
+        .find({ email }).lean();
+      const attMap = Object.fromEntries(
+        allAtt.map(r => [r.sessionLabel, r])
+      );
+      const flags = applicable.map(
+        s => !!(attMap[s.label]?.qualified)
+      );
+      streakInfo = computeStreak(flags);
+      progressInfo = computeProgressBand(flags);
+    } catch (_) { /* progress.js absent â€” omit gracefully */ }
+
+    const joinedThisMonth =
+      new Date(student.internshipStartDate) >= start &&
+      new Date(student.internshipStartDate) < end;
+
+    const story = buildWrappedStory({
+      month: targetMonth, monthLabel, joinedThisMonth,
+      transactions, attendanceInMonth, sessionsInMonth,
+      pollsInMonth, student, streakInfo, progressInfo,
+    });
+
+    // Pull the highest earned title per branch so the wrapped cover can
+    // brag about them — purely decorative, does not change story content.
+    const wrappedUnlocks = await SkillTreeUnlock
+      .find({ email }).select('branch nodeIndex').lean();
+    const wrappedByBranch = {
+      consistency: [], curiosity: [], momentum: [], excellence: [],
+    };
+    for (const u of wrappedUnlocks) {
+      if (wrappedByBranch[u.branch]) wrappedByBranch[u.branch].push(u.nodeIndex);
+    }
+    const skillTitles = getHighestTitlesPerBranch(wrappedByBranch);
+
+    return res.json({ available: true, ...story, skillTitles });
+  } catch (err) {
+    console.error('[wrapped]', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* ─── Skill Tree ───────────────────────────────────────────────────────
+   Cosmetic unlock system. Skill Points = floor(highestSpEver / 100);
+   each unlock is a single node in one of 4 branches, costing 1 SP.
+   Pure additive — does not touch trophyLeague, level, streaks, arena,
+   or any other system. See server/services/skillTree.js. */
+api.get('/skill-tree', async (req, res) => {
+  try {
+    const email = await resolveStudentEmail(req);
+    if (!email) return res.status(401).json({ error: 'Unauthorized' });
+    const student = await Student.findOne({ email }).lean();
+    if (!student) return res.status(404).json({ error: 'Not found' });
+    if (student.status === 'excused')
+      return res.status(403).json({ error: 'Account excused' });
+
+    const unlocks = await SkillTreeUnlock
+      .find({ email })
+      .select('branch nodeIndex')
+      .lean();
+
+    const unlockedByBranch = {
+      consistency: [], curiosity: [], momentum: [], excellence: [],
+    };
+    for (const u of unlocks) {
+      if (unlockedByBranch[u.branch]) unlockedByBranch[u.branch].push(u.nodeIndex);
+    }
+
+    const view = buildSkillTreeView(student.highestSpEver ?? 0, unlockedByBranch);
+    return res.json(view);
+  } catch (err) {
+    console.error('[skill-tree]', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Cheap endpoint used by the social layer to display earned titles next to
+// the student's name on the leaderboard, ghost-race, wrapped, admin table,
+// and the student's own profile header. Returns the highest title earned
+// per branch (or null if no nodes are unlocked in that branch).
+api.get('/skill-tree/badges', async (req, res) => {
+  try {
+    const email = await resolveStudentEmail(req);
+    if (!email) return res.status(401).json({ error: 'Unauthorized' });
+    const student = await Student.findOne({ email }).select('email status').lean();
+    if (!student) return res.status(404).json({ error: 'Not found' });
+    if (student.status === 'excused')
+      return res.status(403).json({ error: 'Account excused' });
+
+    const unlocks = await SkillTreeUnlock
+      .find({ email })
+      .select('branch nodeIndex')
+      .lean();
+
+    const unlockedByBranch = {
+      consistency: [], curiosity: [], momentum: [], excellence: [],
+    };
+    for (const u of unlocks) {
+      if (unlockedByBranch[u.branch]) unlockedByBranch[u.branch].push(u.nodeIndex);
+    }
+
+    const titles = getHighestTitlesPerBranch(unlockedByBranch);
+    return res.json({ email, titles });
+  } catch (err) {
+    console.error('[skill-tree/badges]', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+api.post('/skill-tree/unlock', async (req, res) => {
+  try {
+    const email = await resolveStudentEmail(req);
+    if (!email) return res.status(401).json({ error: 'Unauthorized' });
+    const student = await Student.findOne({ email }).lean();
+    if (!student) return res.status(404).json({ error: 'Not found' });
+    if (student.status === 'excused')
+      return res.status(403).json({ error: 'Account excused' });
+
+    /* Validate the request body — branch + nodeIndex are the ONLY
+       client-supplied inputs we trust. Everything else is re-derived
+       server-side from the current Student and SkillTreeUnlock state. */
+    const { branch, nodeIndex } = req.body || {};
+    if (!SKILL_TREE_BRANCHES.includes(branch))
+      return res.status(400).json({ error: 'invalid_branch' });
+    const idx = Number(nodeIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx > 4)
+      return res.status(400).json({ error: 'invalid_node_index' });
+
+    /* Re-fetch current unlocks + recompute points server-side. */
+    const unlocks = await SkillTreeUnlock
+      .find({ email })
+      .select('branch nodeIndex')
+      .lean();
+    const unlockedByBranch = {
+      consistency: [], curiosity: [], momentum: [], excellence: [],
+    };
+    for (const u of unlocks) {
+      if (unlockedByBranch[u.branch]) unlockedByBranch[u.branch].push(u.nodeIndex);
+    }
+    const view = buildSkillTreeView(student.highestSpEver ?? 0, unlockedByBranch);
+
+    if (view.pointsAvailable <= 0)
+      return res.status(400).json({ error: 'no_points_available' });
+
+    /* The client must target exactly the next unlockable index for
+       that branch. This blocks skipping ahead or replaying a request
+       for an already-unlocked node. */
+    const branchUnlocks = unlockedByBranch[branch];
+    let expectedNext = null;
+    const seen = new Set(branchUnlocks.map(Number));
+    for (let i = 0; i < 5; i++) { if (!seen.has(i)) { expectedNext = i; break; } }
+    if (idx !== expectedNext)
+      return res.status(400).json({ error: 'invalid_node_or_order' });
+
+    /* Persist. The compound unique index on (email, branch, nodeIndex)
+       catches any race-condition double-spend the application-level
+       check above misses. */
+    try {
+      await SkillTreeUnlock.create({ email, branch, nodeIndex: idx });
+    } catch (e) {
+      if (e && e.code === 11000)
+        return res.status(409).json({ error: 'already_unlocked' });
+      throw e;
+    }
+
+    /* Recompute the full view with the just-persisted unlock included. */
+    const updatedUnlocks = await SkillTreeUnlock
+      .find({ email })
+      .select('branch nodeIndex')
+      .lean();
+    const updatedByBranch = {
+      consistency: [], curiosity: [], momentum: [], excellence: [],
+    };
+    for (const u of updatedUnlocks) {
+      if (updatedByBranch[u.branch]) updatedByBranch[u.branch].push(u.nodeIndex);
+    }
+    const updatedView = buildSkillTreeView(student.highestSpEver ?? 0, updatedByBranch);
+    return res.json(updatedView);
+  } catch (err) {
+    console.error('[skill-tree/unlock]', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
 });
 
 api.get('/search', async (req, res) => {
@@ -321,7 +580,10 @@ api.get('/search', async (req, res) => {
     const email = normalizeEmail(q);
     const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
     if (student?.status === 'excused') return res.json(excusedPayload(student));
-    if (student) return res.json({ exact: true, profile: await studentPayload(student) });
+    if (student) {
+      setDevStudentCookie(res, student.email);
+      return res.json({ exact: true, profile: await studentPayload(student) });
+    }
   }
 
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -346,6 +608,7 @@ api.post('/confirm', async (req, res) => {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
+  setDevStudentCookie(res, student.email);
   res.json(await studentPayload(student));
 });
 
@@ -363,6 +626,10 @@ api.get('/leaderboard', async (req, res) => {
     trophyLeague: leagueBand(s.totalSp)
   })));
 });
+api.use('/weekly-leaderboard', weeklyLeaderboardRouter);
+api.use('/ghost-race', ghostRaceRouter);
+api.use('/faction-war', factionWarRouter);
+
 
 api.post('/ping', async (req, res) => {
   const { email, name, page } = req.body || {};
@@ -384,7 +651,7 @@ api.post('/ping', async (req, res) => {
 
 // --- Survey triangulation (mandatory perception follow-up) ---------------
 // Mark a student's survey as completed for the given survey config. Idempotent;
-// matches on primary or alternate email. No SP is awarded — mandatory, not rewarded.
+// matches on primary or alternate email. No SP is awarded â€” mandatory, not rewarded.
 async function markSurveyComplete(email, cfg) {
   const normalized = normalizeEmail(email);
   if (!normalized) return null;
@@ -454,12 +721,28 @@ api.get('/admin/students-by-status', adminGuard, async (req, res) => {
   const status = String(req.query.status || 'yet to onboard');
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 200)));
   const students = await Student.find({ status }).sort({ name: 1 }).limit(limit).lean();
+  const emails = students.map(s => s.email).filter(Boolean);
+  const unlocks = emails.length
+    ? await SkillTreeUnlock.find({ email: { $in: emails } })
+        .select('email branch nodeIndex').lean()
+    : [];
+  const titlesByEmail = {};
+  for (const e of emails) titlesByEmail[e] = {
+    consistency: [], curiosity: [], momentum: [], excellence: [],
+  };
+  for (const u of unlocks) {
+    if (titlesByEmail[u.email] && titlesByEmail[u.email][u.branch]) {
+      titlesByEmail[u.email][u.branch].push(u.nodeIndex);
+    }
+  }
+  for (const e of emails) titlesByEmail[e] = getHighestTitlesPerBranch(titlesByEmail[e]);
   res.json(students.map(s => ({
     _id: String(s._id),
     name: s.name,
     email: s.email,
     totalSp: s.totalSp,
-    internshipStartDate: s.internshipStartDate
+    internshipStartDate: s.internshipStartDate,
+    skillTitles: titlesByEmail[s.email] || null,
   })));
 });
 
@@ -467,12 +750,28 @@ api.get('/admin/students-by-status', adminGuard, async (req, res) => {
 api.get('/admin/leaderboard', adminGuard, async (req, res) => {
   const limit = Math.min(500, Math.max(1, Number(req.query.limit || 50)));
   const students = await Student.find({ status: 'active' }).sort({ totalSp: -1, name: 1 }).limit(limit).lean();
+  const emails = students.map(s => s.email).filter(Boolean);
+  const unlocks = emails.length
+    ? await SkillTreeUnlock.find({ email: { $in: emails } })
+        .select('email branch nodeIndex').lean()
+    : [];
+  const titlesByEmail = {};
+  for (const e of emails) titlesByEmail[e] = {
+    consistency: [], curiosity: [], momentum: [], excellence: [],
+  };
+  for (const u of unlocks) {
+    if (titlesByEmail[u.email] && titlesByEmail[u.email][u.branch]) {
+      titlesByEmail[u.email][u.branch].push(u.nodeIndex);
+    }
+  }
+  for (const e of emails) titlesByEmail[e] = getHighestTitlesPerBranch(titlesByEmail[e]);
   res.json(students.map((s, i) => ({
     rank: i + 1,
     _id: String(s._id),
     name: s.name,
     email: s.email,
-    totalSp: s.totalSp
+    totalSp: s.totalSp,
+    skillTitles: titlesByEmail[s.email] || null,
   })));
 });
 
@@ -675,6 +974,21 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 if (fs.existsSync(clientDist)) {
+  // SPA fallback — also clears the devStudentEmail cookie so refreshing
+  // the page (or closing the browser) returns the user to the login screen.
+  // Must run BEFORE express.static so it fires for the index.html served
+  // from the dist folder.
+  if (process.env.NODE_ENV !== 'production') {
+    app.use((req, res, next) => {
+      if (req.method === 'GET' && req.accepts('html') &&
+          !req.path.startsWith('/api') &&
+          !/\.[a-zA-Z0-9]+$/.test(req.path)) {
+        clearDevStudentCookie(res);
+        res.setHeader('Cache-Control', 'no-store');
+      }
+      next();
+    });
+  }
   app.use('/spurti', express.static(clientDist));
   app.use(express.static(clientDist));
   app.get('/spurti/*', (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));

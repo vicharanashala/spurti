@@ -463,6 +463,142 @@ input {
   .search-row { grid-template-columns: 1fr; }
 }
 
+/* ── Skill tree overlay (GhostRace / WrappedStory) ── */
+.skill-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* ── Skill Tree entry button ── */
+.skilltree-entry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border: 1.5px solid var(--primary, #176b87);
+  border-radius: 20px;
+  background: rgba(23, 107, 135, 0.12);
+  color: var(--primary, #176b87);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+  white-space: nowrap;
+}
+.skilltree-entry-btn:hover {
+  background: rgba(23, 107, 135, 0.25);
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(23, 107, 135, 0.25);
+}
+.skilltree-entry-btn:active { transform: scale(0.97); }
+
+/* Float variant for overlays */
+.skilltree-entry-btn-float {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1010;
+  padding: 10px;
+  font-size: 20px;
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  background: var(--card, #1a1a2e);
+  border-color: var(--primary, #176b87);
+}
+.skilltree-entry-btn-float:hover {
+  box-shadow: 0 4px 18px rgba(23, 107, 135, 0.45);
+}
+
+/* ── Skill Tree close button ── */
+.skilltree-close {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1020;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border, #333);
+  background: var(--card, #1a1a2e);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, transform 0.15s;
+}
+.skilltree-close:hover {
+  background: var(--red, #e74c3c);
+  transform: scale(1.1);
+}
+
+/* ── Skill Badges (mini pills in leaderboard rows, wrapped, ghost race) ── */
+.skillbadges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+.skillbadges-header { gap: 6px; margin-top: 4px; }
+.skillbadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.5;
+  border: 1px solid transparent;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.skillbadge:hover {
+  transform: scale(1.08);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.2);
+}
+.skillbadge-compact { padding: 0px 6px; font-size: 9px; }
+.skillbadge-mark { font-weight: 900; font-size: 10px; opacity: 0.85; }
+.skillbadge-title {
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Branch-specific badge colors */
+.sb-consistency {
+  background: rgba(46, 204, 113, 0.15);
+  border-color: rgba(46, 204, 113, 0.4);
+  color: #2ecc71;
+}
+.sb-curiosity {
+  background: rgba(52, 152, 219, 0.15);
+  border-color: rgba(52, 152, 219, 0.4);
+  color: #3498db;
+}
+.sb-momentum {
+  background: rgba(243, 156, 18, 0.15);
+  border-color: rgba(243, 156, 18, 0.4);
+  color: #f39c12;
+}
+.sb-excellence {
+  background: rgba(155, 89, 182, 0.15);
+  border-color: rgba(155, 89, 182, 0.4);
+  color: #9b59b6;
+}
+
 /* --- Mandatory survey pop-up ------------------------------------------- */
 .survey-overlay {
   position: fixed;
@@ -665,4 +801,1799 @@ input {
   width: 1.5em;
   height: 1.5em;
   vertical-align: -0.25em;
+}
+
+/* -- Wrapped entry button -------------------------- */
+/* ── Skill Tree (tab view) ── */
+.skilltree-root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 8px 40px;
+}
+.skilltree-loading,
+.skilltree-error {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 24px;
+  text-align: center;
+}
+.skilltree-retry {
+  margin: 12px auto 0;
+  display: block;
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+}
+.skilltree-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.skilltree-title { font-size: 18px; font-weight: 850; margin: 0; color: var(--text); }
+.skilltree-points {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.skilltree-points-available { font-size: 28px; font-weight: 900; color: var(--primary); }
+.skilltree-points-earned { font-size: 16px; font-weight: 800; color: var(--text); }
+.skilltree-points-label { font-weight: 600; }
+.skilltree-points-sep { color: var(--muted); }
+.skilltree-help { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.skilltree-branches {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 920px) { .skilltree-branches { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 540px) { .skilltree-branches { grid-template-columns: 1fr; } }
+.skilltree-branch {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: var(--shadow);
+}
+.skilltree-branch-header { display: flex; flex-direction: column; gap: 4px; padding: 0 2px; }
+.skilltree-branch-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 850;
+  font-size: 15px;
+  color: var(--text);
+  text-transform: capitalize;
+}
+.skilltree-branch-icon { font-size: 18px; line-height: 1; }
+.skilltree-branch-flavor { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.skilltree-track { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
+.skilltree-track-slot { display: flex; flex-direction: column; align-items: center; }
+.skilltree-track-line { width: 2px; height: 10px; background: var(--line); margin: 0 auto; }
+.skilltree-node { list-style: none; margin: 0; padding: 0; width: 100%; }
+.skilltree-node-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 13px;
+  text-align: left;
+  transition: transform 0.06s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+}
+.skilltree-node-button:disabled { cursor: default; }
+.skilltree-node-marker {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 900;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.skilltree-node-title { flex: 1 1 auto; text-transform: none; }
+.skilltree-node-unlocked .skilltree-node-button { background: var(--panel); color: var(--text); border-color: var(--green); }
+.skilltree-node-unlocked .skilltree-node-marker { background: var(--green); color: var(--panel); border-color: var(--green); }
+.skilltree-node-next .skilltree-node-button {
+  background: var(--panel);
+  border-color: var(--primary);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(23, 107, 135, 0.12);
+}
+.skilltree-node-next .skilltree-node-marker {
+  background: var(--primary);
+  color: var(--panel);
+  border-color: var(--primary);
+  animation: skilltree-pulse 1.8s ease-in-out infinite;
+}
+.skilltree-node-next .skilltree-node-button:hover { transform: translateY(-1px); border-color: var(--primary-dark); }
+.skilltree-node-next .skilltree-node-button:active { transform: translateY(0); }
+.skilltree-node-pending .skilltree-node-button { border-color: var(--primary); background: var(--panel); cursor: progress; opacity: 0.85; }
+.skilltree-node-status { font-size: 11px; font-weight: 700; color: var(--primary); text-transform: uppercase; letter-spacing: 0.04em; }
+.skilltree-node-error .skilltree-node-button { border-color: var(--red); }
+.skilltree-node-error-msg { font-size: 11px; font-weight: 700; color: var(--red); }
+@keyframes skilltree-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(23, 107, 135, 0.45); }
+  50%      { box-shadow: 0 0 0 8px rgba(23, 107, 135, 0); }
+}
+
+/* ── Leaderboard inline skill badges (fallback if SkillBadges not used) ── */
+.lb-skill-titles { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px; }
+.lb-skill-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 0 5px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  line-height: 1.5;
+}
+.lb-skill-consistency { background: rgba(46,204,113,0.15); border-color: rgba(46,204,113,0.4); color: #2ecc71; }
+.lb-skill-curiosity   { background: rgba(52,152,219,0.15); border-color: rgba(52,152,219,0.4); color: #3498db; }
+.lb-skill-momentum    { background: rgba(243,156,18,0.15);  border-color: rgba(243,156,18,0.4);  color: #f39c12; }
+.lb-skill-excellence  { background: rgba(155,89,182,0.15);  border-color: rgba(155,89,182,0.4);  color: #9b59b6; }
+
+/* ── Wrapped entry button ── */
+.wrapped-entry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: 99px;
+  border: 1.5px solid var(--primary);
+  background: transparent;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 14px;
+  transition: background 0.15s, color 0.15s;
+}
+.wrapped-entry-btn:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* -- Overlay --------------------------------------- */
+.wrapped-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.88);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+
+/* -- Progress bar ---------------------------------- */
+.wrapped-progress {
+  position: absolute;
+  top: 14px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  gap: 4px;
+  z-index: 10;
+}
+.wrapped-seg-wrap {
+  flex: 1;
+  height: 3px;
+  background: rgba(255,255,255,0.25);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.wrapped-seg-fill {
+  height: 100%;
+  background: #fff;
+  border-radius: 99px;
+  transition: width 0.3s ease;
+}
+
+/* -- Close ----------------------------------------- */
+.wrapped-x {
+  position: absolute;
+  top: 28px;
+  right: 16px;
+  background: rgba(255,255,255,0.12);
+  border: none;
+  color: #fff;
+  font-size: 18px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* -- Card ------------------------------------------ */
+.wrapped-card {
+  background: var(--panel);
+  border-radius: 20px;
+  width: min(88vw, 360px);
+  min-height: min(72vh, 500px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 28px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+  position: relative;
+  z-index: 5;
+}
+.wrapped-card-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 100%;
+  gap: 10px;
+}
+.wrapped-icon { font-size: 44px; }
+.wrapped-label { font-size: 13px; color: var(--muted);
+  font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.07em; }
+.wrapped-headline { font-size: 52px; font-weight: 850;
+  color: var(--primary); line-height: 1.1; }
+.wrapped-denom { font-size: 28px; color: var(--muted);
+  font-weight: 400; }
+.wrapped-sub { font-size: 14px; color: var(--muted);
+  line-height: 1.5; }
+.wrapped-counter { position: absolute; bottom: 16px; right: 20px;
+  font-size: 11px; color: var(--muted); }
+.wrapped-stat-row {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  font-size: 14px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.wrapped-stat-row strong { font-weight: 700; color: var(--text); }
+
+/* -- Tap zones ------------------------------------- */
+.wrapped-tap-prev,
+.wrapped-tap-next {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 30%;
+  z-index: 4;
+  cursor: pointer;
+}
+.wrapped-tap-prev { left: 0; }
+.wrapped-tap-next { right: 0; }
+
+/* -- States ---------------------------------------- */
+.wrapped-nodata,
+.wrapped-loading {
+  color: #fff;
+  text-align: center;
+  padding: 40px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  font-size: 16px;
+}
+.wrapped-close-btn {
+  margin-top: 20px;
+  padding: 10px 28px;
+  border-radius: 99px;
+  border: 1.5px solid rgba(255,255,255,0.4);
+  background: transparent;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* ── Weekly Leaderboard entry button ─────────────── */
+.wlb-entry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: 99px;
+  border: 1.5px solid var(--primary);
+  background: transparent;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 14px;
+  transition: background 0.15s, color 0.15s;
+}
+.wlb-entry-btn:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* ── Overlay ─────────────────────────────────────── */
+.wlb-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 900;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* ── Wrap ────────────────────────────────────────── */
+.wlb-wrap {
+  max-width: 600px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 32px;
+}
+.wlb-loading {
+  text-align: center;
+  padding: 40px;
+  color: var(--muted);
+}
+
+/* ── Header ──────────────────────────────────────── */
+.wlb-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 16px;
+  background: var(--panel);
+  border-radius: 12px;
+}
+.wlb-title { font-size: 18px; font-weight: 850; color: var(--text); }
+.wlb-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.wlb-close {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 50%;
+  width: 28px; height: 28px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* ── Your standing ───────────────────────────────── */
+.wlb-your-standing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  background: var(--panel);
+  border: 1.5px solid var(--line);
+}
+.wlb-your-standing.wlb-gold {
+  border-color: #e0a92e;
+  background: linear-gradient(180deg, #fff3c4 0%, #ffe899 100%);
+}
+.wlb-your-standing.wlb-silver {
+  border-color: #94a0b3;
+  background: linear-gradient(180deg, #e8ebf2 0%, #d1d6e0 100%);
+}
+.wlb-your-standing.wlb-bronze {
+  border-color: #b8743f;
+  background: linear-gradient(180deg, #f5dec1 0%, #e9bd8e 100%);
+}
+.wlb-your-sp {
+  margin-left: auto;
+  font-weight: 850;
+  color: var(--green);
+}
+
+/* ── Section label ───────────────────────────────── */
+.wlb-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+/* ── Category winner cards ───────────────────────── */
+.wlb-categories {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+.wlb-cat-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 10px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wlb-cat-card.wlb-you {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--panel));
+}
+.wlb-cat-emoji { font-size: 24px; }
+.wlb-cat-label { font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); }
+.wlb-cat-name { font-size: 13px; font-weight: 700;
+  color: var(--text); }
+.wlb-cat-sub { font-size: 11px; color: var(--muted); }
+
+/* ── League tabs ─────────────────────────────────── */
+.wlb-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wlb-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 99px;
+  border: 1.5px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.wlb-tab-active {
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+/* League tabs - bold solid backgrounds with white text for maximum legibility */
+.wlb-tab {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-shadow: none;
+}
+.wlb-tab.wlb-tab-gold.wlb-tab-active {
+  border-color: #7c5400;
+  color: #ffffff;
+  background: linear-gradient(180deg, #f0a800 0%, #b27600 100%);
+  box-shadow: 0 2px 6px rgba(178,118,0,0.45), inset 0 1px 0 rgba(255,255,255,0.25);
+  text-shadow: 0 1px 1px rgba(0,0,0,0.18);
+}
+.wlb-tab.wlb-tab-silver.wlb-tab-active {
+  border-color: #374151;
+  color: #ffffff;
+  background: linear-gradient(180deg, #6b7280 0%, #374151 100%);
+  box-shadow: 0 2px 6px rgba(55,65,81,0.45), inset 0 1px 0 rgba(255,255,255,0.2);
+  text-shadow: 0 1px 1px rgba(0,0,0,0.25);
+}
+.wlb-tab.wlb-tab-bronze.wlb-tab-active {
+  border-color: #7a3b0e;
+  color: #ffffff;
+  background: linear-gradient(180deg, #b8743f 0%, #7a3b0e 100%);
+  box-shadow: 0 2px 6px rgba(122,59,14,0.45), inset 0 1px 0 rgba(255,255,255,0.22);
+  text-shadow: 0 1px 1px rgba(0,0,0,0.25);
+}
+/* Inactive tab - color-themed but readable on white background */
+.wlb-tab.wlb-tab-gold {
+  border-color: #e0a92e;
+  color: #7c5400;
+  background: #fff7e0;
+}
+.wlb-tab.wlb-tab-silver {
+  border-color: #94a0b3;
+  color: #1f2937;
+  background: #f0f2f7;
+}
+.wlb-tab.wlb-tab-bronze {
+  border-color: #b8743f;
+  color: #5c2d0a;
+  background: #f6ecde;
+}
+.wlb-tab-count {
+  font-size: 11px;
+  background: var(--line);
+  border-radius: 99px;
+  padding: 1px 7px;
+}
+
+/* ── League section ──────────────────────────────── */
+.wlb-league-section {
+  background: var(--panel);
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+/* League sections: strong color-coded panels so each league reads as its own thing */
+.wlb-league-section.wlb-gold {
+  border: 2px solid #e0a92e;
+  background: linear-gradient(180deg, #fff3c4 0%, #ffe899 50%, #fff8e1 100%);
+}
+.wlb-league-section.wlb-silver {
+  border: 2px solid #94a0b3;
+  background: linear-gradient(180deg, #e8ebf2 0%, #d1d6e0 50%, #f0f2f7 100%);
+}
+.wlb-league-section.wlb-bronze {
+  border: 2px solid #b8743f;
+  background: linear-gradient(180deg, #f5dec1 0%, #e9bd8e 50%, #faf0e0 100%);
+}
+.wlb-league-section .wlb-table thead th {
+  background: rgba(255,255,255,0.55);
+  font-weight: 800;
+}
+/* League badge chip on the section header */
+.wlb-league-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #fff;
+}
+.wlb-league-section.wlb-gold .wlb-league-badge {
+  background: linear-gradient(180deg, #f7c948 0%, #b27600 100%);
+  box-shadow: 0 1px 3px rgba(178,118,0,0.45);
+}
+.wlb-league-section.wlb-silver .wlb-league-badge {
+  background: linear-gradient(180deg, #c9ced8 0%, #4b5563 100%);
+  box-shadow: 0 1px 3px rgba(75,85,99,0.45);
+}
+.wlb-league-section.wlb-bronze .wlb-league-badge {
+  background: linear-gradient(180deg, #d49a5e 0%, #7a3b0e 100%);
+  box-shadow: 0 1px 3px rgba(122,59,14,0.45);
+}
+
+.wlb-league-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+  border-bottom: 1px solid var(--line);
+}
+.wlb-league-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* ── Table ───────────────────────────────────────── */
+.wlb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.wlb-table th {
+  text-align: left;
+  padding: 8px 16px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  font-weight: 700;
+}
+.wlb-table td { padding: 10px 16px; }
+.wlb-table tr + tr { border-top: 1px solid var(--line); }
+.wlb-you-row { background:
+  color-mix(in srgb, var(--primary) 8%, transparent); }
+.wlb-rank { font-weight: 850; color: var(--primary);
+  font-size: 15px; width: 36px; }
+.wlb-name { font-weight: 600; color: var(--text); }
+.wlb-email { font-size: 11px; color: var(--muted); }
+.wlb-sp-week { font-weight: 850; color: var(--green);
+  text-align: right; }
+.wlb-sp-total { color: var(--muted); font-size: 12px;
+  text-align: right; }
+
+/* ── Explainer ───────────────────────────────────── */
+.wlb-explainer {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  padding: 8px;
+  line-height: 1.6;
+}
+
+/* -- Ghost Race entry button ----------------------- */
+.gr-entry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: 99px;
+  border: 1.5px solid var(--muted);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 14px;
+  transition: border-color 0.15s, color 0.15s;
+}
+.gr-entry-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* -- Overlay --------------------------------------- */
+.gr-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 900;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* -- Wrap ------------------------------------------ */
+.gr-wrap {
+  max-width: 580px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 32px;
+}
+.gr-loading {
+  text-align: center;
+  padding: 40px;
+  color: var(--muted);
+}
+
+/* -- Header ---------------------------------------- */
+.gr-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 16px;
+  background: var(--panel);
+  border-radius: 12px;
+}
+.gr-title    { font-size: 18px; font-weight: 850; color: var(--text); }
+.gr-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.gr-close {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 50%;
+  width: 28px; height: 28px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* -- Status banner --------------------------------- */
+.gr-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border-radius: 12px;
+  border-left: 4px solid var(--muted);
+}
+.gr-status-emoji { font-size: 28px; }
+.gr-status-label { font-size: 14px; font-weight: 850; }
+.gr-status-msg   { font-size: 13px; color: var(--muted);
+                   margin-top: 3px; line-height: 1.4; }
+
+/* -- Race track bars ------------------------------- */
+.gr-race-track {
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gr-racer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.gr-racer-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  width: 30px;
+  flex-shrink: 0;
+}
+.gr-ghost-label { color: var(--muted); }
+.gr-bar-wrap {
+  flex: 1;
+  height: 14px;
+  background: var(--line);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.gr-bar {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.6s cubic-bezier(.4,0,.2,1);
+  min-width: 4px;
+}
+.gr-bar-you   { background: var(--primary); }
+.gr-bar-ghost { background: var(--muted); opacity: 0.5; }
+.gr-racer-sp  { font-size: 13px; font-weight: 700;
+                color: var(--text); width: 52px;
+                text-align: right; flex-shrink: 0; }
+.gr-muted     { color: var(--muted); }
+.gr-track-caption {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 4px;
+}
+
+/* -- Daily bars ------------------------------------ */
+.gr-daily-wrap { background: var(--panel); border-radius: 12px;
+                 padding: 14px 12px; }
+.gr-daily-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.gr-legend-dot  { width: 10px; height: 10px;
+                  border-radius: 50%; flex-shrink: 0; }
+.gr-you-dot     { background: var(--primary); }
+.gr-ghost-dot   { background: var(--muted); opacity: 0.5; }
+.gr-legend-text { margin-right: 8px; }
+
+.gr-daily-bars {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 4px;
+}
+.gr-day-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.gr-today .gr-day-key {
+  color: var(--primary);
+  font-weight: 850;
+}
+.gr-future { opacity: 0.4; }
+.gr-bar-pair {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 64px;
+}
+.gr-mini-bar {
+  width: 10px;
+  border-radius: 3px 3px 0 0;
+  min-height: 3px;
+  transition: height 0.4s ease;
+}
+.gr-mini-you   { background: var(--primary); }
+.gr-mini-ghost { background: var(--muted); }
+.gr-day-key    { font-size: 9px; color: var(--muted);
+                 text-transform: uppercase; }
+.gr-day-diff   { font-size: 10px; font-weight: 700; }
+
+/* -- Stats row ------------------------------------- */
+.gr-stats-row {
+  display: flex;
+  gap: 10px;
+}
+.gr-stat {
+  flex: 1;
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+}
+.gr-stat-ghost { background: var(--panel);
+                   color: var(--muted); }
+.gr-stat-ghost .gr-stat-val   { color: var(--muted); }
+.gr-stat-ghost .gr-stat-label { color: var(--muted); }
+.gr-stat-val   { font-size: 22px; font-weight: 850;
+                 color: var(--primary); }
+.gr-stat-label { font-size: 10px; color: var(--muted);
+                 margin-top: 4px; line-height: 1.3; }
+
+/* -- Section --------------------------------------- */
+.gr-section { background: var(--panel); border-radius: 12px;
+              padding: 14px 16px; }
+.gr-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+/* -- Session comparison ---------------------------- */
+.gr-sessions { display: flex; flex-direction: column; gap: 6px; }
+.gr-session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.gr-session-cell {
+  flex: 1;
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  text-align: center;
+  font-weight: 600;
+}
+.gr-qualified { background: color-mix(in srgb,
+  var(--green) 12%, var(--panel)); color: var(--green); }
+.gr-missed    { background: color-mix(in srgb,
+  var(--red) 12%, var(--panel)); color: var(--red); }
+.gr-empty     { background: var(--line); color: var(--muted); }
+.gr-ghost-cell { opacity: 0.7; }
+.gr-session-vs { font-size: 10px; color: var(--muted);
+                 font-weight: 700; flex-shrink: 0; }
+
+/* -- Personal bests -------------------------------- */
+.gr-bests-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+}
+.gr-best-card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.gr-best-emoji { font-size: 22px; }
+.gr-best-val   { font-size: 20px; font-weight: 850;
+                 color: var(--primary); }
+.gr-best-label { font-size: 11px; font-weight: 700;
+                 color: var(--text); }
+.gr-best-sub   { font-size: 10px; color: var(--muted);
+                 line-height: 1.3; }
+
+/* -- No ghost -------------------------------------- */
+.gr-no-ghost {
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 32px 20px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.gr-no-ghost-title { font-size: 18px; font-weight: 850; color: var(--text); }
+.gr-no-ghost-sub {
+  font-size: 13px; color: var(--muted); line-height: 1.5;
+  max-width: 280px;
+}
+/* ───────────────── Skill Tree ───────────────── */
+.skilltree-root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 8px 40px;
+}
+.skilltree-loading,
+.skilltree-error {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 24px;
+  text-align: center;
+}
+.skilltree-retry {
+  margin: 12px auto 0;
+  display: block;
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+}
+.skilltree-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.skilltree-title {
+  font-size: 18px;
+  font-weight: 850;
+  margin: 0;
+  color: var(--text);
+}
+.skilltree-points {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.skilltree-points-available {
+  font-size: 28px;
+  font-weight: 900;
+  color: var(--primary);
+}
+.skilltree-points-earned {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text);
+}
+.skilltree-points-label { font-weight: 600; }
+.skilltree-points-sep   { color: var(--muted); }
+.skilltree-help {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.skilltree-branches {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 920px) {
+  .skilltree-branches { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 540px) {
+  .skilltree-branches { grid-template-columns: 1fr; }
+}
+.skilltree-branch {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: var(--shadow);
+}
+.skilltree-branch-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 2px;
+}
+.skilltree-branch-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 850;
+  font-size: 15px;
+  color: var(--text);
+  text-transform: capitalize;
+}
+.skilltree-branch-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.skilltree-branch-flavor {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.skilltree-track {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.skilltree-track-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.skilltree-track-line {
+  width: 2px;
+  height: 10px;
+  background: var(--line);
+  margin: 0 auto;
+}
+.skilltree-node {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+}
+.skilltree-node-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 13px;
+  text-align: left;
+  transition: transform 0.06s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+}
+.skilltree-node-button:disabled {
+  cursor: default;
+}
+.skilltree-node-marker {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 900;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.skilltree-node-title {
+  flex: 1 1 auto;
+  text-transform: none;
+}
+.skilltree-node-unlocked .skilltree-node-button {
+  background: var(--panel);
+  color: var(--text);
+  border-color: var(--green);
+}
+.skilltree-node-unlocked .skilltree-node-marker {
+  background: var(--green);
+  color: var(--panel);
+  border-color: var(--green);
+}
+.skilltree-node-next .skilltree-node-button {
+  background: var(--panel);
+  border-color: var(--primary);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(23, 107, 135, 0.12);
+}
+.skilltree-node-next .skilltree-node-marker {
+  background: var(--primary);
+  color: var(--panel);
+  border-color: var(--primary);
+  animation: skilltree-pulse 1.8s ease-in-out infinite;
+}
+.skilltree-node-next .skilltree-node-button:hover {
+  transform: translateY(-1px);
+  border-color: var(--primary-dark);
+}
+.skilltree-node-next .skilltree-node-button:active {
+  transform: translateY(0);
+}
+.skilltree-node-pending .skilltree-node-button {
+  border-color: var(--primary);
+  background: var(--panel);
+  cursor: progress;
+  opacity: 0.85;
+}
+.skilltree-node-status {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.skilltree-node-error .skilltree-node-button {
+  border-color: var(--red);
+}
+.skilltree-node-error-msg {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--red);
+}
+@keyframes skilltree-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(23, 107, 135, 0.45); }
+  50%      { box-shadow: 0 0 0 8px rgba(23, 107, 135, 0); }
+}
+
+/* ───────────────── Skill Tree — v2 polish ───────────────── */
+/* Branch color plumbing: each .skilltree-branch declares --branch-color
+   (set inline from BRANCH_META) so all child accents inherit one source
+   of truth. Existing classes above stay untouched. */
+.skilltree-header-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+.skilltree-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.skilltree-summary-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.skilltree-summary-stat strong { color: var(--text); font-weight: 800; }
+.skilltree-summary-stat-mastered {
+  border-color: var(--green);
+  color: var(--green);
+  background: rgba(0, 184, 113, 0.06);
+}
+.skilltree-summary-stat-pulse {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(23, 107, 135, 0.08);
+  animation: skilltree-soft-pulse 1.8s ease-in-out infinite;
+}
+@keyframes skilltree-soft-pulse {
+  0%, 100% { transform: translateY(0);   opacity: 1; }
+  50%      { transform: translateY(-1px); opacity: 0.78; }
+}
+
+.skilltree-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 28px 18px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  background: var(--bg);
+  color: var(--muted);
+}
+.skilltree-empty-icon { font-size: 32px; line-height: 1; }
+.skilltree-empty-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+}
+.skilltree-empty-sub {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 380px;
+}
+.skilltree-empty-sub strong { color: var(--green); }
+
+/* Per-branch tinted frame. The branch column gets a colored top stripe
+   and a soft tinted background so it's recognizable in any zoom level. */
+.skilltree-branch {
+  position: relative;
+  border-top: 3px solid var(--branch-color, var(--line));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--branch-color) 5%, var(--panel)) 0%, var(--panel) 60%);
+}
+.skilltree-branch-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--branch-color) 14%, var(--panel));
+  color: var(--branch-color, var(--text));
+  font-size: 15px;
+  line-height: 1;
+}
+.skilltree-branch-name {
+  color: var(--branch-color, var(--text));
+}
+.skilltree-branch-progress {
+  position: relative;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+  margin-top: 2px;
+}
+.skilltree-branch-progress-fill {
+  height: 100%;
+  background: var(--branch-color, var(--primary));
+  transition: width 0.4s ease;
+}
+.skilltree-branch-counter {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.skilltree-branch-counter-num {
+  color: var(--branch-color, var(--text));
+  font-size: 14px;
+  font-weight: 900;
+}
+.skilltree-branch-counter-sep { padding: 0 1px; }
+.skilltree-branch-counter-total { font-size: 12px; }
+.skilltree-branch-counter-label { margin-left: 4px; }
+
+/* Body wraps the title + optional description + optional prereqs. */
+.skilltree-node-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.skilltree-node-desc {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.skilltree-node-prereqs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  margin-top: 2px;
+}
+.skilltree-node-prereqs-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.skilltree-node-prereq-pill {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* State: mastered — gold/green glow + 'Mastered' pill. */
+.skilltree-node-mastered .skilltree-node-button {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--green) 14%, var(--panel)) 0%, var(--panel) 100%);
+  color: var(--text);
+  border-color: var(--green);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 35%, transparent);
+  animation: skilltree-mastered-glow 2.4s ease-in-out infinite;
+}
+.skilltree-node-mastered .skilltree-node-marker {
+  background: var(--green);
+  color: var(--panel);
+  border-color: var(--green);
+  font-size: 14px;
+}
+.skilltree-badge-mastered {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--green);
+  color: var(--panel);
+  flex-shrink: 0;
+}
+@keyframes skilltree-mastered-glow {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 35%, transparent); }
+  50%      { box-shadow: 0 0 0 6px color-mix(in srgb, var(--green) 0%, transparent); }
+}
+
+/* State: unlocked (mid-branch) — quiet, green-tinted, not animated. */
+.skilltree-node-unlocked .skilltree-node-button {
+  background: var(--panel);
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--green) 55%, var(--line));
+}
+.skilltree-node-unlocked .skilltree-node-marker {
+  background: color-mix(in srgb, var(--green) 18%, var(--panel));
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 55%, var(--line));
+}
+
+/* State: unlockable — strong primary ring + steady pulse. */
+.skilltree-node-unlockable .skilltree-node-button {
+  background: var(--panel);
+  border-color: var(--primary);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.skilltree-node-unlockable .skilltree-node-marker {
+  background: var(--primary);
+  color: var(--panel);
+  border-color: var(--primary);
+  animation: skilltree-pulse 1.8s ease-in-out infinite;
+}
+.skilltree-node-unlockable .skilltree-node-button:hover {
+  transform: translateY(-1px);
+  border-color: var(--primary-dark);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.skilltree-node-unlockable .skilltree-node-button:active {
+  transform: translateY(0);
+}
+
+/* State: locked — dim, muted, no interaction. */
+.skilltree-node-locked .skilltree-node-button {
+  background: var(--bg);
+  color: var(--muted);
+  border-color: var(--line);
+  cursor: default;
+  opacity: 0.7;
+}
+.skilltree-node-locked .skilltree-node-marker {
+  background: var(--bg);
+  color: var(--muted);
+  border-color: var(--line);
+}
+.skilltree-node-locked .skilltree-node-button:hover {
+  transform: none;
+  border-color: var(--line);
+}
+
+/* "You are here" ribbon. */
+.skilltree-here-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 14%, var(--panel));
+  color: var(--primary);
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line));
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 4px;
+  align-self: flex-start;
+}
+.skilltree-node-here .skilltree-node-button {
+  outline: 2px dashed color-mix(in srgb, var(--primary) 50%, transparent);
+  outline-offset: 2px;
+}
+
+/* One-shot burst that appears above a node right after it transitions
+   from unlockable → unlocked. */
+.skilltree-unlock-burst {
+  display: block;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--green);
+  padding: 2px 0 4px;
+  animation: skilltree-burst 1.2s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes skilltree-burst {
+  0%   { opacity: 0; transform: translateY(4px) scale(0.95); }
+  20%  { opacity: 1; transform: translateY(0)   scale(1.04); }
+  100% { opacity: 0; transform: translateY(-8px) scale(1); }
+}
+
+/* Footer legend strip. */
+.skilltree-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.skilltree-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.skilltree-legend-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 900;
+  color: var(--panel);
+  border: 1px solid var(--line);
+}
+.skilltree-legend-dot-mastered  { background: var(--green);      border-color: var(--green); }
+.skilltree-legend-dot-unlocked  { background: color-mix(in srgb, var(--green) 35%, var(--panel)); border-color: color-mix(in srgb, var(--green) 55%, var(--line)); color: var(--green); }
+.skilltree-legend-dot-unlockable{ background: var(--primary);    border-color: var(--primary); }
+.skilltree-legend-dot-locked    { background: var(--bg);         color: var(--muted); }
+
+@media (max-width: 540px) {
+  .skilltree-node-desc { display: none; }   /* save vertical space */
+  .skilltree-node-prereqs { display: none; }
+  .skilltree-summary-stat { font-size: 11px; }
+  .skilltree-legend { font-size: 11px; }
+}
+
+
+/* Skill-tree badges in LeaderboardTabs */
+.lb-name-cell { vertical-align: middle; }
+.lb-name { font-weight: 600; }
+.lb-skill-titles { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.lb-skill-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 99px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.lb-skill-consistency { background: #dcfce7; color: #15803d; }
+.lb-skill-curiosity   { background: #ede9fe; color: #6d28d9; }
+.lb-skill-momentum    { background: #ffedd5; color: #c2410c; }
+.lb-skill-excellence  { background: #fef9c3; color: #854d0e; }
+
+/* ═══════════════════════════════════════════════════════
+   FACTION WARS
+   ═══════════════════════════════════════════════════════ */
+
+/* ── Entry button ─────────────────────────────────────── */
+.fw-entry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: 99px;
+  border: 1.5px solid #7c3aed;
+  background: transparent;
+  color: #7c3aed;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 14px;
+  transition: background 0.15s, color 0.15s;
+}
+.fw-entry-btn:hover {
+  background: #7c3aed;
+  color: #fff;
+}
+
+/* ── Overlay ───────────────────────────────────────────── */
+.fw-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.60);
+  z-index: 900;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* ── Wrap ──────────────────────────────────────────────── */
+.fw-wrap {
+  max-width: 660px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 32px;
+}
+.fw-loading, .fw-error {
+  text-align: center;
+  padding: 40px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 12px;
+}
+.fw-error { color: var(--red); }
+
+/* ── Header ─────────────────────────────────────────────── */
+.fw-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 16px;
+  background: var(--panel);
+  border-radius: 12px;
+  border: 1px solid var(--line);
+}
+.fw-title { font-size: 18px; font-weight: 850; color: var(--text); }
+.fw-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.fw-season-label { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+/* ── My faction panel ───────────────────────────────────── */
+.fw-my-faction {
+  background: var(--faction-bg, var(--bg));
+  border: 1.5px solid var(--faction-border, var(--line));
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.fw-my-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.fw-my-emoji { font-size: 28px; line-height: 1; }
+.fw-my-name { font-size: 15px; font-weight: 700; color: var(--text); }
+.fw-my-sub { font-size: 11px; color: var(--muted); }
+.fw-my-rank {
+  margin-left: auto;
+  font-size: 22px;
+  font-weight: 900;
+  color: var(--faction-color, var(--primary));
+}
+.fw-my-stats {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--faction-border, var(--line));
+  border-radius: 8px;
+  overflow: hidden;
+}
+.fw-my-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 4px;
+  border-right: 1px solid var(--faction-border, var(--line));
+  background: rgba(255,255,255,0.6);
+}
+.fw-my-stat:last-child { border-right: none; }
+.fw-my-stat strong { font-size: 18px; color: var(--faction-color, var(--primary)); }
+.fw-my-stat span { font-size: 10px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 2px; }
+
+/* ── No faction assigned ────────────────────────────────── */
+.fw-no-faction {
+  background: #faf5ff;
+  border: 1px solid #ddd6fe;
+  border-radius: 12px;
+  padding: 14px 16px;
+  font-size: 13px;
+  color: #4c1d95;
+}
+.fw-no-faction p { margin: 0 0 6px; line-height: 1.5; }
+.fw-no-faction p:last-child { margin-bottom: 0; }
+
+/* ── Section label ──────────────────────────────────────── */
+.fw-section-label {
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 0 2px;
+}
+
+/* ── Faction overview cards (grid) ──────────────────────── */
+.fw-faction-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.fw-faction-card {
+  background: var(--faction-bg, var(--bg));
+  border: 1.5px solid var(--faction-border, var(--line));
+  border-radius: 12px;
+  padding: 14px;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.fw-faction-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.10);
+}
+.fw-faction-card.fw-your-faction {
+  border-color: var(--faction-color, var(--primary));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--faction-color, var(--primary)) 18%, transparent);
+}
+
+.fw-your-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-size: 10px;
+  font-weight: 800;
+  background: var(--faction-color, var(--primary));
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fw-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.fw-emoji {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--faction-border, var(--line));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+.fw-faction-name { font-size: 15px; font-weight: 850; }
+.fw-faction-tagline { font-size: 11px; color: var(--muted); line-height: 1.3; }
+.fw-crown { margin-left: auto; font-size: 20px; }
+
+.fw-card-sp { margin-bottom: 2px; }
+.fw-sp-num { font-size: 28px; font-weight: 900; }
+.fw-sp-label { font-size: 13px; color: var(--muted); font-weight: 600; }
+
+.fw-delta { font-size: 12px; font-weight: 700; margin-bottom: 10px; }
+
+.fw-card-stats {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--faction-border, var(--line));
+  border-radius: 7px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.fw-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 7px 4px;
+  background: rgba(255,255,255,0.5);
+}
+.fw-stat-divider { width: 1px; background: var(--faction-border, var(--line)); }
+.fw-stat-num { font-size: 16px; font-weight: 900; color: var(--faction-color, var(--primary)); }
+.fw-stat-label { font-size: 10px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 1px; }
+
+.fw-contributors { border-top: 1px solid var(--faction-border, var(--line)); padding-top: 8px; }
+.fw-contrib-label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+.fw-contrib-row { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 0; }
+.fw-contrib-rank { font-size: 13px; }
+.fw-contrib-name { flex: 1; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fw-contrib-sp { font-weight: 800; font-size: 12px; }
+
+/* ── Standings table ─────────────────────────────────────── */
+.fw-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+.fw-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.fw-table th {
+  padding: 9px 12px;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.fw-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.fw-table tbody tr:last-child td { border-bottom: none; }
+.fw-table-row:hover td { background: #f5f8fb; }
+.fw-table-row.fw-table-me td { background: #f5f0ff; }
+.fw-table-row.fw-table-lead td { background: #fffbeb; }
+
+.fw-td-rank { font-size: 16px; font-weight: 900; }
+.fw-td-faction { min-width: 130px; }
+.fw-table-faction { display: flex; align-items: center; gap: 8px; }
+.fw-table-emoji { font-size: 20px; }
+.fw-table-name { font-weight: 750; font-size: 14px; }
+.fw-table-me-tag {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.fw-td-sp { font-weight: 700; }
+.fw-td-delta { font-size: 11px; margin-left: 4px; }
+.fw-td-season { color: var(--muted); }
+.fw-td-members, .fw-td-qual { text-align: center; }
+.fw-td-qual { color: var(--muted); }
+
+/* ── Empty state ─────────────────────────────────────────── */
+.fw-empty {
+  text-align: center;
+  padding: 32px 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+}
+.fw-empty p { margin: 0 0 8px; }
+.fw-empty p:last-child { margin-bottom: 0; }
+.fw-empty strong { color: var(--text); }
+.fw-empty code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+/* ── Explainer ─────────────────────────────────────────── */
+.fw-explainer {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.55;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 540px) {
+  .fw-faction-grid { grid-template-columns: 1fr; }
+  .fw-my-stats { flex-wrap: wrap; }
+  .fw-my-stat { min-width: 50%; border-right: none; border-bottom: 1px solid var(--faction-border, var(--line)); }
+  .fw-my-stat:last-child, .fw-my-stat:nth-last-child(2) { border-bottom: none; }
 }

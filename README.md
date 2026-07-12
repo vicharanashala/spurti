@@ -1,151 +1,122 @@
+# Spurti — Student Self-Motivation Engine
 
-# Student Self-Motivation Engine
+## Quick Start
 
-## Problem Statement
+```bash
+# 1. Clone and install
+npm install
+npm --prefix client install
 
-Many students begin a course, subject, internship, certification, or learning program with interest, but lose consistency over time. This is especially common in large-scale learning environments where hundreds or thousands of learners are enrolled at once. Students may miss sessions, delay tasks, avoid practice, stop reflecting on progress, or slowly disconnect from the learning process.
+# 2. Configure
+cp .env.example .env        # edit .env — set MONGO_URI at minimum
+# Default server port is 5290. Change with PORT=5290 in .env
 
-Most education systems show students marks, grades, attendance, or final completion status. These signals are useful, but they often come too late. A learner may know they have failed only after the exam, assignment deadline, or program end. In large classes, teachers and mentors may also notice disengagement only after the student has already lost momentum.
+# 3. Seed the database
+npm run rebuild
 
-The deeper problem is not only lack of information. It is lack of continuous motivation, self-monitoring, and recovery support. Students need a simple way to see their learning energy, understand their consistency, feel encouraged to keep going, and recover when they fall behind.
+# 4. Build and run
+npm run build               # builds client/
+node server/server.js       # serves on http://localhost:5290/spurti
+```
 
-This direction addresses the problem by creating a general motivation engine for self-regulated learning. It converts learning effort, participation, progress, reflection, and consistency into visible motivation signals such as points, progress bands, streaks, badges, nudges, and recovery goals. The purpose is not to punish students or replace academic grading. The purpose is to help students stay aware, motivated, and moving toward completion.
+For Google Sheets sync and other pipeline tools, see the [Pipeline README](pipeline/README.md).
 
-## Concept Description
+---
 
-The proposed system is a student self-motivation and engagement engine for any structured learning journey. It can be used in a school subject, college course, online course, internship, bootcamp, training program, certification, workshop, or large-scale learning platform.
+## What Is This?
 
-The system gives students a visible measure of their learning momentum. This measure may be called learning energy, motivation points, engagement credits, progress points, or any locally suitable name. Students earn these signals through consistent learning behavior such as attending sessions, completing tasks, attempting quizzes, submitting reflections, participating in discussions, reaching milestones, revising regularly, or helping peers.
+Spurti is a student self-motivation and engagement engine for structured learning journeys — internships, courses, bootcamps, or any program where consistency and completion matter.
 
-The approach is based on the idea of self-regulated learning. Students should be able to set goals, monitor their progress, recognize when they are falling behind, take corrective action, and reflect on improvement. The system supports this by giving continuous feedback in a student-friendly format.
+It gives students visible motivation signals (points, streaks, progress bands, badges) and gives educators early visibility into who's engaged and who might need support.
 
-For large learning environments, the framework also helps teachers, mentors, or program teams understand which students are active, which students are slowing down, and which students may need support. The focus is not surveillance. The focus is early encouragement and timely intervention.
+## Tech Stack
+
+- **Frontend:** React + Vite, served as a static SPA by Express
+- **Backend:** Express API (Node.js ESM)
+- **Database:** MongoDB + Mongoose
+- **Auth:** Samagama SSO cookie (dev mode accepts `?asEmail=` param)
+
+## Project Structure
+
+```
+client/src/           React components and styles
+client/dist/          Built static assets (gitignored, rebuilt on deploy)
+server/
+  models/             Mongoose schemas (Student, SPTransaction, Session, …)
+  routes/             API routers (weekly-leaderboard, ghost-race, faction-war, …)
+  services/           Business logic (levels, progress, skillTree, …)
+  scripts/            One-off dev/admin scripts (seed, rebuild, ingest, …)
+pipeline/             Google Sheets sync, Zoom ingestion, data pipeline utils
+data/                 Local staging exports (gitignored — contains student PII)
+```
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `PORT` | No | `5290` | Server port |
+| `MONGO_URI` | **Yes** | — | MongoDB connection string |
+| `SAMAGAMA_AUTH_URL` | No | — | Samagama SSO endpoint |
+| `ALLOW_STUDENT_SEARCH` | No | `false` | Enable `/api/search` for unauthenticated name/email lookup |
+| `ADMIN_EMAIL` | No | `dled@iprr.ac.in` | Admin identity for header-based auth |
+| `ADMIN_TOKEN` | No | `vled-local-admin` | Admin token for header-based auth |
+
+See `.env.example` for all options.
+
+## Key Features
+
+- **Spurti Points (SP)** — lifetime points earned through sessions, polls, and achievements
+- **Weekly Leaderboard** — SP earned this week, reset every Monday
+- **Ghost Race** — race against your past week's performance
+- **Skill Tree** — spend SP to unlock decorative title nodes
+- **Wrapped** — monthly progress story with attendance, polls, and SP breakdown
+- **Faction Wars** — students belong to one of four factions; weekly team competition
+
+## API Overview
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/me` | Student profile + transactions + cohort data |
+| `GET /api/weekly-leaderboard` | This week's SP leaderboard |
+| `GET /api/ghost-race` | Ghost race data |
+| `GET /api/skill-tree` | Skill tree unlock state |
+| `GET /api/faction-war` | Faction war standings |
+| `GET /api/wrapped?month=YYYY-MM` | Monthly wrapped story |
+| `GET /api/search?q=` | Name/email search (requires `ALLOW_STUDENT_SEARCH=1`) |
+
+## Running in Production
+
+```bash
+# Set env
+PORT=5290
+NODE_ENV=production
+MONGO_URI=mongodb://...
+
+npm run build          # client build
+node server/server.js  # starts on PORT (default 5290)
+```
+
+The Express server handles both API and static file serving; no separate Nginx config needed.
+
+---
 
 ## Educational Motivation Model
 
-The motivation model encourages students through four connected loops:
+Spurti encourages students through four connected loops:
 
-- Awareness: Students see where they stand in the learning journey.
-- Action: Students are encouraged to complete small learning actions regularly.
-- Feedback: Students receive visible points, progress, badges, or nudges after meaningful effort.
-- Recovery: Students who fall behind receive clear pathways to restart and continue.
+- **Awareness** — students see where they stand
+- **Action** — small, regular learning actions earn rewards
+- **Feedback** — visible points, badges, and progress signals
+- **Recovery** — clear paths to restart after low engagement
 
-This loop helps students answer important self-regulation questions:
+The system is designed to support self-regulated learning: goal-setting, self-monitoring, reflection, and recovery — without replacing academic grading.
 
-- What is my current learning progress?
-- Am I being consistent?
-- What did I complete this week?
-- Where did I lose momentum?
-- What small action can I take next?
-- How can I recover and continue?
-
-## Core Idea
-
-The system should work as a motivation layer on top of learning activities. It does not need to be limited to one course type or one institution. It should support any learning context where persistence, participation, and completion matter.
-
-Examples of learning contexts include:
-
-- A semester-long subject.
-- A remote or offline course.
-- A large online class.
-- A professional training program.
-- A school learning module.
-- A college internship.
-- A project-based bootcamp.
-- A certification or skill-development track.
-
-In all these contexts, the central purpose remains the same: help students keep going until they complete the learning journey.
-
-## Reward And Motivation Design
-
-The reward system should support healthy motivation. It should not make students feel punished for every small mistake. It should help them understand their behavior and encourage better habits.
-
-Design principles:
-
-- Use points as feedback, not as academic marks.
-- Reward consistency, improvement, effort, and completion.
-- Prefer positive and banded rewards over harsh pass-fail thresholds.
-- Make progress visible in small steps.
-- Keep rewards explainable and fair.
-- Give students recovery paths after low engagement.
-- Encourage self-monitoring and reflection.
-- Avoid overemphasis on competition.
-- Use leaderboards carefully, if used at all.
-- Support both individual progress and community encouragement.
-
-Possible motivational elements:
-
-- Learning energy score or motivation points.
-- Weekly progress bands such as Excellent, Active, Slowing Down, and Recovery.
-- Streaks for regular practice, attendance, revision, or task completion.
-- Badges for milestones, improvement, comeback, consistency, and peer support.
-- Personal goals and weekly targets.
-- Gentle nudges when students become inactive.
-- Reflection prompts after important learning activities.
-- Recovery missions for students who fall behind.
-- Completion celebrations when students finish a module, subject, course, or program.
-
-## Self-Regulated Learning Support
-
-The system should help students develop self-regulated learning habits. This means it should support:
-
-- Goal setting: Students know what they are trying to complete.
-- Planning: Students can see upcoming learning actions or milestones.
-- Self-monitoring: Students can track their own consistency and progress.
-- Feedback interpretation: Students understand why their motivation score changed.
-- Reflection: Students can think about what worked and what needs improvement.
-- Recovery: Students can restart after missing tasks or losing momentum.
-
-The system should make progress feel manageable. Instead of showing only a large final goal, it should break the journey into smaller motivational checkpoints.
-
-## Large-Scale Learning Support
-
-In large learning environments, teachers and mentors cannot personally track every student's motivation every day. The system should help by summarizing learning engagement patterns at scale.
-
-It can help educators identify:
-
-- Students who are consistently active.
-- Students who are improving.
-- Students who are becoming inactive.
-- Students who need recovery support.
-- Topics or weeks where many students lose momentum.
-- Activities that create strong engagement.
-
-This allows educators to respond earlier through nudges, extra support, reminders, peer groups, or redesigned activities.
-
-## Core Users
-
-- Students: Track progress, stay motivated, recover from low engagement, and complete the learning journey.
-- Teachers or instructors: Understand class engagement and support students before they drop out.
-- Mentors or facilitators: Encourage learners, guide recovery, and recognize effort.
-- Program administrators: Monitor large-scale learning health and completion patterns.
-
-## Goals
-
-- Help students stay motivated during long learning journeys.
-- Improve course, subject, internship, or program completion.
-- Build self-regulated learning habits.
-- Make learning effort and consistency visible.
-- Reduce silent dropout in large-scale education.
-- Encourage recovery instead of shame.
-- Support teachers and mentors with early engagement signals.
-- Create a fair and transparent motivation system.
+For educators, it provides early signals about which students are active, improving, or need support — before disengagement becomes dropout.
 
 ## Success Metrics
 
-This direction can be evaluated through:
-
-- Course or program completion rate.
-- Weekly active learner rate.
-- Task or milestone completion rate.
-- Improvement in student consistency over time.
-- Number of students who recover after low engagement.
-- Student perception of motivation and fairness.
-- Student self-regulated learning indicators.
-- Reduction in silent dropout.
-- Teacher or mentor ability to identify at-risk students earlier.
-
-## Positioning
-
-This is a general educational motivation engine. It is not only for internships, and it is not only a points table. It is a self-regulated learning support system and research direction that helps students see their progress, stay encouraged, recover from setbacks, and complete any meaningful learning journey.
-Displaying PRODUCT.md.
+- Course/program completion rate
+- Weekly active learner rate
+- Improvement in student consistency over time
+- Reduction in silent dropout
+- Educator ability to identify at-risk students earlier
