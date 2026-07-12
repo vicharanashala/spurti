@@ -62,3 +62,22 @@ export function leaderboardGroup(onboardingDate) {
 export function groupLabel(group) {
   return String(group || '').replace('_to_', ' to ');
 }
+
+// Legend tier badges — milestone collectibles keyed off lifetime SP.
+// Pure additive — does NOT change `legendBadge()` semantics (1500 threshold).
+// Tiers are derived views for the dashboard UI; the underlying schema keeps
+// the single `legendBadgeUnlocked` boolean untouched.
+const LEGEND_TIERS = [
+  { name: 'Bronze',   threshold: 100,  key: 'bronze' },
+  { name: 'Silver',   threshold: 500,  key: 'silver' },
+  { name: 'Gold',     threshold: 1000, key: 'gold' },
+  { name: 'Platinum', threshold: 1500, key: 'platinum' },
+];
+
+export function legendTiers(highestSpEver) {
+  const sp = Number(highestSpEver) || 0;
+  return LEGEND_TIERS.map(t => ({
+    ...t,
+    unlocked: sp >= t.threshold,
+  }));
+}
