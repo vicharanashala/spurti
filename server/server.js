@@ -12,6 +12,7 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import OnboardingStatus from './models/OnboardingStatus.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -305,6 +306,28 @@ api.post('/confirm', async (req, res) => {
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
   res.json(await studentPayload(student));
+});
+
+api.get('/onboarding/:email', async (req, res) => {
+  const sessionEmail = await studentEmailFromRequest(req);
+  if (!sessionEmail) return res.status(401).json({ error: 'Not authenticated' });
+  const email = normalizeEmail(req.params.email);
+  if (sessionEmail !== email) return res.status(403).json({ error: 'Forbidden' });
+  const record = await OnboardingStatus.findOne({ studentEmail: email }).lean();
+  res.json({ completed: Boolean(record?.completed) });
+});
+
+api.post('/onboarding/:email/complete', async (req, res) => {
+  const sessionEmail = await studentEmailFromRequest(req);
+  if (!sessionEmail) return res.status(401).json({ error: 'Not authenticated' });
+  const email = normalizeEmail(req.params.email);
+  if (sessionEmail !== email) return res.status(403).json({ error: 'Forbidden' });
+  await OnboardingStatus.findOneAndUpdate(
+    { studentEmail: email },
+    { studentEmail: email, completed: true, completedAt: new Date() },
+    { upsert: true, setDefaultsOnInsert: true }
+  );
+  res.json({ success: true });
 });
 
 api.get('/leaderboard', async (req, res) => {
