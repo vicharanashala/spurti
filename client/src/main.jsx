@@ -865,6 +865,8 @@ function ChallengesView({ studentEmail, profile }) {
   const [leaveError, setLeaveError] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [newSquadName, setNewSquadName] = useState("");
+  const [showInviteSearch, setShowInviteSearch] = useState(false);
+  const lastSearchQuery = useRef("");
 
 
   const API = `${window.location.pathname.startsWith("/spurti") ? "/spurti" : ""}/api`;
@@ -954,21 +956,26 @@ function ChallengesView({ studentEmail, profile }) {
     } catch (e) { setLeaveError("Network error"); }
   }
 
-  async function handleSearch(q) {
-    setSearchQuery(q);
+  async function handleSearch() {
+    const q = searchQuery.trim();
     if (q.length < 2) { setSearchResults([]); return; }
+    lastSearchQuery.current = q;
     setSearching(true);
     try {
       const res = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
+      if (lastSearchQuery.current !== q) return; // stale response
       const data = await res.json();
+      if (lastSearchQuery.current !== q) return;
       setSearchResults(data.matches || []);
-    } catch (e) { /* ignore */ } finally { setSearching(false); }
+    } catch (e) { /* ignore */ } finally {
+      if (lastSearchQuery.current === q) setSearching(false);
+    }
   }
 
-  async function handleInvite(id) {
+  async function handleInvite(item) {
     setError("");
     try {
-      const body = { studentId: id };
+      const body = { studentId: item._id };
       const sid = profile?.student?._id;
       const em = profile?.student?.email;
       if (sid && em) { body.senderStudentId = sid; body.senderEmail = em; }
@@ -982,6 +989,7 @@ function ChallengesView({ studentEmail, profile }) {
       setSuccess("Invite sent!");
       setSearchQuery("");
       setSearchResults([]);
+      loadSquad();
       setTimeout(() => setSuccess(""), 3000);
     } catch (e) { setError("Network error"); }
   }
@@ -1018,7 +1026,7 @@ function ChallengesView({ studentEmail, profile }) {
       const sid = profile?.student?._id;
       const em = profile?.student?.email;
       const body = { squadId: squad.id, email: targetEmail };
-      if (sid && em) { body.studentId = sid; body.email = em; }
+      if (sid && em) { body.senderStudentId = sid; body.senderEmail = em; }
       const res = await fetch(`${API}/squad/invites/${squad.id}/cancel`, {
         method: "POST", credentials: 'same-origin',
         headers: { "Content-Type": "application/json" },
@@ -1278,7 +1286,10 @@ function ChallengesView({ studentEmail, profile }) {
                   )}
                 </div>
                 {!editingName && (
-                  <button className="secondary" style={{ fontSize: "0.8em", padding: "2px 8px", flexShrink: 0 }} onClick={() => { setEditingName(true); setNewSquadName(squad.name); }}>Edit</button>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button className="secondary" style={{ fontSize: "0.8em", padding: "2px 8px" }} onClick={() => { setEditingName(true); setNewSquadName(squad.name); }}>Edit</button>
+                    <button className="secondary" style={{ fontSize: "0.8em", padding: "2px 8px", background: "#fef2f2", color: "var(--red)", borderColor: "var(--red)" }} onClick={() => setConfirmLeave(true)}>Leave</button>
+                  </div>
                 )}
               </div>
 
@@ -1287,7 +1298,10 @@ function ChallengesView({ studentEmail, profile }) {
                 <p style={{ fontWeight: 600, fontSize: "0.85em", marginBottom: 4, color: "var(--muted)" }}>Members ({squad.members.length}/{maxMembers})</p>
                 {squad.members.map((m, i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: "0.88em", borderBottom: i < squad.members.length - 1 ? "1px solid var(--line)" : "none" }}>
-                    <span>{m.name}{m.isCurrentUser ? " (you)" : ""}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 26, height: 26, borderRadius: "50%", background: "var(--primary)", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "0.75em", fontWeight: 700, flexShrink: 0 }}>{m.name.charAt(0).toUpperCase()}</span>
+                      {m.name}{m.isCurrentUser ? " (you)" : ""}
+                    </span>
                     <span style={{ fontWeight: 600, fontSize: "0.9em" }}>{m.totalSp} SP</span>
                   </div>
                 ))}
@@ -1306,41 +1320,50 @@ function ChallengesView({ studentEmail, profile }) {
                 </div>
               )}
 
-              {/* Invite Search */}
+              {/* Invite / Search */}
               {spotsLeft > 0 && (
                 <div style={{ marginBottom: 12 }}>
-                  <p style={{ fontWeight: 600, fontSize: "0.85em", marginBottom: 4, color: "var(--muted)" }}>Invite ({spotsLeft} spot{spotsLeft > 1 ? "s" : ""} left)</p>
-                  <input
-                    type="text"
-                    placeholder="Search by name or email..."
-                    value={searchQuery}
-                    onChange={e => handleSearch(e.target.value)}
-                    style={{ width: "100%", boxSizing: "border-box", padding: "6px 8px", fontSize: "0.85em" }}
-                  />
-                  {searching && <p className="muted" style={{ fontSize: "0.8em", marginTop: 4 }}>Searching...</p>}
-                  {searchResults.length > 0 && (
-                    <div style={{ marginTop: 6, maxHeight: 200, overflowY: "auto" }}>
-                      {searchResults.filter(s => {
-                        const inSquad = squad?.members?.some(m => m.maskedEmail === s.maskedEmail);
-                        const isSelf = profile?.student?.maskedEmail === s.maskedEmail;
-                        return !inSquad && !isSelf;
-                      }).map(s => (
-                        <div key={s._id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", fontSize: "0.82em", borderBottom: "1px solid var(--line)" }}>
-                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                            {s.name} — {s.maskedEmail}
-                          </span>
-                          <button className="primary" style={{ fontSize: "0.75em", padding: "2px 8px", flexShrink: 0 }} onClick={() => handleInvite(s._id)}>Invite</button>
+                  {showInviteSearch ? (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <p style={{ fontWeight: 600, fontSize: "0.85em", margin: 0, color: "var(--muted)" }}>Invite ({spotsLeft} spot{spotsLeft > 1 ? "s" : ""} left)</p>
+                        <button className="secondary" style={{ fontSize: "0.75em", padding: "1px 6px" }} onClick={() => { setShowInviteSearch(false); setSearchQuery(""); setSearchResults([]); }}>Close</button>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Search by name or email..."
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleSearch()}
+                        autoFocus
+                        style={{ width: "100%", boxSizing: "border-box", padding: "6px 8px", fontSize: "0.85em", border: "1px solid var(--line)", borderRadius: 6 }}
+                      />
+                      {searching && <p className="muted" style={{ fontSize: "0.8em", marginTop: 4 }}>Searching...</p>}
+                      <div className={`squad-search-results${searchResults.length > 0 ? ' open' : ''}`} style={{ marginTop: 6 }}>
+                        <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                          {searchResults.filter(s => {
+                            const inSquad = squad?.members?.some(m => m.maskedEmail === s.maskedEmail);
+                            const isSelf = profile?.student?.maskedEmail === s.maskedEmail;
+                            return !inSquad && !isSelf;
+                          }).map(s => (
+                            <div key={s._id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", fontSize: "0.82em", borderBottom: "1px solid var(--line)" }}>
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                                {s.name} — {s.maskedEmail}
+                              </span>
+                              <button className="primary" style={{ fontSize: "0.75em", padding: "2px 8px", minHeight: "unset", lineHeight: "24px", flexShrink: 0 }} onClick={() => handleInvite(s)}>Invite</button>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                      </div>
+                    </>
+                  ) : (
+                    <button className="primary" style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontWeight: 600 }} onClick={() => { setShowInviteSearch(true); setSearchQuery(""); setSearchResults([]); }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="8" r="4"/><path d="M2 20c0-4 3.6-7 8-7s8 3 8 7"/><path d="M18 11v6"/><path d="M21 14h-6"/></svg>
+                      Invite
+                    </button>
                   )}
                 </div>
               )}
-
-              {/* Actions */}
-              <div style={{ marginBottom: 16 }}>
-                <button className="secondary" style={{ fontSize: "0.85em", width: "100%" }} onClick={() => setConfirmLeave(true)}>Leave Squad</button>
-              </div>
 
               {/* Challenge History */}
               {squad.challengeHistory && squad.challengeHistory.length > 0 && (
@@ -1383,12 +1406,12 @@ function ChallengesView({ studentEmail, profile }) {
             </div>
           )}
           {error && (
-            <div style={{ background: "#ffebee", color: "#c62828", border: "1px solid #ef9a9a", padding: "10px 14px", borderRadius: 8, fontSize: "0.85em", marginBottom: 12, fontWeight: 600 }}>
+            <div style={{ background: "#ffebee", color: "#c62828", border: "1px solid #ef9a9a", padding: "10px 14px", borderRadius: 8, fontSize: "0.85em", marginTop: 12, marginBottom: 12, fontWeight: 600 }}>
               {error}
             </div>
           )}
           {success && (
-            <div style={{ background: "#e8f5e9", color: "#2e7d32", border: "1px solid #a5d6a7", padding: "10px 14px", borderRadius: 8, fontSize: "0.85em", marginBottom: 12, fontWeight: 600 }}>
+            <div style={{ background: "#e8f5e9", color: "#2e7d32", border: "1px solid #a5d6a7", padding: "10px 14px", borderRadius: 8, fontSize: "0.85em", marginTop: 12, marginBottom: 12, fontWeight: 600 }}>
               {success}
             </div>
           )}

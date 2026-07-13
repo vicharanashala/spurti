@@ -514,3 +514,14 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+.squad-search-results {
+  overflow: hidden;
+  transition: max-height 0.25s ease-out, opacity 0.2s ease-out;
+  max-height: 0;
+  opacity: 0;
+}
+.squad-search-results.open {
+  max-height: 200px;
+  opacity: 1;
+}
