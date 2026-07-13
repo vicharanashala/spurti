@@ -279,11 +279,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['squads','Squads']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['challenges','Challenges']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
-      {tab === 'squads' && <SquadView studentEmail={student.email} profile={profile} />}
+      {tab === 'challenges' && <ChallengesView studentEmail={student.email} profile={profile} />}
     </main>
   );
 }
@@ -848,26 +848,25 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
 }
 
 
-function SquadView({ studentEmail, profile }) {
+function ChallengesView({ studentEmail, profile }) {
   const [squad, setSquad] = useState(null);
   const [invites, setInvites] = useState([]);
+  const [sentInvites, setSentInvites] = useState([]);
+  const [challengeProgress, setChallengeProgress] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [squadName, setSquadName] = useState("");
-  const [showInvite, setShowInvite] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
-  const [pendingInviteCount, setPendingInviteCount] = useState(0);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [leaveError, setLeaveError] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [newSquadName, setNewSquadName] = useState("");
   const [confirmDisband, setConfirmDisband] = useState(false);
   const [disbandError, setDisbandError] = useState("");
-  const [sentInvites, setSentInvites] = useState([]);
 
   const API = `${window.location.pathname.startsWith("/spurti") ? "/spurti" : ""}/api`;
 
@@ -879,13 +878,8 @@ function SquadView({ studentEmail, profile }) {
       const res = await fetch(`${API}/squad/my${qs}`, { credentials: 'same-origin' });
       const data = await res.json();
       setSquad(data.squad);
-      setPendingInviteCount(data.pendingInviteCount || 0);
       setSentInvites(data.squad?.sentInvites || []);
-    } catch (e) {
-      console.error("Failed to load squad", e);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { console.error("Failed to load squad", e); }
   }
 
   async function loadInvites() {
@@ -896,14 +890,28 @@ function SquadView({ studentEmail, profile }) {
       const res = await fetch(`${API}/squad/invites${qs}`, { credentials: 'same-origin' });
       const data = await res.json();
       setInvites(data.invites || []);
-    } catch (e) {
-      console.error("Failed to load invites", e);
-    }
+    } catch (e) { console.error("Failed to load invites", e); }
+  }
+
+  async function loadChallengeProgress() {
+    try {
+      const sid = profile?.student?._id;
+      const em = profile?.student?.email;
+      const qs = sid && em ? `?studentId=${encodeURIComponent(sid)}&email=${encodeURIComponent(em)}` : '';
+      const res = await fetch(`${API}/challenges/progress${qs}`, { credentials: 'same-origin' });
+      if (res.ok) {
+        const data = await res.json();
+        setChallengeProgress(data);
+      }
+    } catch (e) { console.error("Failed to load challenge progress", e); }
   }
 
   useEffect(() => {
-    loadSquad();
-    loadInvites();
+    async function load() {
+      await Promise.all([loadSquad(), loadInvites(), loadChallengeProgress()]);
+      setLoading(false);
+    }
+    load();
   }, []);
 
   async function handleCreate() {
@@ -915,8 +923,7 @@ function SquadView({ studentEmail, profile }) {
       const em = profile?.student?.email;
       if (sid && em) { body.studentId = sid; body.email = em; }
       const res = await fetch(`${API}/squad/create`, {
-        method: "POST",
-        credentials: 'same-origin',
+        method: "POST", credentials: 'same-origin',
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
@@ -926,6 +933,7 @@ function SquadView({ studentEmail, profile }) {
       setShowCreate(false);
       setSquadName("");
       setSuccess("Squad created!");
+      loadChallengeProgress();
       setTimeout(() => setSuccess(""), 3000);
     } catch (e) { setError("Network error"); }
   }
@@ -966,8 +974,7 @@ function SquadView({ studentEmail, profile }) {
       const em = profile?.student?.email;
       if (sid && em) { body.senderStudentId = sid; body.senderEmail = em; }
       const res = await fetch(`${API}/squad/invite`, {
-        method: "POST",
-        credentials: 'same-origin',
+        method: "POST", credentials: 'same-origin',
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
@@ -988,8 +995,7 @@ function SquadView({ studentEmail, profile }) {
       const em = profile?.student?.email;
       if (sid && em) { body.studentId = sid; body.email = em; }
       const res = await fetch(`${API}/squad/invites/${squadId}/respond`, {
-        method: "POST",
-        credentials: 'same-origin',
+        method: "POST", credentials: 'same-origin',
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
@@ -999,6 +1005,7 @@ function SquadView({ studentEmail, profile }) {
         setSuccess("Joined squad!");
         setSquad(data.squad);
         loadSquad();
+        loadChallengeProgress();
       } else {
         loadInvites();
       }
@@ -1014,8 +1021,7 @@ function SquadView({ studentEmail, profile }) {
       const body = { squadId: squad.id, email: targetEmail };
       if (sid && em) { body.studentId = sid; body.email = em; }
       const res = await fetch(`${API}/squad/invites/${squad.id}/cancel`, {
-        method: "POST",
-        credentials: 'same-origin',
+        method: "POST", credentials: 'same-origin',
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
@@ -1041,8 +1047,7 @@ function SquadView({ studentEmail, profile }) {
       const body = { squadId: squad.id, name: trimmed };
       if (sid && em) { body.studentId = sid; body.email = em; }
       const res = await fetch(`${API}/squad/rename`, {
-        method: "POST",
-        credentials: 'same-origin',
+        method: "POST", credentials: 'same-origin',
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
@@ -1063,8 +1068,7 @@ function SquadView({ studentEmail, profile }) {
       const body = { squadId: squad.id };
       if (sid && em) { body.studentId = sid; body.email = em; }
       const res = await fetch(`${API}/squad/disband`, {
-        method: "POST",
-        credentials: 'same-origin',
+        method: "POST", credentials: 'same-origin',
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
@@ -1079,215 +1083,362 @@ function SquadView({ studentEmail, profile }) {
 
   const maxMembers = 5;
   const spotsLeft = squad ? maxMembers - squad.members.length : 0;
+  const cp = challengeProgress;
 
-  if (loading) return <section className="panel"><p className="muted">Loading squad...</p></section>;
+  function ProgressBar({ pct, color }) {
+    return (
+      <div style={{ background: "#eee", borderRadius: 4, height: 8, marginTop: 6, marginBottom: 8, overflow: "hidden" }}>
+        <div style={{ width: `${Math.min(100, Math.max(0, pct))}%`, background: color || "var(--green)", borderRadius: 4, height: 8, transition: "width 0.3s" }} />
+      </div>
+    );
+  }
+
+  function StatusBadge({ active, label, color }) {
+    return (
+      <span style={{
+        display: "inline-flex", alignItems: "center", gap: 4,
+        padding: "3px 10px", borderRadius: 12, fontSize: "0.8em", fontWeight: 600,
+        background: color || (active ? "#e8f5e9" : "#f5f5f5"),
+        color: color || (active ? "var(--green)" : "var(--muted)")
+      }}>
+        <span>{active ? "\u25CF" : "\u25CB"}</span>
+        {label || (active ? "Active" : "Not Enrolled")}
+      </span>
+    );
+  }
+
+  if (loading) return <section className="panel"><p className="muted">Loading challenges...</p></section>;
 
   return (
     <section className="panel">
-      <div className="panel-head">
-        <h2>My Squad</h2>
-      </div>
-
       {error && <p className="error">{error}</p>}
       {success && <p className="success">{success}</p>}
+      <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
 
-      {!squad ? (
-        <>
-          {invites.length > 0 && (
-            <div className="subpanel">
-              <h3>Pending Invites ({invites.length})</h3>
-              {invites.map(inv => (
-                <div key={inv.squadId} className="invite-row" style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--line)"}}>
-                  <div>
-                    <strong>{inv.squadName}</strong>
-                    <p className="muted">Invited by {inv.invitedByName}</p>
-                  </div>
-                  <div style={{display:"flex",gap:"8px"}}>
-                    <button className="primary" onClick={() => handleRespond(inv.squadId, "accept")}>Accept</button>
-                    <button className="secondary" onClick={() => handleRespond(inv.squadId, "reject")}>Reject</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+        {/* ── MAIN COLUMN ── */}
+        <div style={{ flex: 1, minWidth: 0 }}>
 
-          <p className="muted" style={{marginTop:16}}>You are not in a squad yet. Create your own or wait for an invite.</p>
-          <button className="primary" onClick={() => setShowCreate(true)}>Create Squad</button>
-
-          {showCreate && (
-            <div className="overlay" onClick={() => { setShowCreate(false); setSquadName(""); }}>
-              <div className="modal" onClick={e => e.stopPropagation()}>
-                <h3>Create a Squad</h3>
-                <input
-                  type="text"
-                  placeholder="Squad name..."
-                  value={squadName}
-                  onChange={e => setSquadName(e.target.value)}
-                  autoFocus
-                />
-                <div style={{display:"flex",gap:8,marginTop:12}}>
-                  <button className="primary" onClick={handleCreate}>Create</button>
-                  <button className="secondary" onClick={() => { setShowCreate(false); setSquadName(""); }}>Cancel</button>
-                </div>
+          {/* ── Squad Perfect Week Card ── */}
+          <div className="subpanel" style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: "1.4em" }}>👥</span>
+                <h3 style={{ margin: 0 }}>Squad Perfect Week</h3>
               </div>
-            </div>
-          )}
-        </>
-      ) : (
-        <>
-          <div className="squad-header" style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:16}}>
-            <div>
-              {editingName ? (
-                <input
-                  type="text"
-                  value={newSquadName}
-                  onChange={e => setNewSquadName(e.target.value)}
-                  onBlur={handleRenameSave}
-                  onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setEditingName(false); setNewSquadName(squad.name); } }}
-                  autoFocus
-                  style={{padding:'4px 8px',borderRadius:4,border:'1px solid var(--line)'}}
-                />
+              {squad ? (
+                <StatusBadge active label="Enrolled" color="#e8f5e9" />
               ) : (
-                <h3 style={{margin:0}}>{squad.name}</h3>
+                <StatusBadge active={false} label="Not Enrolled" />
               )}
-              <p className="muted">Squad Level: <strong>{squad.squadLevel}</strong> SP average</p>
             </div>
-            <div style={{display:'flex',gap:8}}>
-              {squad.createdBy === profile?.student?._id && !editingName && (
-                <button className="secondary" onClick={() => { setEditingName(true); setNewSquadName(squad.name); }}>Edit name</button>
-              )}
-              {squad.createdBy === profile?.student?._id && (
-                <button className="secondary" onClick={() => setConfirmDisband(true)}>Disband Squad</button>
-              )}
-              <button className="secondary" onClick={() => setConfirmLeave(true)}>Leave Squad</button>
-            </div>
+            <p className="muted" style={{ marginBottom: 8 }}>
+              All squad members must attend every session this week for a <strong>1.1x SP boost</strong> for everyone!
+            </p>
+
+            {!squad ? (
+              <div>
+                <p className="muted" style={{ fontSize: "0.9em", marginBottom: 12 }}>
+                  {invites.length > 0 ? "You have pending invites. Check your sidebar or create your own squad." : "Create a squad and invite friends to unlock this challenge."}
+                </p>
+                <button className="primary" onClick={() => setShowCreate(true)}>Create Squad</button>
+              </div>
+            ) : (
+              <>
+                {squad.challengeStatus && squad.challengeStatus.sessions.length > 0 ? (
+                  <>
+                    <p style={{ fontWeight: 600, fontSize: "0.9em", marginBottom: 8 }}>This Week\u2019s Progress</p>
+                    {squad.challengeStatus.sessions.map(s => (
+                      <div key={s.label} style={{ marginBottom: 8 }}>
+                        <p style={{ fontSize: "0.85em", fontWeight: 600, marginBottom: 4 }}>{s.label}</p>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {s.memberAttendance.map((m, i) => (
+                            <span key={i} style={{
+                              padding: "2px 8px", borderRadius: 4, fontSize: "0.85em",
+                              background: m.qualified === true ? "var(--green)" : m.qualified === false ? "var(--red)" : "#eef2f7",
+                              color: m.qualified != null ? "#fff" : "var(--muted)"
+                            }}>
+                              {m.name}: {m.qualified === true ? "\u2705" : m.qualified === false ? "\u274C" : "\u2014"}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                ) : (
+                  <p className="muted" style={{ fontSize: "0.9em" }}>
+                    {squad.challengeLockedUntil && new Date(squad.challengeLockedUntil) > new Date()
+                      ? "Challenge locks next Monday. Squad is ready!"
+                      : "No sessions scheduled this week. The challenge will activate when sessions begin."}
+                  </p>
+                )}
+                {squad.challengeStatus && squad.challengeStatus.sessions.length === 0 && squad.challengeLockedUntil && new Date(squad.challengeLockedUntil) > new Date() && (
+                  <p className="muted" style={{ fontSize: "0.9em" }}>
+                    Locked until {new Date(squad.challengeLockedUntil).toLocaleDateString()}
+                  </p>
+                )}
+              </>
+            )}
           </div>
 
-          <div className="subpanel">
-            <h3>Members ({squad.members.length}/{maxMembers})</h3>
-            <table className="table">
-              <thead><tr><th>Name</th><th>SP</th><th>Joined</th></tr></thead>
-              <tbody>
-                {squad.members.map((m, i) => (
-                  <tr key={i} className={m.isCurrentUser ? "current-student" : ""}>
-                    <td>{m.name}{m.isCurrentUser ? " (you)" : ""}</td>
-                    <td>{m.totalSp}</td>
-                    <td>{new Date(m.joinedAt).toLocaleDateString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {sentInvites.length > 0 && (
-            <div className="subpanel">
-              <h3>Sent Invites ({sentInvites.length})</h3>
-              {sentInvites.map(inv => (
-                <div key={inv.email} className="invite-row" style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--line)"}}>
-                  <span>{inv.email}</span>
-                  <button className="secondary" style={{color:'var(--red)',borderColor:'var(--red)'}} onClick={() => handleCancelInvite(inv.email)}>Cancel</button>
+          {/* ── Individual Perfect Week Card ── */}
+          <div className="subpanel" style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: "1.4em" }}>⭐</span>
+                <h3 style={{ margin: 0 }}>Perfect Week</h3>
+              </div>
+              <StatusBadge active label="Active" />
+            </div>
+            <p className="muted" style={{ marginBottom: 8 }}>
+              Attend every session this week. Consistency pays off!
+            </p>
+            {cp && cp.individualPerfectWeek.total > 0 ? (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.95em" }}>
+                    {cp.individualPerfectWeek.attended}/{cp.individualPerfectWeek.total} sessions
+                  </span>
+                  <span style={{ fontWeight: 700, fontSize: "1em", color: cp.individualPerfectWeek.allQualified ? "var(--green)" : "var(--muted)" }}>
+                    {Math.round(cp.individualPerfectWeek.attended / cp.individualPerfectWeek.total * 100)}%
+                  </span>
                 </div>
-              ))}
-            </div>
-          )}
+                <ProgressBar pct={(cp.individualPerfectWeek.attended / cp.individualPerfectWeek.total) * 100} color={cp.individualPerfectWeek.allQualified ? "var(--green)" : "#ff9800"} />
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                  {cp.currentWeekSessions.map(s => {
+                    const att = cp.myAttendance[s.label];
+                    const q = att?.qualified;
+                    return (
+                      <span key={s.label} style={{
+                        padding: "2px 10px", borderRadius: 12, fontSize: "0.85em",
+                        background: q === true ? "#e8f5e9" : q === false ? "#ffebee" : "#f5f5f5",
+                        color: q === true ? "var(--green)" : q === false ? "var(--red)" : "var(--muted)"
+                      }}>
+                        {q === true ? "\u2705" : q === false ? "\u274C" : "\u23F3"} {s.label}
+                      </span>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              <p className="muted" style={{ fontSize: "0.9em" }}>No sessions scheduled this week. Check back when sessions start!</p>
+            )}
+          </div>
 
-          {spotsLeft > 0 && (
+          {/* ── Attendance Streak Card ── */}
+          <div className="subpanel" style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: "1.4em" }}>🔥</span>
+                <h3 style={{ margin: 0 }}>Attendance Streak</h3>
+              </div>
+              <StatusBadge active label="Active" />
+            </div>
+            <p className="muted" style={{ marginBottom: 8 }}>
+              Consecutive qualified sessions. Don\u2019t break the chain!
+            </p>
+            {cp && (
+              <>
+                <div style={{ display: "flex", gap: 24, marginBottom: 4 }}>
+                  <div>
+                    <span style={{ fontSize: "1.3em", fontWeight: 700, color: "var(--green)" }}>{cp.attendanceStreak.current}</span>
+                    <span className="muted" style={{ fontSize: "0.85em", marginLeft: 4 }}>Current</span>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: "1.3em", fontWeight: 700, color: "var(--muted)" }}>{cp.attendanceStreak.longest}</span>
+                    <span className="muted" style={{ fontSize: "0.85em", marginLeft: 4 }}>Best</span>
+                  </div>
+                </div>
+                {cp.attendanceStreak.longest > 0 && (
+                  <ProgressBar pct={(cp.attendanceStreak.current / cp.attendanceStreak.longest) * 100} color={cp.attendanceStreak.current >= cp.attendanceStreak.longest ? "var(--green)" : "#ff9800"} />
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* ── SIDEBAR ── */}
+        <div style={{ width: 320, flexShrink: 0 }}>
+          {squad ? (
             <div className="subpanel">
-              <h3>Invite Members ({spotsLeft} spot{spotsLeft > 1 ? "s" : ""} left)</h3>
-              <input
-                type="text"
-                placeholder="Search by name or email..."
-                value={searchQuery}
-                onChange={e => handleSearch(e.target.value)}
-              />
-              {searching && <p className="muted">Searching...</p>}
-              {searchResults.length > 0 && (
-                <div style={{marginTop:8}}>
-                  {searchResults.filter(s => {
-                    const inSquad = squad?.members?.some(m => m.maskedEmail === s.maskedEmail);
-                    const isSelf = profile?.student?.maskedEmail === s.maskedEmail;
-                    return !inSquad && !isSelf;
-                  }).map(s => (
-                    <div key={s._id} className="invite-row" style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--line)"}}>
-                      <span>{s.name} — {s.maskedEmail} ({s.totalSp} SP)</span>
-                      <button className="primary" onClick={() => handleInvite(s._id)}>Invite</button>
+              {/* Squad Header */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {editingName ? (
+                    <input
+                      type="text"
+                      value={newSquadName}
+                      onChange={e => setNewSquadName(e.target.value)}
+                      onBlur={handleRenameSave}
+                      onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setEditingName(false); setNewSquadName(squad.name); } }}
+                      autoFocus
+                      style={{ width: "100%", boxSizing: "border-box", padding: "4px 8px", borderRadius: 4, border: "1px solid var(--line)", fontSize: "0.9em" }}
+                    />
+                  ) : (
+                    <>
+                      <h3 style={{ margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{squad.name}</h3>
+                      <p className="muted" style={{ margin: 0, fontSize: "0.85em" }}>Level: {squad.squadLevel} SP avg</p>
+                    </>
+                  )}
+                </div>
+                {squad.createdBy === profile?.student?._id && !editingName && (
+                  <button className="secondary" style={{ fontSize: "0.8em", padding: "2px 8px", flexShrink: 0 }} onClick={() => { setEditingName(true); setNewSquadName(squad.name); }}>Edit</button>
+                )}
+              </div>
+
+              {/* Members */}
+              <div style={{ marginBottom: 12 }}>
+                <p style={{ fontWeight: 600, fontSize: "0.85em", marginBottom: 4, color: "var(--muted)" }}>Members ({squad.members.length}/{maxMembers})</p>
+                {squad.members.map((m, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: "0.88em", borderBottom: i < squad.members.length - 1 ? "1px solid var(--line)" : "none" }}>
+                    <span>{m.name}{m.isCurrentUser ? " (you)" : ""}</span>
+                    <span style={{ fontWeight: 600, fontSize: "0.9em" }}>{m.totalSp} SP</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Sent Invites */}
+              {sentInvites.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <p style={{ fontWeight: 600, fontSize: "0.85em", marginBottom: 4, color: "var(--muted)" }}>Sent Invites</p>
+                  {sentInvites.map(inv => (
+                    <div key={inv.email} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", fontSize: "0.85em" }}>
+                      <span style={{ color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{inv.email}</span>
+                      <button className="secondary" style={{ fontSize: "0.75em", padding: "1px 6px", color: "var(--red)", borderColor: "var(--red)", flexShrink: 0 }} onClick={() => handleCancelInvite(inv.email)}>Cancel</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Invite Search */}
+              {spotsLeft > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <p style={{ fontWeight: 600, fontSize: "0.85em", marginBottom: 4, color: "var(--muted)" }}>Invite ({spotsLeft} spot{spotsLeft > 1 ? "s" : ""} left)</p>
+                  <input
+                    type="text"
+                    placeholder="Search by name or email..."
+                    value={searchQuery}
+                    onChange={e => handleSearch(e.target.value)}
+                    style={{ width: "100%", boxSizing: "border-box", padding: "6px 8px", fontSize: "0.85em" }}
+                  />
+                  {searching && <p className="muted" style={{ fontSize: "0.8em", marginTop: 4 }}>Searching...</p>}
+                  {searchResults.length > 0 && (
+                    <div style={{ marginTop: 6, maxHeight: 200, overflowY: "auto" }}>
+                      {searchResults.filter(s => {
+                        const inSquad = squad?.members?.some(m => m.maskedEmail === s.maskedEmail);
+                        const isSelf = profile?.student?.maskedEmail === s.maskedEmail;
+                        return !inSquad && !isSelf;
+                      }).map(s => (
+                        <div key={s._id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", fontSize: "0.82em", borderBottom: "1px solid var(--line)" }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                            {s.name} — {s.maskedEmail}
+                          </span>
+                          <button className="primary" style={{ fontSize: "0.75em", padding: "2px 8px", flexShrink: 0 }} onClick={() => handleInvite(s._id)}>Invite</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Actions */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                <button className="secondary" style={{ fontSize: "0.85em", flex: 1 }} onClick={() => setConfirmLeave(true)}>Leave Squad</button>
+                {squad.createdBy === profile?.student?._id && (
+                  <button className="secondary" style={{ fontSize: "0.85em", flex: 1 }} onClick={() => setConfirmDisband(true)}>Disband</button>
+                )}
+              </div>
+
+              {/* Challenge History */}
+              {squad.challengeHistory && squad.challengeHistory.length > 0 && (
+                <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+                  <p style={{ fontWeight: 600, fontSize: "0.85em", marginBottom: 6, color: "var(--muted)" }}>Challenge History</p>
+                  {squad.challengeHistory.slice(-5).reverse().map((c, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: "0.85em" }}>
+                      <span>{new Date(c.weekStart).toLocaleDateString()}</span>
+                      <span style={{ color: c.status === "completed" ? "var(--green)" : "var(--red)" }}>
+                        {c.status === "completed" ? "\u2705" : "\u274C"} {c.status}
+                      </span>
                     </div>
                   ))}
                 </div>
               )}
             </div>
-          )}
-
-          {squad.challengeStatus && squad.challengeStatus.sessions.length > 0 && (
+          ) : (
             <div className="subpanel">
-              <h3>Weekly Challenge</h3>
-              <p className="muted">All members must attend every session this week for a 1.1x SP boost</p>
-              {squad.challengeStatus.sessions.map(s => (
-                <div key={s.label} style={{marginBottom:12}}>
-                  <strong>{s.label}</strong>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:4}}>
-                    {s.memberAttendance.map((m, i) => (
-                      <span key={i} style={{
-                        padding:"2px 8px",
-                        borderRadius:4,
-                        fontSize:"0.85em",
-                        background: m.qualified === true ? "var(--green)" : m.qualified === false ? "var(--red)" : "#eef2f7",
-                        color: m.qualified != null ? "#fff" : "var(--muted)"
-                      }}>
-                        {m.name}: {m.qualified === true ? "✅" : m.qualified === false ? "❌" : "—"}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {squad.challengeHistory && squad.challengeHistory.length > 0 && (
-            <div className="subpanel">
-              <h3>Challenge History</h3>
-              <table className="table">
-                <thead><tr><th>Week</th><th>Status</th><th>Completed</th></tr></thead>
-                <tbody>
-                  {squad.challengeHistory.slice(-5).reverse().map((c, i) => (
-                    <tr key={i}>
-                      <td>{new Date(c.weekStart).toLocaleDateString()}</td>
-                      <td style={{color: c.status === "completed" ? "var(--green)" : "var(--red)"}}>{c.status === "completed" ? "✅ Completed" : "❌ Failed"}</td>
-                      <td>{new Date(c.completedAt).toLocaleDateString()}</td>
-                    </tr>
+              <h3 style={{ margin: 0, marginBottom: 8 }}>My Squad</h3>
+              {invites.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <p style={{ fontWeight: 600, fontSize: "0.85em", marginBottom: 6, color: "var(--muted)" }}>Pending Invites</p>
+                  {invites.map(inv => (
+                    <div key={inv.squadId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontWeight: 600, fontSize: "0.9em", margin: 0 }}>{inv.squadName}</p>
+                        <p className="muted" style={{ margin: 0, fontSize: "0.8em" }}>by {inv.invitedByName}</p>
+                      </div>
+                      <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                        <button className="primary" style={{ fontSize: "0.8em", padding: "3px 8px" }} onClick={() => handleRespond(inv.squadId, "accept")}>Accept</button>
+                        <button className="secondary" style={{ fontSize: "0.8em", padding: "3px 8px" }} onClick={() => handleRespond(inv.squadId, "reject")}>Reject</button>
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {confirmLeave && (
-            <div className="overlay" onClick={() => { setConfirmLeave(false); setLeaveError(""); }}>
-              <div className="modal" onClick={e => e.stopPropagation()}>
-                <h3>Leave Squad?</h3>
-                <p>Are you sure you want to leave {squad.name}?</p>
-                {leaveError && <p className="error" style={{marginTop:8}}>{leaveError}</p>}
-                <div style={{display:"flex",gap:8,marginTop:12}}>
-                  <button className="primary" onClick={handleLeave}>Yes, Leave</button>
-                  <button className="secondary" onClick={() => { setConfirmLeave(false); setLeaveError(""); }}>Cancel</button>
                 </div>
-              </div>
+              )}
+              <p className="muted" style={{ fontSize: "0.9em", marginBottom: 0 }}>
+                {invites.length > 0 ? "Accept an invite above or create your own squad to unlock squad challenges!" : "Create or join a squad to unlock squad challenges!"}
+              </p>
             </div>
           )}
+        </div>
+      </div>
 
-          {confirmDisband && (
-            <div className="overlay" onClick={() => { setConfirmDisband(false); setDisbandError(""); }}>
-              <div className="modal" onClick={e => e.stopPropagation()}>
-                <h3>Disband Squad?</h3>
-                <p>This will permanently remove all members and delete <strong>{squad.name}</strong>. This cannot be undone.</p>
-                {disbandError && <p className="error" style={{marginTop:8}}>{disbandError}</p>}
-                <div style={{display:"flex",gap:8,marginTop:12}}>
-                  <button className="primary" style={{background:'var(--red)'}} onClick={handleDisband}>Disband</button>
-                  <button className="secondary" onClick={() => { setConfirmDisband(false); setDisbandError(""); }}>Cancel</button>
-                </div>
-              </div>
+      {/* ── Create Squad Modal ── */}
+      {showCreate && (
+        <div className="overlay" onClick={() => { setShowCreate(false); setSquadName(""); }}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Create a Squad</h3>
+            <input
+              type="text"
+              placeholder="Squad name..."
+              value={squadName}
+              onChange={e => setSquadName(e.target.value)}
+              autoFocus
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button className="primary" onClick={handleCreate}>Create</button>
+              <button className="secondary" onClick={() => { setShowCreate(false); setSquadName(""); }}>Cancel</button>
             </div>
-          )}
-        </>
+          </div>
+        </div>
+      )}
+
+      {/* ── Leave Confirmation Modal ── */}
+      {confirmLeave && (
+        <div className="overlay" onClick={() => { setConfirmLeave(false); setLeaveError(""); }}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Leave Squad?</h3>
+            <p>Are you sure you want to leave {squad?.name}?</p>
+            {leaveError && <p className="error" style={{ marginTop: 8 }}>{leaveError}</p>}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button className="primary" onClick={handleLeave}>Yes, Leave</button>
+              <button className="secondary" onClick={() => { setConfirmLeave(false); setLeaveError(""); }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Disband Confirmation Modal ── */}
+      {confirmDisband && (
+        <div className="overlay" onClick={() => { setConfirmDisband(false); setDisbandError(""); }}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Disband Squad?</h3>
+            <p>This will permanently remove all members and delete <strong>{squad?.name}</strong>. This cannot be undone.</p>
+            {disbandError && <p className="error" style={{ marginTop: 8 }}>{disbandError}</p>}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button className="primary" style={{ background: "var(--red)" }} onClick={handleDisband}>Disband</button>
+              <button className="secondary" onClick={() => { setConfirmDisband(false); setDisbandError(""); }}>Cancel</button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );

@@ -646,6 +646,101 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   });
 });
 
+// ── Challenges API ───────────────────────────────────────────────────────
+
+api.get('/challenges/progress', async (req, res) => {
+  const email = await squadEmail(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ email }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - daysSinceMonday);
+  weekStart.setHours(0, 0, 0, 0);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  weekEnd.setHours(23, 59, 59, 999);
+
+  const currentWeekSessions = await Session.find({
+    startDateTime: { $gte: weekStart, $lte: weekEnd }
+  }).sort({ startDateTime: 1 }).lean();
+
+  const sessionLabels = currentWeekSessions.map(s => s.label);
+
+  const myAttendance = await AttendanceRecord.find({
+    email,
+    sessionLabel: { $in: sessionLabels }
+  }).lean();
+
+  const attendanceMap = {};
+  for (const a of myAttendance) {
+    attendanceMap[a.sessionLabel] = {
+      qualified: a.qualified,
+      attendedMinutes: a.attendedMinutes,
+      attendancePercentage: a.attendancePercentage
+    };
+  }
+
+  const completedSessions = [];
+  const missedSessions = [];
+  for (const s of currentWeekSessions) {
+    if (attendanceMap[s.label]?.qualified) {
+      completedSessions.push(s.label);
+    } else {
+      missedSessions.push(s.label);
+    }
+  }
+
+  const allAttendance = await AttendanceRecord.find({ email }).lean();
+  const allSessionLabels = [...new Set(allAttendance.map(a => a.sessionLabel))];
+  const allSessions = await Session.find({
+    label: { $in: allSessionLabels }
+  }).sort({ startDateTime: 1 }).lean();
+
+  const sessionOrder = {};
+  allSessions.forEach((s, i) => { sessionOrder[s.label] = i; });
+
+  const sortedAttendance = [...allAttendance].sort((a, b) =>
+    (sessionOrder[a.sessionLabel] || 0) - (sessionOrder[b.sessionLabel] || 0)
+  );
+
+  let currentStreak = 0;
+  for (let i = sortedAttendance.length - 1; i >= 0; i--) {
+    if (sortedAttendance[i].qualified) currentStreak++;
+    else break;
+  }
+
+  let longestStreak = 0;
+  let tempStreak = 0;
+  for (const a of sortedAttendance) {
+    if (a.qualified) { tempStreak++; longestStreak = Math.max(longestStreak, tempStreak); }
+    else tempStreak = 0;
+  }
+
+  res.json({
+    currentWeekSessions: currentWeekSessions.map(s => ({
+      label: s.label,
+      startDateTime: s.startDateTime,
+      type: s.type
+    })),
+    myAttendance: attendanceMap,
+    individualPerfectWeek: {
+      attended: completedSessions.length,
+      total: currentWeekSessions.length,
+      completedSessions,
+      missedSessions,
+      allQualified: currentWeekSessions.length > 0 && missedSessions.length === 0
+    },
+    attendanceStreak: {
+      current: currentStreak,
+      longest: longestStreak
+    }
+  });
+});
+
 // ── Squad API ────────────────────────────────────────────────────────────
 
 api.get('/squad/my', async (req, res) => {
