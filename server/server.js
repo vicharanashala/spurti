@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { computeLearningMap } from './services/learningMap.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -175,13 +176,28 @@ function excusedPayload(student) {
   };
 }
 
+// Loads the auxiliary records (transactions / attendance / polls / sessions)
+// needed to compute the weekly learning map. Sessions are fetched once because
+// they are shared across all students.
+async function learningMapFor(student) {
+  const email = student.email;
+  const [transactions, attendance, polls, sessions] = await Promise.all([
+    SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
+    AttendanceRecord.find({ email }).lean(),
+    PollRecord.find({ email }).lean(),
+    Session.find().sort({ endDateTime: 1 }).lean()
+  ]);
+  return computeLearningMap(student, { transactions, attendance, polls, sessions });
+}
+
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, sessions, rankInfo, leaderboard, allStudents] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
+    Session.find().sort({ endDateTime: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
@@ -230,6 +246,7 @@ async function studentPayload(student) {
     transactions,
     polls,
     attendance,
+    sessions,
     cohort: {
       averageSp,
       top10Cutoff,
@@ -267,7 +284,7 @@ api.get('/me', async (req, res) => {
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
-  res.json({ authenticated: true, profile: await studentPayload(student) });
+  res.json({ authenticated: true, profile: await studentPayload(student), learningMap: await learningMapFor(student) });
 });
 
 api.get('/search', async (req, res) => {
@@ -279,7 +296,7 @@ api.get('/search', async (req, res) => {
     const email = normalizeEmail(q);
     const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
     if (student?.status === 'excused') return res.json(excusedPayload(student));
-    if (student) return res.json({ exact: true, profile: await studentPayload(student) });
+    if (student) return res.json({ exact: true, profile: await studentPayload(student), learningMap: await learningMapFor(student) });
   }
 
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -304,7 +321,7 @@ api.post('/confirm', async (req, res) => {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
-  res.json(await studentPayload(student));
+  res.json({ ...(await studentPayload(student)), learningMap: await learningMapFor(student) });
 });
 
 api.get('/leaderboard', async (req, res) => {
@@ -320,6 +337,17 @@ api.get('/leaderboard', async (req, res) => {
     level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
     trophyLeague: leagueBand(s.totalSp)
   })));
+});
+
+// Learning Map — derived view over Student.totalSp + highestSpEver.
+// Returns the same shape as `learningMap` in /api/me, so the client can use
+// either source interchangeably.
+api.get('/learningmap', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  res.json(await learningMapFor(student));
 });
 
 api.post('/ping', async (req, res) => {

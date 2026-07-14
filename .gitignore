@@ -1,24 +1,56 @@
+# --- Node ---
 node_modules/
 dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# --- Env / secrets ---
 .env
 .env.*
 !.env.example
 !.env.ssh.example
-.DS_Store
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
-# raw uploaded session data (not source)
+# --- Local data and DB ---
+# Raw uploaded session data (not source)
 data/uploads/
-
-# editor backups
-*.bak
-*.bak.*
-
-# pipeline secrets — never commit
+# Local Mongo storage (WiredTiger files). Never commit.
+mongo-data/
+# Local-only archive of pre-redaction real data. Never commit.
+data/.archived-*/
+# Pipeline secrets
 pipeline/.env
 
-# runtime log + local DB backups (not for the repo)
+# --- Runtime / dev artifacts ---
+# Local dev server logs
+.run.log
+.build.log
 server.log
+# Local DB backups / extractions
 sp-runs/
+# Ad-hoc scripts and synthetic tests
+server/scripts/__tests__/
+server/scripts/test-*.mjs
+server/scripts/*.test.mjs
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Editor backups ---
+*.bak
+*.bak.*
+*.tmp
+*.orig
+
+# --- Build outputs (Vite already writes here, but be explicit) ---
+client/dist/
+
+# --- Coverage / test reports ---
+coverage/
+.nyc_output/
