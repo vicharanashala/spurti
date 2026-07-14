@@ -1072,197 +1072,99 @@ function ChallengesView({ studentEmail, profile }) {
   const spotsLeft = squad ? maxMembers - squad.members.length : 0;
   const cp = challengeProgress;
 
-  function ProgressBar({ pct, color }) {
+  function ProgressBar({ pct, colorClass = "progress-green" }) {
     return (
-      <div style={{ background: "#eee", borderRadius: 4, height: 8, marginTop: 6, marginBottom: 8, overflow: "hidden" }}>
-        <div style={{ width: `${Math.min(100, Math.max(0, pct))}%`, background: color || "var(--green)", borderRadius: 4, height: 8, transition: "width 0.3s" }} />
+      <div className="progress-bar">
+        <div className={colorClass} style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
       </div>
     );
   }
 
+  function ChallengeCard({ title, subtitle, badge, badgeVariant, action, children }) {
+    return (
+      <div className="challenge-card">
+        <div className="challenge-card-content">
+          <div className="challenge-card-header">
+            <h3>{title}</h3>
+            {subtitle && <p className="muted">{subtitle}</p>}
+          </div>
+          <div className="challenge-card-body">
+            {children}
+          </div>
+          <div className="challenge-card-footer">
+            {badge && <span className={`badge badge-${badgeVariant || 'inactive'}`}>{badge}</span>}
+            {action}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) return <section className="panel"><p className="muted">Loading challenges...</p></section>;
 
   return (
     <section className="panel">
-      <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
-
-        {/* ── MAIN COLUMN ── */}
-        <div style={{ flex: 1, minWidth: 0 }}>
+      <div className="challenges-grid">
+        <div className="challenge-cards">
 
           {/* ── Squad Perfect Week Card ── */}
-          <div style={{ borderRadius: 10, background: "#fff", border: "1px solid var(--line)", overflow: "hidden", marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
-            <div style={{ height: 4, background: "linear-gradient(90deg, #4a90d9, #7bb3e0)" }} />
-            <div style={{ padding: 18 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: "1.6em" }}>👥</span>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: "1.1em" }}>Squad Perfect Week</h3>
-                    <p className="muted" style={{ margin: 0, fontSize: "0.8em" }}>Co-op challenge with your squad</p>
-                  </div>
-                </div>
-                {squad ? (
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 12px", borderRadius: 20, fontSize: "0.8em", fontWeight: 600, background: "#e3f2fd", color: "#1565c0" }}>
-                    <span style={{ fontSize: "0.6em" }}>●</span> Enrolled
-                  </span>
-                ) : (
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 12px", borderRadius: 20, fontSize: "0.8em", fontWeight: 600, background: "#f5f5f5", color: "#9e9e9e" }}>
-                    <span style={{ fontSize: "0.6em" }}>○</span> Not Enrolled
-                  </span>
-                )}
-              </div>
-              <p style={{ fontSize: "0.88em", color: "#555", marginBottom: 14, lineHeight: 1.5 }}>
-                All squad members must attend every session this week for a <strong style={{ color: "#1565c0" }}>1.1x SP boost</strong> for everyone!
-              </p>
-
-              {!squad ? (
-                <div>
-                  <p style={{ fontSize: "0.85em", color: "#888", marginBottom: 12, lineHeight: 1.4 }}>
-                    {invites.length > 0 ? "You have pending invites. Check your sidebar or create your own squad." : "Create a squad and invite friends to unlock this challenge."}
-                  </p>
-                  <button className="primary" onClick={() => setShowCreate(true)} style={{ background: "#4a90d9", border: "none", padding: "8px 20px", borderRadius: 8, color: "#fff", fontWeight: 600, cursor: "pointer" }}>Create Squad</button>
+          <ChallengeCard
+            title="Squad Perfect Week"
+            subtitle="All squad members must attend every session this week for a 1.1x SP boost for everyone."
+            badge={squad ? "Enrolled" : "Not Enrolled"}
+            badgeVariant={squad ? "active" : "inactive"}
+            action={
+              <button
+                className="primary"
+                onClick={() => !squad && setShowCreate(true)}
+                disabled={!!squad}
+              >
+                {squad ? "JOINED" : "JOIN"}
+              </button>
+            }
+          >
+            {squad ? (
+              squad.challengeStatus && squad.challengeStatus.sessions.length > 0 ? (
+                <div className="challenge-progress-list">
+                  {squad.challengeStatus.sessions.map(s => (
+                    <div key={s.label} className="challenge-progress-item">
+                      <span>{s.label}</span>
+                      <span>{s.memberAttendance.filter(m => m.qualified === true).length}/{s.memberAttendance.length} qualified</span>
+                    </div>
+                  ))}
                 </div>
               ) : (
-                <>
-                  {squad.challengeStatus && squad.challengeStatus.sessions.length > 0 ? (
-                    <>
-                      <p style={{ fontWeight: 600, fontSize: "0.9em", marginBottom: 10, color: "#333" }}>This Week's Progress</p>
-                      {squad.challengeStatus.sessions.map(s => (
-                        <div key={s.label} style={{ marginBottom: 10, padding: "8px 10px", background: "#f8f9fa", borderRadius: 8 }}>
-                          <p style={{ fontSize: "0.82em", fontWeight: 600, marginBottom: 6, color: "#555" }}>{s.label}</p>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                            {s.memberAttendance.map((m, i) => (
-                              <span key={i} style={{
-                                padding: "3px 10px", borderRadius: 6, fontSize: "0.82em", fontWeight: 500,
-                                background: m.qualified === true ? "#e8f5e9" : m.qualified === false ? "#ffebee" : "#eef2f7",
-                                color: m.qualified === true ? "#2e7d32" : m.qualified === false ? "#c62828" : "#9e9e9e"
-                              }}>
-                                {m.name}: {m.qualified === true ? "\u2713" : m.qualified === false ? "\u2717" : "\u2014"}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </>
-                  ) : (
-                    <div style={{ padding: "12px 14px", background: "#fff8e1", borderRadius: 8, fontSize: "0.85em", color: "#f57f17", lineHeight: 1.4 }}>
-                      <span style={{ fontWeight: 600 }}>⏳ Waiting for sessions</span><br />
-                      {squad.challengeLockedUntil && new Date(squad.challengeLockedUntil) > new Date()
-                        ? "Challenge locks next Monday. Squad is ready!"
-                        : "No sessions scheduled this week. The challenge will activate when sessions begin."}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
+                <p className="muted">No sessions scheduled this week. The challenge will activate when sessions begin.</p>
+              )
+            ) : (
+              <p className="muted">Create or join a squad to participate in the weekly challenge.</p>
+            )}
+          </ChallengeCard>
 
           {/* ── Individual Perfect Week Card ── */}
-          <div style={{ borderRadius: 10, background: "#fff", border: "1px solid var(--line)", overflow: "hidden", marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
-            <div style={{ height: 4, background: "linear-gradient(90deg, #9b59b6, #c39bd3)" }} />
-            <div style={{ padding: 18 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: "1.6em" }}>⭐</span>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: "1.1em" }}>Perfect Week</h3>
-                    <p className="muted" style={{ margin: 0, fontSize: "0.8em" }}>Individual attendance challenge</p>
-                  </div>
+          <ChallengeCard
+            title="Perfect Week"
+            subtitle="Attend every session this week. Consistency pays off!"
+            badge="Active"
+            badgeVariant="active"
+            action={<button className="primary">JOIN</button>}
+          >
+            {cp && cp.individualPerfectWeek.total > 0 ? (
+              <div>
+                <div className="challenge-progress-summary">
+                  <span>{cp.individualPerfectWeek.attended}/{cp.individualPerfectWeek.total} sessions</span>
+                  <span>{Math.round(cp.individualPerfectWeek.attended / cp.individualPerfectWeek.total * 100)}%</span>
                 </div>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 12px", borderRadius: 20, fontSize: "0.8em", fontWeight: 600, background: "#f3e5f5", color: "#7b1fa2" }}>
-                  <span style={{ fontSize: "0.6em" }}>●</span> Active
-                </span>
+                <ProgressBar pct={(cp.individualPerfectWeek.attended / cp.individualPerfectWeek.total) * 100} color="#555" />
               </div>
-              <p style={{ fontSize: "0.88em", color: "#555", marginBottom: 14, lineHeight: 1.5 }}>
-                Attend every session this week. Consistency pays off!
-              </p>
-              {cp && cp.individualPerfectWeek.total > 0 ? (
-                <>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                    <span style={{ fontWeight: 600, fontSize: "1em" }}>
-                      <span style={{ color: cp.individualPerfectWeek.allQualified ? "#2e7d32" : "#f57f17" }}>{cp.individualPerfectWeek.attended}</span>
-                      <span style={{ color: "#999" }}>/{cp.individualPerfectWeek.total}</span> sessions
-                    </span>
-                    <span style={{ fontWeight: 700, fontSize: "1.1em", color: cp.individualPerfectWeek.allQualified ? "#2e7d32" : "#f57f17" }}>
-                      {Math.round(cp.individualPerfectWeek.attended / cp.individualPerfectWeek.total * 100)}%
-                    </span>
-                  </div>
-                  <ProgressBar pct={(cp.individualPerfectWeek.attended / cp.individualPerfectWeek.total) * 100} color={cp.individualPerfectWeek.allQualified ? "#2e7d32" : "#f57f17"} />
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                    {cp.currentWeekSessions.map(s => {
-                      const att = cp.myAttendance[s.label];
-                      const q = att?.qualified;
-                      return (
-                        <span key={s.label} style={{
-                          padding: "4px 12px", borderRadius: 20, fontSize: "0.82em", fontWeight: 500,
-                          background: q === true ? "#e8f5e9" : q === false ? "#ffebee" : "#f5f5f5",
-                          color: q === true ? "#2e7d32" : q === false ? "#c62828" : "#9e9e9e",
-                          border: q === true ? "1px solid #a5d6a7" : q === false ? "1px solid #ef9a9a" : "1px solid #e0e0e0"
-                        }}>
-                          {q === true ? "\u2713" : q === false ? "\u2717" : "\u23F3"} {s.label}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </>
-              ) : (
-                <div style={{ padding: "12px 14px", background: "#f3e5f5", borderRadius: 8, fontSize: "0.85em", color: "#7b1fa2", lineHeight: 1.4 }}>
-                  No sessions scheduled this week. Check back when sessions start!
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ── Attendance Streak Card ── */}
-          <div style={{ borderRadius: 10, background: "#fff", border: "1px solid var(--line)", overflow: "hidden", marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
-            <div style={{ height: 4, background: "linear-gradient(90deg, #ff9800, #ffb74d)" }} />
-            <div style={{ padding: 18 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: "1.6em" }}>🔥</span>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: "1.1em" }}>Attendance Streak</h3>
-                    <p className="muted" style={{ margin: 0, fontSize: "0.8em" }}>Consecutive qualified sessions</p>
-                  </div>
-                </div>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 12px", borderRadius: 20, fontSize: "0.8em", fontWeight: 600, background: "#fff3e0", color: "#e65100" }}>
-                  <span style={{ fontSize: "0.6em" }}>●</span> Active
-                </span>
-              </div>
-              <p style={{ fontSize: "0.88em", color: "#555", marginBottom: 14, lineHeight: 1.5 }}>
-                Consecutive qualified sessions. Don't break the chain!
-              </p>
-              {cp && (
-                <>
-                  <div style={{ display: "flex", gap: 32, marginBottom: 10, alignItems: "baseline" }}>
-                    <div style={{ textAlign: "center" }}>
-                      <div style={{ fontSize: "2em", fontWeight: 700, color: "#e65100", lineHeight: 1 }}>{cp.attendanceStreak.current}</div>
-                      <div style={{ fontSize: "0.8em", color: "#999", marginTop: 2 }}>Current</div>
-                    </div>
-                    <div style={{ width: 1, height: 40, background: "#e0e0e0" }} />
-                    <div style={{ textAlign: "center" }}>
-                      <div style={{ fontSize: "2em", fontWeight: 700, color: "#bbb", lineHeight: 1 }}>{cp.attendanceStreak.longest}</div>
-                      <div style={{ fontSize: "0.8em", color: "#999", marginTop: 2 }}>Best</div>
-                    </div>
-                  </div>
-                  {cp.attendanceStreak.longest > 0 && (
-                    <div>
-                      <ProgressBar pct={(cp.attendanceStreak.current / cp.attendanceStreak.longest) * 100} color={cp.attendanceStreak.current >= cp.attendanceStreak.longest ? "#2e7d32" : "#ff9800"} />
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78em", color: "#999", marginTop: 2 }}>
-                        <span>0</span>
-                        <span>{cp.attendanceStreak.longest}</span>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
+            ) : (
+              <p className="muted">No sessions scheduled this week. Check back when sessions start!</p>
+            )}
+          </ChallengeCard>
         </div>
 
         {/* ── SIDEBAR ── */}
-        <div style={{ width: 320, flexShrink: 0 }}>
+        <aside className="squad-panel">
           {squad ? (
             <div className="subpanel">
               {/* Squad Header */}
@@ -1415,7 +1317,7 @@ function ChallengesView({ studentEmail, profile }) {
               {success}
             </div>
           )}
-        </div>
+        </aside>
       </div>
 
       {/* ── Create Squad Modal ── */}
