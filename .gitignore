@@ -10,7 +10,6 @@ yarn-debug.log*
 yarn-error.log*
 
 # raw uploaded session data (not source)
-data/uploads/
 
 # editor backups
 *.bak
@@ -50,3 +49,5 @@ server/scripts/search-dummies.js
 
 # ── Agent session notes (lives in the OpenClaw workspace, not this repo) ──
 memory/
+# student data — LOCAL ONLY, never commit (untracked 2026-07-14)
+data/
