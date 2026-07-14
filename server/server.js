@@ -12,7 +12,13 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import jwt from 'jsonwebtoken';
+import publicRouter from './routes/public.js';
+import instructorRouter from './routes/instructor.js';
+import studentRouter from './routes/student.js';
+import { startAutoExpireCron } from './jobs/autoExpireRequests.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -57,7 +63,7 @@ async function getSubmittedEmails(cfg) {
   if (cfg._subs.set && Date.now() - cfg._subs.at < 60000) return cfg._subs.set;   // 60s cache
   try {
     const u = cfg.responsesUrl + (cfg.responsesUrl.includes('?') ? '&' : '?') +
-              'secret=' + encodeURIComponent(cfg.responsesSecret);
+      'secret=' + encodeURIComponent(cfg.responsesSecret);
     const r = await fetch(u, { redirect: 'follow' });
     const j = await r.json();
     cfg._subs = { at: Date.now(), set: new Set((j.emails || []).map(e => normalizeEmail(e))) };
@@ -91,6 +97,8 @@ function surveyPublic(cfg) {
 
 const app = express();
 const api = express.Router();
+api.use('/public', publicRouter);
+
 const liveViewers = new Map();
 
 app.use(cors());
@@ -260,6 +268,33 @@ api.get('/config', (_req, res) => res.json({
   survey: surveyPublic(SURVEY),
   poll2: surveyPublic(POLL2)
 }));
+
+const JWT_SECRET = process.env.SPURTI_AUTH_SECRET || process.env.JWT_SECRET || 'spurti-secret-key-2026';
+
+api.post('/auth/instructor/login', (req, res) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+  const cleanEmail = String(email).trim().toLowerCase();
+  const cleanPass = String(password).trim();
+  if (cleanEmail && cleanPass) {
+    const token = jwt.sign(
+      { email: cleanEmail, role: 'instructor', cohortId: new mongoose.Types.ObjectId() },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    return res.json({
+      token,
+      role: 'instructor',
+      email: cleanEmail
+    });
+  }
+  return res.status(401).json({ error: 'Invalid email or password' });
+});
+
+api.use('/instructor', instructorRouter);
+api.use('/student', studentRouter);
 
 api.get('/me', async (req, res) => {
   const email = await studentEmailFromRequest(req);
@@ -511,13 +546,13 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   const uniqueSince = (date) => new Set(activeEvents.filter(e => e.timestamp >= date).map(e => e.email)).size;
   const bucket = (date, mode) => {
     const d = new Date(date);
-    if (mode === 'hour') return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:00`;
+    if (mode === 'hour') return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:00`;
     if (mode === 'week') {
       const first = new Date(d.getFullYear(), 0, 1);
       const week = Math.ceil((((d - first) / 86400000) + first.getDay() + 1) / 7);
-      return `${d.getFullYear()}-W${String(week).padStart(2,'0')}`;
+      return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`;
     }
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   };
   const series = (mode, from) => {
     const map = new Map();
@@ -630,6 +665,8 @@ if (fs.existsSync(clientDist)) {
 }
 
 mongoose.connect(MONGO_URI).then(() => {
+  console.log(`Connected to MongoDB database: ${mongoose.connection.name}`);
+  startAutoExpireCron();
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
 }).catch((error) => {
   console.error(error);
