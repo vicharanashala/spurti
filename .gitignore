@@ -10,7 +10,6 @@ yarn-debug.log*
 yarn-error.log*
 
 # raw uploaded session data (not source)
-data/uploads/
 
 # editor backups
 *.bak
@@ -45,3 +44,5 @@ data/exports/
 server/scripts/db-diag.js
 server/scripts/list-dummies.js
 server/scripts/search-dummies.js
+# student data — LOCAL ONLY, never commit (untracked 2026-07-14)
+data/
