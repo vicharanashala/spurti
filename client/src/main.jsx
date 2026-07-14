@@ -113,26 +113,60 @@ function Landing({ config, onStudent }) {
   const [searchOpen, setSearchOpen] = useState(false);
 
   return (
-    <main className="page">
-      <section className="hero">
+    <main className="page" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: '100vh', padding: '32px 0' }}>
+      <section className="hero" style={{ minHeight: 'auto' }}>
         <div className="hero-copy">
           <p className="eyebrow">Spurti Motivation Engine</p>
+          <span style={{
+            display: 'inline-block',
+            background: '#176b87',
+            color: '#fff',
+            fontSize: '12px',
+            fontWeight: 700,
+            padding: '4px 12px',
+            borderRadius: '999px',
+            marginBottom: '16px',
+            letterSpacing: '0.02em'
+          }}>Summership 2026</span>
           <h1>Spurti Points track participation energy.</h1>
           <p className="lead">Spurti Points are a simple learning currency for showing up, participating, and staying engaged through the internship.</p>
+          <StatsBar />
           <div className="info-grid">
-            <Info title="What is it?" text="A motivation signal that reflects attendance and poll participation." />
-            <Info title="How to get points" text="Attend eligible sessions and answer polls to keep your engagement visible." />
-            <Info title="Motive" text="To make consistency visible and help the cohort build disciplined learning habits." />
+            <Info title="What is it?" text="A motivation signal that reflects attendance and poll participation." accent="#3b82f6" />
+            <Info title="How to get points" text="Attend eligible sessions and answer polls to keep your engagement visible." accent="#14b8a6" />
+            <Info title="Motive" text="To make consistency visible and help the cohort build disciplined learning habits." accent="#64748b" />
           </div>
-          {config.allowStudentSearch ? (
-            <button className="primary" onClick={() => setSearchOpen(true)}>Find your Spurti points</button>
-          ) : (
-            <div className="auth-card inline-auth">
-              <h2>Please login from Samagama to view your Spurti Points.</h2>
-              <p className="muted">Open Spurti from your Samagama dashboard using the SP details button.</p>
-              <a className="primary link-button" href="/">Go to Samagama Login</a>
-            </div>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+            {config.allowStudentSearch ? (
+              <button className="primary" onClick={() => setSearchOpen(true)}>Find your Spurti points</button>
+            ) : (
+              <div className="auth-card inline-auth">
+                <h2>Please login from Samagama to view your Spurti Points.</h2>
+                <p className="muted">Open Spurti from your Samagama dashboard using the SP details button.</p>
+                <a className="primary link-button" href="/">Go to Samagama Login</a>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={onInstructorLogin}
+              style={{
+                background: 'none',
+                border: '1px solid #94a3b8',
+                borderRadius: '7px',
+                color: '#475569',
+                fontSize: '14px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                padding: '0 16px',
+                minHeight: '42px',
+                transition: 'border-color 0.15s, color 0.15s'
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = '#176b87'; e.currentTarget.style.color = '#176b87'; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = '#94a3b8'; e.currentTarget.style.color = '#475569'; }}
+            >
+              Instructor login
+            </button>
+          </div>
         </div>
       </section>
       {config.allowStudentSearch && searchOpen && <SearchModal onClose={() => setSearchOpen(false)} onStudent={onStudent} />}
@@ -195,8 +229,93 @@ function adminHeaders(auth) {
   return { 'X-Admin-Email': auth.email, 'X-Admin-Token': auth.token };
 }
 
-function Info({ title, text }) {
-  return <div className="info"><h3>{title}</h3><p>{text}</p></div>;
+function Info({ title, text, accent }) {
+  return (
+    <div className="info" style={accent ? { borderLeft: `3px solid ${accent}`, paddingLeft: '18px', padding: '20px 20px 20px 18px' } : { padding: '20px' }}>
+      <h3 style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px' }}>{title}</h3>
+      <p style={{ color: '#64748b', lineHeight: 1.5, margin: 0 }}>{text}</p>
+    </div>
+  );
+}
+
+function StatsBar() {
+  const [stats, setStats] = useState(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/public/stats`)
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then(d => setStats(d))
+      .catch(() => setError(true));
+  }, []);
+
+  if (error) return null;
+
+  const fmt = n => Number(n).toLocaleString('en-US');
+
+  const statItemStyle = {
+    flex: '1 1 0',
+    textAlign: 'center',
+    padding: '8px 0'
+  };
+  const numberStyle = {
+    display: 'block',
+    fontSize: '28px',
+    fontWeight: 800,
+    color: '#176b87'
+  };
+  const labelStyle = {
+    display: 'block',
+    fontSize: '13px',
+    color: '#64748b',
+    marginTop: '4px',
+    fontWeight: 600
+  };
+  const dividerStyle = {
+    width: '1px',
+    alignSelf: 'stretch',
+    background: '#d9e1ec',
+    margin: '8px 0'
+  };
+  const skeletonStyle = {
+    display: 'inline-block',
+    width: '60px',
+    height: '28px',
+    background: 'linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%)',
+    backgroundSize: '200% 100%',
+    animation: 'shimmer 1.5s infinite',
+    borderRadius: '6px'
+  };
+
+  return (
+    <>
+      <style>{`@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }`}</style>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        border: '1px solid #d9e1ec',
+        borderRadius: '8px',
+        background: '#fbfdff',
+        marginBottom: '20px',
+        padding: '8px 0'
+      }}>
+        <div style={statItemStyle}>
+          {stats ? <strong style={numberStyle}>{fmt(stats.totalStudents)}</strong> : <span style={skeletonStyle} />}
+          <span style={labelStyle}>Students</span>
+        </div>
+        <div style={dividerStyle} />
+        <div style={statItemStyle}>
+          {stats ? <strong style={numberStyle}>{fmt(stats.totalSessions)}</strong> : <span style={skeletonStyle} />}
+          <span style={labelStyle}>Sessions</span>
+        </div>
+        <div style={dividerStyle} />
+        <div style={statItemStyle}>
+          {stats ? <strong style={numberStyle}>{fmt(stats.totalSpAwarded)}</strong> : <span style={skeletonStyle} />}
+          <span style={labelStyle}>SP Awarded</span>
+        </div>
+      </div>
+    </>
+  );
 }
 
 function SearchModal({ onClose, onStudent }) {
@@ -205,26 +324,122 @@ function SearchModal({ onClose, onStudent }) {
   const [selected, setSelected] = useState(null);
   const [confirmEmail, setConfirmEmail] = useState('');
   const [message, setMessage] = useState('Search by email or name.');
+  const [suggestions, setSuggestions] = useState([]);
+  const [sugLoading, setSugLoading] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [resultCard, setResultCard] = useState(null);
+  const [resultLoading, setResultLoading] = useState(false);
+  const debounceRef = useRef(null);
+  const sugRef = useRef(null);
+
+  // Close suggestions on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (sugRef.current && !sugRef.current.contains(e.target)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    setQuery(val);
+    setResultCard(null);
+    setSelected(null);
+    setMatches([]);
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (val.trim().length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    setSugLoading(true);
+    setShowSuggestions(true);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`${API}/search?q=${encodeURIComponent(val.trim())}`);
+        const data = await res.json();
+        if (data.excused) { onStudent(data); return; }
+        if (data.exact) { onStudent(data.profile); return; }
+        setSuggestions(data.matches || []);
+      } catch {
+        setSuggestions([]);
+      } finally {
+        setSugLoading(false);
+      }
+    }, 300);
+  };
+
+  const selectSuggestion = (item) => {
+    setQuery(item.name);
+    setShowSuggestions(false);
+    setSuggestions([]);
+    setSelected(item);
+    setMatches([item]);
+    setMessage('Confirm your email to view your record.');
+  };
 
   const search = async () => {
     if (query.trim().length < 2) return setMessage('Type at least 2 characters.');
-    const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
-    const data = await res.json();
-    if (data.excused) return onStudent(data);
-    if (data.exact) return onStudent(data.profile);
-    setMatches(data.matches || []);
-    setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
+    setResultLoading(true);
+    setResultCard(null);
+    try {
+      const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
+      const data = await res.json();
+      if (data.excused) return onStudent(data);
+      if (data.exact) return onStudent(data.profile);
+      setMatches(data.matches || []);
+      setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
+    } finally {
+      setResultLoading(false);
+    }
   };
 
   const confirm = async () => {
-    const res = await fetch(`${API}/confirm`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ studentId: selected?._id, email: confirmEmail })
-    });
-    const data = await res.json();
-    if (!res.ok) return setMessage(data.error || 'Email did not match.');
-    onStudent(data);
+    setResultLoading(true);
+    try {
+      const res = await fetch(`${API}/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: selected?._id, email: confirmEmail })
+      });
+      const data = await res.json();
+      if (!res.ok) return setMessage(data.error || 'Email did not match.');
+      onStudent(data);
+    } finally {
+      setResultLoading(false);
+    }
+  };
+
+  const dropdownStyle = {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    right: 0,
+    zIndex: 30,
+    background: '#fff',
+    border: '1px solid #d9e1ec',
+    borderRadius: '0 0 8px 8px',
+    maxHeight: '220px',
+    overflowY: 'auto',
+    boxShadow: '0 8px 24px rgba(23,32,51,0.12)'
+  };
+
+  const sugItemStyle = {
+    display: 'block',
+    width: '100%',
+    textAlign: 'left',
+    background: 'none',
+    border: 'none',
+    borderBottom: '1px solid #f1f5f9',
+    padding: '10px 12px',
+    cursor: 'pointer',
+    fontSize: '14px'
   };
 
   return (
@@ -232,13 +447,64 @@ function SearchModal({ onClose, onStudent }) {
       <section className="modal">
         <div className="modal-head">
           <h2>Find your Spurti points</h2>
-          <button className="icon" onClick={onClose}>x</button>
+          <button
+            onClick={onClose}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: '#f1f5f9',
+              border: '1px solid #d9e1ec',
+              borderRadius: '7px',
+              padding: '6px 14px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 700,
+              color: '#334155'
+            }}
+          >
+            <span style={{ fontSize: '18px', lineHeight: 1 }}>x</span> Close
+          </button>
         </div>
-        <div className="search-row">
-          <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && search()} placeholder="Name or email" />
-          <button className="primary" onClick={search}>Search</button>
+        <div style={{ position: 'relative' }} ref={sugRef}>
+          <div className="search-row">
+            <input
+              value={query}
+              onChange={handleInputChange}
+              onKeyDown={e => e.key === 'Enter' && search()}
+              onFocus={() => { if (suggestions.length || sugLoading) setShowSuggestions(true); }}
+              placeholder="Name or email"
+            />
+            <button className="primary" onClick={search}>Search</button>
+          </div>
+          {showSuggestions && (
+            <div style={dropdownStyle}>
+              {sugLoading && <div style={{ padding: '12px', color: '#64748b', fontSize: '14px' }}>Searching...</div>}
+              {!sugLoading && suggestions.length === 0 && query.trim().length >= 2 && (
+                <div style={{ padding: '12px', color: '#64748b', fontSize: '14px' }}>No students found</div>
+              )}
+              {!sugLoading && suggestions.map(item => (
+                <button
+                  key={item._id}
+                  style={sugItemStyle}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#f8fafc'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+                  onClick={() => selectSuggestion(item)}
+                >
+                  <strong style={{ display: 'block' }}>{item.name}</strong>
+                  <span style={{ color: '#64748b', fontSize: '13px' }}>{item.maskedEmail}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-        <p className={message.includes('not') || message.includes('match') ? 'error' : 'muted'}>{message}</p>
+        {resultLoading && (
+          <div style={{ textAlign: 'center', padding: '20px', color: '#64748b' }}>
+            <div style={{ display: 'inline-block', width: '24px', height: '24px', border: '3px solid #d9e1ec', borderTopColor: '#176b87', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          </div>
+        )}
+        {!resultLoading && <p className={message.includes('not') || message.includes('match') ? 'error' : 'muted'}>{message}</p>}
         <div className="match-list">
           {matches.map(item => (
             <button key={item._id} className={selected?._id === item._id ? 'match selected' : 'match'} onClick={() => setSelected(item)}>
