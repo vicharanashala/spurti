@@ -279,10 +279,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+     <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['achievements','Achievements']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'achievements' && <AchievementGallery profile={profile} />}
     </main>
   );
 }
@@ -486,6 +487,22 @@ function Polls({ polls }) {
               <strong>{poll.sessionLabel}</strong>
               <span>{poll.attemptedQuestions}/{poll.totalQuestions} attempted</span>
             </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AchievementGallery({ profile }) {
+  const badges = buildBadges(profile);
+  return (
+    <section className="panel">
+      <h2>Achievement Gallery</h2>
+      <div className="cards">
+        {badges.map(badge => (
+          <article className="card" key={badge}>
+            <strong>{badge}</strong>
           </article>
         ))}
       </div>
