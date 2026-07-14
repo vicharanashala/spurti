@@ -16,6 +16,10 @@ const studentSchema = new mongoose.Schema({
   trophyLeague: { type: String, default: 'Bronze II' },
   legendBadgeUnlocked: { type: Boolean, default: false },
   leaderboardGroup: { type: String, default: '', index: true },
+  // Faction Wars — one faction assignment per student at a time.
+  // Null/unset means not yet placed. Faction name is a string key
+  // matching a FactionSeason faction definition (e.g. 'ares').
+  faction: { type: String, default: null, index: true },
   // Survey triangulation (perception follow-up). Set when the student submits
   // the dashboard pop-up Google Form — via the Apps Script webhook or the
   // "I've submitted" button. Drives whether the survey modal still shows.

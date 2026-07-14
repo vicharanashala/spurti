@@ -20,7 +20,34 @@ pipeline/.env
 
 # runtime log + local DB backups (not for the repo)
 server.log
+api.err
+api.log
 sp-runs/
 
+# ── Operational data (not source, often contains PII) ──
+# Real student PII lives in Mongo; the CSVs/PDFs here are staging exports
+# and per-day snapshots. Uncomment the `!data/students.json` line below
+# if you DO want to publish the seed roster publicly.
+data/excused-emails.txt
+data/ingestion_manifest.json
+data/sp_ledger_19may.csv
+data/sp_transactions_20may.csv
+data/sp_balance_sheet_dense.pdf
+data/sp_balance_sheet_standard.pdf
+data/students-start-on-or-before-2026-05-18-revised.csv
+data/students-start-on-or-before-2026-05-21.csv
+data/students-start-on-or-before-2026-05-22.csv
+data/students-start-on-or-before-2026-05-25.csv
+data/students.json
+data/exports/
+# !data/students.json
+
+# ── One-off diagnostic scripts (created in ad-hoc sessions, not project code) ──
+server/scripts/db-diag.js
+server/scripts/list-dummies.js
+server/scripts/search-dummies.js
+
+# ── Agent session notes (lives in the OpenClaw workspace, not this repo) ──
+memory/
 # student data — LOCAL ONLY, never commit (untracked 2026-07-14)
 data/
