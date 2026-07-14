@@ -7,6 +7,15 @@ import AttendanceRecord from '../../models/AttendanceRecord.js';
 import PollRecord from '../../models/PollRecord.js';
 import SPTransaction from '../../models/SPTransaction.js';
 
+import {
+  INITIAL_SP,
+  ATTENDANCE_THRESHOLD,
+  ATTENDANCE_SP_CREDIT,
+  ATTENDANCE_SP_DEBIT,
+  POLL_ATTEMPTED_SCORE,
+  POLL_MISSED_SCORE,
+} from './spRules.js';
+
 export const KNOWN_SESSIONS = [
   session('15 May Morning', '2026-05-15', 'morning', '2026-05-15T08:27:30', '2026-05-15T12:37:30', 250, '2026-05-15/15_may_attendance_M.csv', '2026-05-15/15 May - orientation poll report - morning.csv'),
   session('15 May Evening', '2026-05-15', 'evening', '2026-05-15T13:29:45', '2026-05-15T17:14:45', 225, '2026-05-15/15_may_attendance_E.csv', '2026-05-15/15 May - orientation poll report - evening.csv'),
@@ -195,9 +204,9 @@ export async function ensureInitialTransaction(student, stats = {}) {
     category: 'initial',
     sessionLabel: '',
     deltaMode: 'absolute',
-    deltaValue: 100,
-    appliedDelta: 100,
-    balanceAfter: 100,
+    deltaValue: INITIAL_SP,
+    appliedDelta: INITIAL_SP,
+    balanceAfter: INITIAL_SP,
     reason: 'Initial Spurti Points credited by system on onboarding.',
     dateTime: student.internshipStartDate
   });
@@ -290,8 +299,8 @@ export async function applySessionForStudents(config, students, rootDir, stats =
     if (attendancePath) {
       const minutes = parsedAttendance.rows.get(student.email) || parsedAttendance.rows.get(student.alternateEmail) || 0;
       const pct = totalMinutes ? Math.round((minutes / totalMinutes) * 100) : 0;
-      const qualified = totalMinutes > 0 && minutes / totalMinutes >= 0.75;
-      const delta = qualified ? 5 : -5;
+      const qualified = totalMinutes > 0 && minutes / totalMinutes >= ATTENDANCE_THRESHOLD;
+      const delta = qualified ? ATTENDANCE_SP_CREDIT : ATTENDANCE_SP_DEBIT;
       const reason = qualified
         ? `${config.label}: attended ${minutes}/${totalMinutes} minutes (${pct}%). Required 75%, credited +5 SP.`
         : `${config.label}: attended ${minutes}/${totalMinutes} minutes (${pct}%). Required 75%, debited -5 SP.`;
@@ -310,7 +319,7 @@ export async function applySessionForStudents(config, students, rootDir, stats =
       const responses = parsedPoll.byEmail.get(student.email) || parsedPoll.byEmail.get(student.alternateEmail) || [];
       const attempted = responses.filter(r => r.attempted).length;
       const missed = Math.max(0, parsedPoll.totalQuestions - attempted);
-      const delta = attempted - missed;
+      const delta = attempted * POLL_ATTEMPTED_SCORE + missed * POLL_MISSED_SCORE;
       const reason = `${config.label}: attempted ${attempted}/${parsedPoll.totalQuestions} poll questions. +${attempted} for attempted, -${missed} for missed = ${delta} SP.`;
       const tx = await createTransactionOnce(student, 'poll', config.label, delta, reason, endDateTime, stats);
       if (tx) {
