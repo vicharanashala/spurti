@@ -15,9 +15,19 @@
     "dev": "node server/server.js"
   },
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
-    "mongoose": "^8.8.4"
+    "express-rate-limit": "^8.5.2",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.8.4",
+    "multer": "^2.0.0",
+    "node-cron": "^4.5.0",
+    "papaparse": "^5.4.1"
+  },
+  "devDependencies": {
+    "jest": "^30.4.2",
+    "supertest": "^7.2.2"
   }
 }

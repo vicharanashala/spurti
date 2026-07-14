@@ -6,11 +6,11 @@ const spTransactionSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['initial', 'attendance', 'poll', 'manual'],
+    enum: ['initial', 'attendance', 'poll', 'manual', 'manual_award', 'misconduct_deduction'],
     index: true
   },
   sessionLabel: { type: String, default: '', index: true },
-  deltaMode: { type: String, enum: ['absolute', 'percentage'], default: 'absolute' },
+  deltaMode: { type: String, enum: ['absolute', 'percentage', 'relative'], default: 'absolute' },
   deltaValue: { type: Number, required: true },
   appliedDelta: { type: Number, required: true },
   balanceAfter: { type: Number, required: true },

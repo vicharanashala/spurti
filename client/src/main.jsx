@@ -1,12 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import InstructorLogin from './views/InstructorLogin.jsx';
+import InstructorDashboard from './views/InstructorDashboard.jsx';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
 
 function App() {
-  const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('admin') === '1' ? 'admin-login' : 'landing');
+  const [view, setView] = useState(() => {
+    if (localStorage.getItem('spurti_role') === 'instructor' && localStorage.getItem('spurti_token')) {
+      return 'instructor';
+    }
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('admin') === '1') return 'admin-login';
+    if (params.get('instructor') === '1' || window.location.pathname.endsWith('/instructor')) return 'instructor-login';
+    return 'landing';
+  });
   const [profile, setProfile] = useState(null);
   const [excused, setExcused] = useState(null);
   const [admin, setAdmin] = useState(null);
@@ -35,12 +45,18 @@ function App() {
     let active = true;
     async function bootstrap() {
       try {
+        const storedRole = localStorage.getItem('spurti_role');
+        const storedToken = localStorage.getItem('spurti_token');
+        if (storedRole === 'instructor' && storedToken && active) {
+          setView('instructor');
+        }
+
         const configRes = await fetch(`${API}/config`);
         const nextConfig = configRes.ok ? await configRes.json() : { allowStudentSearch: true };
         if (!active) return;
         setConfig(nextConfig);
 
-        if (view !== 'admin-login') {
+        if (view !== 'admin-login' && view !== 'instructor-login' && view !== 'instructor') {
           const meRes = await fetch(`${API}/me`);
           if (meRes.ok) {
             const data = await meRes.json();
@@ -65,6 +81,12 @@ function App() {
 
   if (loading) {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
+  }
+  if (view === 'instructor-login') {
+    return <InstructorLogin onLoginSuccess={() => setView('instructor')} onBackToLanding={() => setView('landing')} />;
+  }
+  if (view === 'instructor') {
+    return <InstructorDashboard onLogout={() => setView('instructor-login')} />;
   }
   if (view === 'student' && profile) {
     return (
@@ -96,7 +118,7 @@ function App() {
   if (view === 'admin' && admin && adminAuth) {
     return <AdminView admin={admin} auth={adminAuth} onBack={() => setView('landing')} />;
   }
-  return <Landing config={config} onStudent={(data) => {
+  return <Landing config={config} onInstructorLogin={() => setView('instructor-login')} onStudent={(data) => {
     if (data?.excused) {
       setExcused(data);
       setProfile(null);
@@ -109,7 +131,7 @@ function App() {
   }} />;
 }
 
-function Landing({ config, onStudent }) {
+function Landing({ config, onStudent, onInstructorLogin }) {
   const [searchOpen, setSearchOpen] = useState(false);
 
   return (
@@ -136,6 +158,15 @@ function Landing({ config, onStudent }) {
         </div>
       </section>
       {config.allowStudentSearch && searchOpen && <SearchModal onClose={() => setSearchOpen(false)} onStudent={onStudent} />}
+      <footer style={{ marginTop: '32px', textAlign: 'center', paddingBottom: '16px' }}>
+        <button
+          type="button"
+          onClick={onInstructorLogin}
+          style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '13px', cursor: 'pointer', textDecoration: 'underline' }}
+        >
+          Instructor login
+        </button>
+      </footer>
     </main>
   );
 }
