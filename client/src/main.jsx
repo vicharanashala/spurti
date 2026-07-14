@@ -279,10 +279,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['study_buddy','Study Buddy']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'study_buddy' && <StudyBuddyTab profile={profile} API={API} />}
     </main>
   );
 }
@@ -842,6 +843,768 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
         </div>
         {note && <p className="survey-note">{note}</p>}
       </div>
+    </div>
+  );
+}
+
+// --- Study Buddy Matching UI Components ---------------------------------
+
+function StudyBuddyTab({ profile, API }) {
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [hasProfile, setHasProfile] = useState(false);
+  const [sbProfile, setSbProfile] = useState(null);
+  const [buddies, setBuddies] = useState([]);
+  const [requests, setRequests] = useState({ incoming: [], outgoing: [] });
+  const [notifications, setNotifications] = useState([]);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [activeChatBuddy, setActiveChatBuddy] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const headers = useMemo(() => ({
+    'Content-Type': 'application/json',
+    'X-Student-Email': profile.student.email
+  }), [profile]);
+
+  const loadData = async () => {
+    try {
+      const profRes = await fetch(`${API}/study-buddy/profile`, { headers });
+      if (profRes.ok) {
+        const profData = await profRes.json();
+        setHasProfile(profData.hasProfile);
+        setSbProfile(profData.profile || null);
+        
+        if (profData.hasProfile) {
+          await Promise.all([
+            fetchBuddies(),
+            fetchRequests(),
+            fetchNotifications()
+          ]);
+        }
+      }
+    } catch (err) {
+      console.error('Error loading study buddy data:', err);
+    } finally {
+      setProfileLoaded(true);
+    }
+  };
+
+  const fetchBuddies = async () => {
+    const res = await fetch(`${API}/study-buddy/buddies`, { headers });
+    if (res.ok) setBuddies(await res.json());
+  };
+
+  const fetchRequests = async () => {
+    const res = await fetch(`${API}/study-buddy/requests`, { headers });
+    if (res.ok) setRequests(await res.json());
+  };
+
+  const fetchNotifications = async () => {
+    const res = await fetch(`${API}/study-buddy/notifications`, { headers });
+    if (res.ok) setNotifications(await res.json());
+  };
+
+  useEffect(() => {
+    loadData();
+    const intervalId = setInterval(() => {
+      if (hasProfile && !isEditingProfile) {
+        fetchBuddies();
+        fetchRequests();
+        fetchNotifications();
+      }
+    }, 30000);
+    return () => clearInterval(intervalId);
+  }, [hasProfile, isEditingProfile]);
+
+  const handleProfileSave = async (formData) => {
+    setErrorMessage('');
+    try {
+      const res = await fetch(`${API}/study-buddy/profile`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(formData)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save profile');
+      setSbProfile(data.profile);
+      setHasProfile(true);
+      setIsEditingProfile(false);
+      loadData();
+    } catch (err) {
+      setErrorMessage(err.message);
+    }
+  };
+
+  const handleProgressSave = async (progressData) => {
+    try {
+      const res = await fetch(`${API}/study-buddy/progress`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(progressData)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSbProfile(data.profile);
+        fetchBuddies();
+      }
+    } catch (err) {
+      console.error('Failed to save progress:', err);
+    }
+  };
+
+  const handleSendRequest = async (receiverId) => {
+    try {
+      const res = await fetch(`${API}/study-buddy/request`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ receiverId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === 'accepted') {
+          loadData();
+        } else {
+          fetchRequests();
+        }
+      }
+    } catch (err) {
+      console.error('Error sending request:', err);
+    }
+  };
+
+  const handleAcceptRequest = async (requestId) => {
+    try {
+      const res = await fetch(`${API}/study-buddy/request/${requestId}/accept`, {
+        method: 'POST',
+        headers
+      });
+      if (res.ok) loadData();
+    } catch (err) {
+      console.error('Error accepting request:', err);
+    }
+  };
+
+  const handleRejectRequest = async (requestId) => {
+    try {
+      const res = await fetch(`${API}/study-buddy/request/${requestId}/reject`, {
+        method: 'POST',
+        headers
+      });
+      if (res.ok) fetchRequests();
+    } catch (err) {
+      console.error('Error rejecting request:', err);
+    }
+  };
+
+  const handleCancelRequest = async (requestId) => {
+    try {
+      const res = await fetch(`${API}/study-buddy/request/${requestId}/cancel`, {
+        method: 'POST',
+        headers
+      });
+      if (res.ok) fetchRequests();
+    } catch (err) {
+      console.error('Error cancelling request:', err);
+    }
+  };
+
+  const handleRemoveBuddy = async (buddyId) => {
+    if (!window.confirm('Are you sure you want to remove this study buddy?')) return;
+    try {
+      const res = await fetch(`${API}/study-buddy/buddy/${buddyId}`, {
+        method: 'DELETE',
+        headers
+      });
+      if (res.ok) loadData();
+    } catch (err) {
+      console.error('Error removing buddy:', err);
+    }
+  };
+
+  const handleMarkNotificationsRead = async () => {
+    try {
+      const res = await fetch(`${API}/study-buddy/notifications/read`, {
+        method: 'POST',
+        headers
+      });
+      if (res.ok) {
+        setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      }
+    } catch (err) {
+      console.error('Error marking notifications as read:', err);
+    }
+  };
+
+  if (!profileLoaded) {
+    return <section className="panel empty">Loading Study Buddy matching dashboard...</section>;
+  }
+
+  if (!hasProfile || isEditingProfile) {
+    return (
+      <section className="panel profile-setup-box">
+        <div className="panel-head">
+          <h2>{isEditingProfile ? 'Edit Study Buddy Profile' : 'Create Study Buddy Profile'}</h2>
+          {hasProfile && <button className="secondary" onClick={() => setIsEditingProfile(false)}>Cancel</button>}
+        </div>
+        {errorMessage && <p className="error">{errorMessage}</p>}
+        <ProfileSetupForm profileData={sbProfile} onSave={handleProfileSave} />
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <div className="study-buddy-container">
+        <div className="sb-left-col">
+          <div className="panel">
+            <div className="panel-head" style={{marginBottom: '10px'}}>
+              <h3>My Matching Profile</h3>
+              <button className="secondary" style={{minHeight:'32px', padding:'0 10px', fontSize:'12px'}} onClick={() => setIsEditingProfile(true)}>Edit Profile</button>
+            </div>
+            <p className="muted" style={{fontSize:'13px', margin:'0 0 8px 0'}}>
+              <b>Course:</b> {sbProfile.course || '—'} | <b>Semester:</b> {sbProfile.currentSemester || '—'}
+            </p>
+            <div className="tag-list" style={{marginTop: '0'}}>
+              {sbProfile.preferredSubjects.slice(0, 4).map(sub => <span key={sub} className="tag" style={{background:'#e0f2fe', color:'#0369a1', borderColor:'#bae6fd'}}>{sub}</span>)}
+              {sbProfile.learningGoals.slice(0, 3).map(goal => <span key={goal} className="tag" style={{background:'#f3e8ff', color:'#6b21a8', borderColor:'#e9d5ff'}}>{goal}</span>)}
+            </div>
+          </div>
+
+          <div className="panel">
+            <h3>My Study Progress</h3>
+            <div className="buddy-progress-section">
+              <div className="progress-widget">
+                <h4>Streak</h4>
+                <div className="progress-widget-val">🔥 {sbProfile.streak} days</div>
+              </div>
+              <div className="progress-widget">
+                <h4>Study Hours</h4>
+                <div className="progress-widget-val">⏱️ {sbProfile.studyHours} hrs</div>
+              </div>
+            </div>
+
+            <div className="progress-goal-box">
+              <div>
+                <span className="muted" style={{fontSize:'11px', display:'block', textTransform:'uppercase', fontWeight:'700'}}>Weekly Goal</span>
+                <span className={sbProfile.weeklyGoalCompleted ? 'completed-goal-text' : ''}>
+                  {sbProfile.weeklyGoal || 'No goal set for this week.'}
+                </span>
+              </div>
+              {sbProfile.weeklyGoal && (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={sbProfile.weeklyGoalCompleted}
+                    onChange={(e) => handleProgressSave({ weeklyGoalCompleted: e.target.checked })}
+                  />
+                  <span>Done</span>
+                </label>
+              )}
+            </div>
+
+            <ProgressEditForm profile={sbProfile} onSave={handleProgressSave} />
+          </div>
+
+          {notifications.length > 0 && (
+            <div className="panel">
+              <div className="panel-head" style={{marginBottom: '10px'}}>
+                <h3>Activity Nudges</h3>
+                {notifications.some(n => !n.read) && (
+                  <button className="secondary" style={{minHeight:'28px', padding:'0 8px', fontSize:'11px'}} onClick={handleMarkNotificationsRead}>Mark read</button>
+                )}
+              </div>
+              <div className="sb-notifications-list">
+                {notifications.map(n => (
+                  <div key={n._id} className={`sb-notification-item ${n.read ? '' : 'unread'}`}>
+                    <p>{n.message}</p>
+                    <span>{new Date(n.createdAt).toLocaleDateString()}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(requests.incoming.length > 0 || requests.outgoing.length > 0) && (
+            <div className="panel">
+              <h3>Buddy Requests</h3>
+              <div className="requests-pane">
+                {requests.incoming.map(req => (
+                  <div key={req._id} className="request-card">
+                    <div>
+                      <strong>{req.sender.name}</strong> wants to pair up
+                      <span>{new Date(req.createdAt).toLocaleDateString()}</span>
+                    </div>
+                    <div className="request-actions">
+                      <button className="primary" style={{minHeight:'28px', padding:'0 10px', fontSize:'12px'}} onClick={() => handleAcceptRequest(req._id)}>Accept</button>
+                      <button className="secondary" style={{minHeight:'28px', padding:'0 10px', fontSize:'12px'}} onClick={() => handleRejectRequest(req._id)}>Decline</button>
+                    </div>
+                  </div>
+                ))}
+                {requests.outgoing.map(req => (
+                  <div key={req._id} className="request-card">
+                    <div>
+                      Sent to <strong>{req.receiver.name}</strong>
+                      <span>{new Date(req.createdAt).toLocaleDateString()}</span>
+                    </div>
+                    <div className="request-actions">
+                      <button className="secondary" style={{minHeight:'28px', padding:'0 10px', fontSize:'12px'}} onClick={() => handleCancelRequest(req._id)}>Cancel</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="panel">
+            <h3>My Study Buddies ({buddies.length})</h3>
+            {buddies.length === 0 ? (
+              <p className="empty">You haven't added any study buddies yet. Find compatible partners in the right pane!</p>
+            ) : (
+              <div className="sb-buddies-list">
+                {buddies.map(buddy => (
+                  <BuddyCard
+                    key={buddy.profile._id}
+                    buddy={buddy}
+                    onChat={setActiveChatBuddy}
+                    onRemove={handleRemoveBuddy}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="sb-right-col">
+          <FindBuddySection
+            API={API}
+            headers={headers}
+            onSendRequest={handleSendRequest}
+            requests={requests}
+            buddies={buddies}
+          />
+        </div>
+      </div>
+
+      {activeChatBuddy && (
+        <PlaceholderChatModal
+          buddy={activeChatBuddy}
+          onClose={() => setActiveChatBuddy(null)}
+        />
+      )}
+    </>
+  );
+}
+
+function ProfileSetupForm({ profileData, onSave }) {
+  const [currentSemester, setCurrentSemester] = useState(profileData?.currentSemester || 'Semester 1');
+  const [course, setCourse] = useState(profileData?.course || 'BS in Data Science');
+  const [preferredStudyTime, setPreferredStudyTime] = useState(profileData?.preferredStudyTime || 'Flexible');
+  const [weeklyAvailability, setWeeklyAvailability] = useState(profileData?.weeklyAvailability || 4);
+  const [skillLevel, setSkillLevel] = useState(profileData?.skillLevel || 'Intermediate');
+
+  const [subjects, setSubjects] = useState(profileData?.preferredSubjects || []);
+  const [subjectInput, setSubjectInput] = useState('');
+  
+  const [goals, setGoals] = useState(profileData?.learningGoals || []);
+  const [goalInput, setGoalInput] = useState('');
+  
+  const [languages, setLanguages] = useState(profileData?.languages || ['English']);
+  const [languageInput, setLanguageInput] = useState('');
+  
+  const [interests, setInterests] = useState(profileData?.interests || []);
+  const [interestInput, setInterestInput] = useState('');
+
+  const addTag = (val, list, setList, setInput) => {
+    const trimmed = val.trim();
+    if (trimmed && !list.includes(trimmed)) {
+      setList([...list, trimmed]);
+      setInput('');
+    }
+  };
+
+  const removeTag = (tag, list, setList) => {
+    setList(list.filter(item => item !== tag));
+  };
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!course.trim() || !currentSemester.trim()) return;
+    onSave({
+      currentSemester,
+      course,
+      preferredStudyTime,
+      weeklyAvailability: Number(weeklyAvailability),
+      skillLevel,
+      preferredSubjects: subjects,
+      learningGoals: goals,
+      languages,
+      interests
+    });
+  };
+
+  return (
+    <form onSubmit={submit} className="login-form">
+      <div className="form-grid">
+        <div className="form-group">
+          <label>Course / Degree</label>
+          <input required value={course} onChange={e => setCourse(e.target.value)} placeholder="e.g. BS in Data Science" />
+        </div>
+        <div className="form-group">
+          <label>Current Semester</label>
+          <select value={currentSemester} onChange={e => setCurrentSemester(e.target.value)}>
+            {[1, 2, 3, 4, 5, 6, 7, 8].map(s => <option key={s} value={`Semester ${s}`}>{`Semester ${s}`}</option>)}
+          </select>
+        </div>
+        <div className="form-group">
+          <label>Preferred Study Time</label>
+          <select value={preferredStudyTime} onChange={e => setPreferredStudyTime(e.target.value)}>
+            <option value="Morning">Morning</option>
+            <option value="Afternoon">Afternoon</option>
+            <option value="Night">Night</option>
+            <option value="Flexible">Flexible</option>
+          </select>
+        </div>
+        <div className="form-group">
+          <label>Weekly Availability (Hours)</label>
+          <input type="number" min="1" max="80" value={weeklyAvailability} onChange={e => setWeeklyAvailability(e.target.value)} />
+        </div>
+        <div className="form-group">
+          <label>Skill Level</label>
+          <select value={skillLevel} onChange={e => setSkillLevel(e.target.value)}>
+            <option value="Beginner">Beginner</option>
+            <option value="Intermediate">Intermediate</option>
+            <option value="Advanced">Advanced</option>
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label>Languages Spoken</label>
+          <div className="tag-input-row">
+            <input value={languageInput} onChange={e => setLanguageInput(e.target.value)} placeholder="e.g. English, Hindi" onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addTag(languageInput, languages, setLanguages, setLanguageInput))} />
+            <button type="button" className="secondary" onClick={() => addTag(languageInput, languages, setLanguages, setLanguageInput)} style={{minHeight:'38px'}}>Add</button>
+          </div>
+          <div className="tag-list">
+            {languages.map(t => <span key={t} className="tag">{t}<button type="button" onClick={() => removeTag(t, languages, setLanguages)}>×</button></span>)}
+          </div>
+        </div>
+
+        <div className="form-group wide">
+          <label>Subjects you want to study</label>
+          <div className="tag-input-row">
+            <input value={subjectInput} onChange={e => setSubjectInput(e.target.value)} placeholder="e.g. Data Structures, Machine Learning, Web Dev" onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addTag(subjectInput, subjects, setSubjects, setSubjectInput))} />
+            <button type="button" className="secondary" onClick={() => addTag(subjectInput, subjects, setSubjects, setSubjectInput)} style={{minHeight:'38px'}}>Add</button>
+          </div>
+          <div className="tag-list">
+            {subjects.map(t => <span key={t} className="tag">{t}<button type="button" onClick={() => removeTag(t, subjects, setSubjects)}>×</button></span>)}
+          </div>
+        </div>
+
+        <div className="form-group wide">
+          <label>Learning Goals</label>
+          <div className="tag-input-row">
+            <input value={goalInput} onChange={e => setGoalInput(e.target.value)} placeholder="e.g. Crack DSA interview, Build React portfolio" onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addTag(goalInput, goals, setGoals, setGoalInput))} />
+            <button type="button" className="secondary" onClick={() => addTag(goalInput, goals, setGoals, setGoalInput)} style={{minHeight:'38px'}}>Add</button>
+          </div>
+          <div className="tag-list">
+            {goals.map(t => <span key={t} className="tag">{t}<button type="button" onClick={() => removeTag(t, goals, setGoals)}>×</button></span>)}
+          </div>
+        </div>
+
+        <div className="form-group wide">
+          <label>Interests / Hobbies</label>
+          <div className="tag-input-row">
+            <input value={interestInput} onChange={e => setInterestInput(e.target.value)} placeholder="e.g. Competitive Coding, Open Source, Blogging" onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addTag(interestInput, interests, setInterests, setInterestInput))} />
+            <button type="button" className="secondary" onClick={() => addTag(interestInput, interests, setInterests, setInterestInput)} style={{minHeight:'38px'}}>Add</button>
+          </div>
+          <div className="tag-list">
+            {interests.map(t => <span key={t} className="tag">{t}<button type="button" onClick={() => removeTag(t, interests, setInterests)}>×</button></span>)}
+          </div>
+        </div>
+      </div>
+      
+      <div className="form-actions-row">
+        <button type="submit" className="primary">Save Matching Profile</button>
+      </div>
+    </form>
+  );
+}
+
+function ProgressEditForm({ profile, onSave }) {
+  const [weeklyGoal, setWeeklyGoal] = useState(profile?.weeklyGoal || '');
+  const [studyHours, setStudyHours] = useState(profile?.studyHours || 0);
+  const [streak, setStreak] = useState(profile?.streak || 0);
+  const [completedTasksCount, setCompletedTasksCount] = useState(profile?.completedTasksCount || 0);
+
+  const submit = (e) => {
+    e.preventDefault();
+    onSave({
+      weeklyGoal,
+      studyHours: Number(studyHours),
+      streak: Number(streak),
+      completedTasksCount: Number(completedTasksCount),
+      weeklyGoalCompleted: false
+    });
+  };
+
+  return (
+    <form onSubmit={submit} style={{marginTop:'12px', borderTop:'1px solid var(--line)', paddingTop:'12px'}}>
+      <p className="eyebrow" style={{fontSize:'10px', marginBottom:'8px'}}>Update Progress</p>
+      <div className="form-group" style={{marginBottom:'8px'}}>
+        <input value={weeklyGoal} onChange={e => setWeeklyGoal(e.target.value)} placeholder="Enter weekly goal..." style={{padding:'6px 10px', fontSize:'13px'}} />
+      </div>
+      <div style={{display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: '8px'}}>
+        <div className="form-group">
+          <label style={{fontSize:'10px', fontWeight:'700'}}>Hours</label>
+          <input type="number" min="0" value={studyHours} onChange={e => setStudyHours(e.target.value)} style={{padding:'6px 8px', fontSize:'12px'}} />
+        </div>
+        <div className="form-group">
+          <label style={{fontSize:'10px', fontWeight:'700'}}>Streak</label>
+          <input type="number" min="0" value={streak} onChange={e => setStreak(e.target.value)} style={{padding:'6px 8px', fontSize:'12px'}} />
+        </div>
+        <div className="form-group">
+          <label style={{fontSize:'10px', fontWeight:'700'}}>Tasks</label>
+          <input type="number" min="0" value={completedTasksCount} onChange={e => setCompletedTasksCount(e.target.value)} style={{padding:'6px 8px', fontSize:'12px'}} />
+        </div>
+      </div>
+      <button type="submit" className="secondary" style={{width:'100%', minHeight:'32px', padding:'0', fontSize:'12px', marginTop:'8px'}}>Save Progress</button>
+    </form>
+  );
+}
+
+function BuddyCard({ buddy, onChat, onRemove }) {
+  const { profile, isOnline } = buddy;
+  return (
+    <article className="buddy-item-card">
+      <div className="buddy-item-header">
+        <div className="buddy-info-main">
+          <h3>
+            <i className={`online-indicator ${isOnline ? 'online' : ''}`} title={isOnline ? 'Online' : 'Offline'} />
+            {profile.name}
+          </h3>
+          <span>{profile.email}</span>
+        </div>
+        <div className="buddy-sp-badge">
+          <span>SP Score</span>
+          <strong>{profile.totalSp}</strong>
+        </div>
+      </div>
+
+      <div className="buddy-item-details">
+        <div><b>Semester:</b> {profile.currentSemester || '—'} | <b>Degree:</b> {profile.course || '—'}</div>
+        <div><b>Study Streak:</b> 🔥 {profile.streak} days</div>
+        <div><b>Study Hours logged:</b> ⏱️ {profile.studyHours} hrs</div>
+        <div><b>Weekly Goal:</b> <span className={profile.weeklyGoalCompleted ? 'completed-goal-text' : ''}>{profile.weeklyGoal || 'None set'}</span></div>
+        <div><b>Tasks Completed:</b> {profile.completedTasksCount} tasks</div>
+        <div><b>Last active:</b> {new Date(profile.lastActive).toLocaleDateString()} at {new Date(profile.lastActive).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+      </div>
+
+      <div className="buddy-item-actions">
+        <button className="primary" style={{minHeight:'32px', padding:'0 12px', fontSize:'12px'}} onClick={() => onChat(profile)}>Quick Chat</button>
+        <button className="remove" style={{minHeight:'32px', padding:'0 12px', fontSize:'12px'}} onClick={() => onRemove(profile.studentId)}>Remove Buddy</button>
+      </div>
+    </article>
+  );
+}
+
+function FindBuddySection({ API, headers, onSendRequest, requests, buddies }) {
+  const [suggestions, setSuggestions] = useState([]);
+  const [searchResults, setSearchResults] = useState(null);
+  const [loading, setLoading] = useState(true);
+  
+  const [q, setQ] = useState('');
+  const [semester, setSemester] = useState('');
+  const [course, setCourse] = useState('');
+  const [subject, setSubject] = useState('');
+  const [studyTime, setStudyTime] = useState('');
+  const [online, setOnline] = useState(false);
+
+  const fetchSuggestions = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/study-buddy/suggestions`, { headers });
+      if (res.ok) setSuggestions(await res.json());
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSuggestions();
+  }, [requests, buddies]);
+
+  const handleSearch = async (e) => {
+    if (e) e.preventDefault();
+    setLoading(true);
+    try {
+      const queryParams = new URLSearchParams();
+      if (q) queryParams.append('q', q);
+      if (semester) queryParams.append('semester', semester);
+      if (course) queryParams.append('course', course);
+      if (subject) queryParams.append('subject', subject);
+      if (studyTime) queryParams.append('studyTime', studyTime);
+      if (online) queryParams.append('online', 'true');
+
+      const res = await fetch(`${API}/study-buddy/search?${queryParams.toString()}`, { headers });
+      if (res.ok) setSearchResults(await res.json());
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearSearch = () => {
+    setQ('');
+    setSemester('');
+    setCourse('');
+    setSubject('');
+    setStudyTime('');
+    setOnline(false);
+    setSearchResults(null);
+    fetchSuggestions();
+  };
+
+  const getButtonState = (studentId) => {
+    const sidStr = studentId.toString();
+    if (buddies.some(b => b.profile.studentId.toString() === sidStr)) {
+      return { text: 'Already Buddies', disabled: true, className: 'secondary' };
+    }
+    if (requests.outgoing.some(r => r.receiver._id.toString() === sidStr)) {
+      return { text: 'Pending Sent', disabled: true, className: 'secondary' };
+    }
+    if (requests.incoming.some(r => r.sender._id.toString() === sidStr)) {
+      return { text: 'Accept Request', disabled: false, className: 'primary' };
+    }
+    return { text: 'Send Request', disabled: false, className: 'primary' };
+  };
+
+  const activeList = searchResults !== null ? searchResults : suggestions.map(s => ({
+    profile: s.profile,
+    matchPercentage: s.matchPercentage,
+    isOnline: s.isOnline,
+    reasons: s.reasons
+  }));
+
+  return (
+    <div className="sb-search-section">
+      <div className="panel" style={{marginBottom: '0'}}>
+        <h3>Find Study Buddy</h3>
+        
+        <form onSubmit={handleSearch} className="sb-filters-card">
+          <div className="search-row">
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by name or email..." style={{padding:'9px 12px'}} />
+            <button type="submit" className="primary" style={{minHeight:'38px'}}>Search</button>
+          </div>
+          <div className="filters-row">
+            <div className="filter-item">
+              <label>Semester</label>
+              <select value={semester} onChange={e => setSemester(e.target.value)}>
+                <option value="">Any</option>
+                {[1,2,3,4,5,6,7,8].map(s => <option key={s} value={`Semester ${s}`}>{`Semester ${s}`}</option>)}
+              </select>
+            </div>
+            <div className="filter-item">
+              <label>Study Time</label>
+              <select value={studyTime} onChange={e => setStudyTime(e.target.value)}>
+                <option value="">Any</option>
+                <option value="Morning">Morning</option>
+                <option value="Afternoon">Afternoon</option>
+                <option value="Night">Night</option>
+                <option value="Flexible">Flexible</option>
+              </select>
+            </div>
+            <div className="filter-item">
+              <label>Subject</label>
+              <input value={subject} onChange={e => setSubject(e.target.value)} placeholder="e.g. DSA" style={{padding:'6px 8px'}} />
+            </div>
+            <div className="filter-checkbox-item">
+              <input type="checkbox" id="online-check" checked={online} onChange={e => setOnline(e.target.checked)} />
+              <label htmlFor="online-check">Online Only</label>
+            </div>
+          </div>
+          <div style={{display:'flex', justifyContent:'flex-end', gap:'8px', marginTop:'10px'}}>
+            {searchResults !== null && <button type="button" className="secondary" onClick={clearSearch} style={{minHeight:'30px', padding:'0 10px', fontSize:'12px'}}>Clear filters</button>}
+            <button type="submit" className="primary" style={{minHeight:'30px', padding:'0 12px', fontSize:'12px'}}>Apply Filters</button>
+          </div>
+        </form>
+      </div>
+
+      <div className="panel">
+        <h3 style={{marginBottom:'14px'}}>
+          {searchResults !== null ? `Search Results (${activeList.length})` : 'Buddy Suggestions'}
+        </h3>
+        
+        {loading ? (
+          <p className="empty">Loading list...</p>
+        ) : activeList.length === 0 ? (
+          <p className="empty">No matching students found. Try widening your search filters!</p>
+        ) : (
+          <div className="suggestions-grid">
+            {activeList.map(item => {
+              const btnState = getButtonState(item.profile.studentId);
+              return (
+                <article key={item.profile._id} className="suggestion-item-card">
+                  <div className="suggestion-badge-row">
+                    <div className="suggestion-profile-info">
+                      <h3>
+                        <i className={`online-indicator ${item.isOnline ? 'online' : ''}`} title={item.isOnline ? 'Online' : 'Offline'} />
+                        {item.profile.name}
+                      </h3>
+                      <p>{item.profile.email}</p>
+                    </div>
+                    {item.matchPercentage !== undefined && (
+                      <span className={`match-percentage-badge ${item.matchPercentage >= 70 ? 'high' : item.matchPercentage >= 40 ? 'medium' : ''}`}>
+                        {item.matchPercentage}% Match
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="suggestion-details">
+                    <span><b>Course:</b> {item.profile.course} ({item.profile.currentSemester})</span>
+                    <span><b>Availability:</b> {item.profile.weeklyAvailability} hrs/wk</span>
+                    <span><b>Streak:</b> 🔥 {item.profile.streak} days</span>
+                    <span><b>Motivation (SP):</b> <strong className="buddy-sp-text">{item.profile.totalSp} SP</strong></span>
+                  </div>
+
+                  {item.reasons && item.reasons.length > 0 && (
+                    <div className="match-reasons-list">
+                      {item.reasons.slice(0, 3).map((r, i) => (
+                        <span key={i} className="match-reason-tag">{r}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    className={btnState.className}
+                    disabled={btnState.disabled}
+                    onClick={() => onSendRequest(item.profile.studentId)}
+                    style={{width:'100%', minHeight:'32px', padding:'0', fontSize:'12px'}}
+                  >
+                    {btnState.text}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PlaceholderChatModal({ buddy, onClose }) {
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <section className="modal quick-chat-modal">
+        <div className="modal-head" style={{justifyContent:'flex-end', borderBottom:'0', padding:'0'}}>
+          <button className="icon" onClick={onClose} style={{width:'30px', minHeight:'30px'}}>×</button>
+        </div>
+        <h2>Quick Chat with {buddy.name}</h2>
+        <p>In-app real-time chat is coming soon to Spurti! In the meantime, you can reach out directly to coordinate your study schedules:</p>
+        <div className="quick-chat-email">{buddy.email}</div>
+        <button className="primary" onClick={onClose} style={{width:'100%'}}>Done</button>
+      </section>
     </div>
   );
 }
