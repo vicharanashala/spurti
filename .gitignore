@@ -22,3 +22,41 @@ pipeline/.env
 # runtime log + local DB backups (not for the repo)
 server.log
 sp-runs/
+
+# local MongoDB data folder
+mongo-data/
+
+# ad-hoc debug scripts and log dumps (kept out of the repo)
+# (only matches names starting with _ or known debug patterns)
+/_*.js
+/_*.cjs
+/_*.ps1
+/_*.bat
+/_*.txt
+/_*.py
+/extract*.js
+/dump*.js
+/test_*.js
+/debug*.js
+/read_*.js
+/find_*.js
+/trim_*.js
+/check_*.js
+/cap_*.js
+/leave_test*.js
+/dup_*.js
+/join_*.js
+/db_check*.js
+/cleanup_*.js
+/verify_*.js
+/server_log.txt
+/server_out.log
+/server_err.log
+/guilds_dump.txt
+/old_guild_routes.txt
+/out_guild.txt
+/out_guild_model.txt
+/student_dump.txt
+
+# node_modules everywhere
+**/node_modules/

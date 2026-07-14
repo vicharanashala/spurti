@@ -7,6 +7,13 @@ export const ALLOW_STUDENT_SEARCH = process.env.ALLOW_STUDENT_SEARCH !== 'false'
 // cookie and confirms the session against this internal endpoint (same host).
 export const SAMAGAMA_AUTH_URL = process.env.SAMAGAMA_AUTH_URL || 'http://127.0.0.1:5001/api/auth/me';
 
+// Secret used to sign the local session cookie (spurti_session) so that students
+// who log in via the search/confirm flow (no Samagama SSO) can still hit
+// authenticated endpoints like /api/guilds/mine. Must be set in .env in
+// production; defaults to a development-only value.
+export const SPURTI_AUTH_SECRET = process.env.SPURTI_AUTH_SECRET || 'local-dev-only-change-this';
+export const SPURTI_COOKIE_SECURE = process.env.SPURTI_COOKIE_SECURE === 'true';
+
 export const SESSION_LABELS = [
   '15 May Morning',
   '15 May Evening',
