@@ -6,6 +6,7 @@ import Session from '../../models/Session.js';
 import AttendanceRecord from '../../models/AttendanceRecord.js';
 import PollRecord from '../../models/PollRecord.js';
 import SPTransaction from '../../models/SPTransaction.js';
+import { calculateSundayBonusBreakdown, DEFAULT_SUNDAY_BONUS_CONFIG } from '../../services/sundayBonus.js';
 
 export const KNOWN_SESSIONS = [
   session('15 May Morning', '2026-05-15', 'morning', '2026-05-15T08:27:30', '2026-05-15T12:37:30', 250, '2026-05-15/15_may_attendance_M.csv', '2026-05-15/15 May - orientation poll report - morning.csv'),
@@ -273,6 +274,10 @@ export function buildNameIndex(students) {
 }
 
 export async function applySessionForStudents(config, students, rootDir, stats = {}) {
+  const sundayBonusConfig = {
+    ...DEFAULT_SUNDAY_BONUS_CONFIG,
+    ...(globalThis.__SUNDAY_BONUS_CONFIG__ || {})
+  };
   const attendancePath = config.attendanceFile ? path.resolve(rootDir, config.attendanceFile) : null;
   const pollPath = config.pollFile ? path.resolve(rootDir, config.pollFile) : null;
 
@@ -296,10 +301,14 @@ export async function applySessionForStudents(config, students, rootDir, stats =
         ? `${config.label}: attended ${minutes}/${totalMinutes} minutes (${pct}%). Required 75%, credited +5 SP.`
         : `${config.label}: attended ${minutes}/${totalMinutes} minutes (${pct}%). Required 75%, debited -5 SP.`;
       const tx = await createTransactionOnce(student, 'attendance', config.label, delta, reason, endDateTime, stats);
+      let sundayBonus = { eligible: false, points: 0, tier: 'none', reason: '' };
+      if (sundayBonusConfig.enabled && endDateTime && endDateTime.getDay() === 0) {
+        sundayBonus = { eligible: false, points: 0, tier: 'none', reason: '' };
+      }
       if (tx) {
         await AttendanceRecord.findOneAndUpdate(
           { email: student.email, sessionLabel: config.label },
-          { $set: { email: student.email, studentId: student._id, sessionLabel: config.label, attendedMinutes: minutes, totalSessionMinutes: totalMinutes, attendancePercentage: pct, qualified, transactionId: tx._id } },
+          { $set: { email: student.email, studentId: student._id, sessionLabel: config.label, attendedMinutes: minutes, totalSessionMinutes: totalMinutes, attendancePercentage: pct, qualified, transactionId: tx._id, sundayBonusEligible: sundayBonus.eligible, sundayBonusPoints: sundayBonus.points, sundayBonusTier: sundayBonus.tier } },
           { upsert: true }
         );
         stats.attendanceBackfilled = (stats.attendanceBackfilled || 0) + 1;
@@ -321,6 +330,40 @@ export async function applySessionForStudents(config, students, rootDir, stats =
         );
         stats.pollsBackfilled = (stats.pollsBackfilled || 0) + 1;
       }
+    }
+
+    if (sundayBonusConfig.enabled && endDateTime && endDateTime.getDay() === 0) {
+      const attendanceRecord = await AttendanceRecord.findOne({ email: student.email, sessionLabel: config.label }).lean();
+      const pollRecord = await PollRecord.findOne({ email: student.email, sessionLabel: config.label }).lean();
+      const breakdown = calculateSundayBonusBreakdown(
+        attendanceRecord?.attendedMinutes || 0,
+        attendanceRecord?.totalSessionMinutes || totalMinutes,
+        pollRecord?.attemptedQuestions || 0,
+        pollRecord?.totalQuestions || 0,
+        endDateTime,
+        sundayBonusConfig
+      );
+      if (breakdown.eligible && breakdown.points > 0) {
+        const bonusReason = `${config.label}: ${breakdown.reason}`;
+        const bonusTx = await createTransactionOnce(student, 'sunday_bonus', config.label, breakdown.points, bonusReason, endDateTime, stats);
+        if (bonusTx) {
+          stats.sundayBonusAwards = (stats.sundayBonusAwards || 0) + 1;
+        }
+      }
+      await AttendanceRecord.findOneAndUpdate(
+        { email: student.email, sessionLabel: config.label },
+        { $set: {
+          sundayBonusEligible: breakdown.eligible,
+          sundayBonusPoints: breakdown.points,
+          sundayBonusTier: breakdown.eligible ? (breakdown.attendancePoints > 0 && breakdown.pollPoints > 0 ? 'full' : 'partial') : 'none',
+          sundayBonusAttendancePoints: breakdown.attendancePoints,
+          sundayBonusPollPoints: breakdown.pollPoints,
+          sundayBonusAttendanceMinutes: attendanceRecord?.attendedMinutes || 0,
+          sundayBonusPollsAttempted: pollRecord?.attemptedQuestions || 0,
+          sundayBonusPollsTotal: pollRecord?.totalQuestions || 0
+        } },
+        { upsert: true }
+      );
     }
   }
 
