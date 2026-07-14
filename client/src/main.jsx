@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import WeeklyRecap from './components/WeeklyRecap.jsx';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -278,6 +279,7 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
+      <WeeklyRecap studentId={student._id} studentEmail={student.email} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
