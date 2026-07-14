@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { explainTransactions } from './services/spExplanation.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -230,6 +231,10 @@ async function studentPayload(student) {
     transactions,
     polls,
     attendance,
+    // Human-readable explanation for each transaction. Keyed by txn _id
+    // (string). Lets the SpBank tab tell students WHY they gained/lost SP
+    // for each row instead of forcing them to guess from the rubric.
+    explanations: explainTransactions(transactions),
     cohort: {
       averageSp,
       top10Cutoff,

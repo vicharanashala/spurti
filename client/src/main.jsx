@@ -280,7 +280,7 @@ function StudentView({ profile, onBack }) {
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
-      {tab === 'bank' && <SpBank transactions={profile.transactions} />}
+      {tab === 'bank' && <SpBank transactions={profile.transactions} explanations={profile.explanations || {}} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
@@ -432,21 +432,54 @@ function Tabs({ tab, setTab, tabs }) {
   return <nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>;
 }
 
-function SpBank({ transactions }) {
+function SpBank({ transactions, explanations = {} }) {
+  const [openId, setOpenId] = useState(null);
+  const toggle = (id) => setOpenId(prev => prev === id ? null : id);
   return (
     <section className="panel">
       <h2>SP Bank Statement</h2>
       <div className="bank">
         <div className="bank-header"><span>Date & time</span><span>Credit</span><span>Debit</span><span>Balance</span><span>Reason</span></div>
-        {transactions.map(tx => (
-          <div className="bank-row" key={tx._id}>
-            <span>{new Date(tx.dateTime).toLocaleString()}</span>
-            <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
-            <strong className="debit">{tx.appliedDelta < 0 ? tx.appliedDelta : ''}</strong>
-            <b>{tx.balanceAfter}</b>
-            <p>{tx.reason}</p>
-          </div>
-        ))}
+        {transactions.map(tx => {
+          const ex = explanations[String(tx._id)];
+          const isOpen = openId === String(tx._id);
+          return (
+            <div className="bank-row-wrap" key={tx._id}>
+              <div
+                className={ex ? 'bank-row bank-row-clickable' : 'bank-row'}
+                onClick={ex ? () => toggle(String(tx._id)) : undefined}
+                role={ex ? 'button' : undefined}
+                aria-expanded={ex ? isOpen : undefined}
+                title={ex ? 'Click to see how this was scored' : undefined}
+              >
+                <span>{new Date(tx.dateTime).toLocaleString()}</span>
+                <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
+                <strong className="debit">{tx.appliedDelta < 0 ? tx.appliedDelta : ''}</strong>
+                <b>{tx.balanceAfter}</b>
+                <p>{tx.reason}</p>
+              </div>
+              {ex && isOpen && (
+                <div className={`bank-explain bank-explain-${ex.category}`}>
+                  <div className="bank-explain-head">{ex.headline}</div>
+                  <div className="bank-explain-detail">{ex.detail}</div>
+                  <div className="bank-explain-recommendation">
+                    <strong>What to do differently:</strong> {ex.recommendation}
+                  </div>
+                  {ex.rubric && ex.rubric.rule !== 'unknown' && (
+                    <details className="bank-explain-rubric">
+                      <summary>Show rubric numbers</summary>
+                      <table className="table">
+                        <tbody>{Object.entries(ex.rubric.values).map(([k, v]) => (
+                          <tr key={k}><td>{k}</td><td>{String(v)}</td></tr>
+                        ))}</tbody>
+                      </table>
+                    </details>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -593,7 +626,7 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
-      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
+      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} explanations={studentProfile.explanations || {}} /></section></div>}
     </main>
   );
 }

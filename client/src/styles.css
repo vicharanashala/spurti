@@ -291,10 +291,92 @@ input {
   border-bottom: 1px solid var(--line);
 }
 .bank-header { background: #f8fafc; font-size: 12px; font-weight: 900; color: var(--muted); text-transform: uppercase; }
-.bank-row:last-child { border-bottom: 0; }
+.bank-row-wrap { border-bottom: 1px solid var(--line); }
+.bank-row-wrap:last-child { border-bottom: 0; }
+.bank-row { background: #fff; transition: background 0.12s; }
+.bank-row-clickable { cursor: pointer; }
+.bank-row-clickable:hover { background: #f5fbfd; }
+.bank-row-clickable::after {
+  content: '?';
+  position: absolute;
+  right: 14px;
+  top: 11px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.bank-row-clickable { position: relative; }
+.bank-row-clickable:hover::after { opacity: 1; }
 .bank-row p { margin: 0; color: #334155; line-height: 1.4; }
 .credit { color: var(--green); }
 .debit { color: var(--red); }
+
+/* Why-did-this-happen explainer panel (feature/why-did-i-lose-sp) */
+.bank-explain {
+  background: #fbfdff;
+  border-top: 1px solid var(--line);
+  padding: 12px 14px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1e293b;
+}
+.bank-explain-attendance {
+  background: linear-gradient(180deg, #fff7f7 0%, #fbfdff 100%);
+  border-left: 3px solid var(--red);
+}
+.bank-explain-poll {
+  background: linear-gradient(180deg, #fff8eb 0%, #fbfdff 100%);
+  border-left: 3px solid var(--amber);
+}
+.bank-explain-initial,
+.bank-explain-manual {
+  background: #fbfdff;
+  border-left: 3px solid var(--primary);
+}
+.bank-explain-head {
+  font-weight: 800;
+  font-size: 14px;
+  margin-bottom: 6px;
+  color: var(--text);
+}
+.bank-explain-detail {
+  margin-bottom: 8px;
+  color: #475569;
+}
+.bank-explain-recommendation {
+  background: #f1f5f9;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  margin-top: 6px;
+}
+.bank-explain-recommendation strong {
+  color: var(--primary);
+  margin-right: 4px;
+}
+.bank-explain-rubric {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.bank-explain-rubric summary { cursor: pointer; user-select: none; }
+.bank-explain-rubric summary:hover { color: var(--primary); }
+.bank-explain-rubric .table {
+  margin-top: 6px;
+  font-size: 11px;
+}
+.bank-explain-rubric .table td {
+  padding: 4px 8px;
+}
 
 .cards { display: grid; gap: 12px; }
 .card {
