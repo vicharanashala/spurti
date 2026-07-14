@@ -347,14 +347,55 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   );
 }
 
+function StreakCard({ streak }) {
+  if (!streak) {
+    return (
+      <div className="pulse-card streak-card">
+        <span>Streak & Momentum</span>
+        <div className="streak-main">
+          <p className="muted">No sessions yet</p>
+        </div>
+      </div>
+    );
+  }
+
+  const { currentStreak, longestStreak, streakBrokenAt, isActive } = streak;
+
+  return (
+    <div className={`pulse-card streak-card ${isActive ? 'streak-active' : ''}`}>
+      <span>Streak & Momentum</span>
+      <div className="streak-main">
+        <strong>{currentStreak}</strong>
+        <div className="compare-list">
+          <b>Personal Best: {longestStreak}</b>
+        </div>
+      </div>
+      
+      {isActive ? (
+        <div className="badge-row">
+          <em className="streak-flame">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path></svg>
+            Active Streak
+          </em>
+        </div>
+      ) : (
+        <p className="muted streak-ended">
+          {streakBrokenAt ? `Streak ended after: ${streakBrokenAt}` : 'No active streak'}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function StudentPulse({ profile, badges, nextActions }) {
-  const { student, cohort, attendance, polls, transactions } = profile;
+  const { student, cohort, attendance, polls, transactions, streak } = profile;
   const qualified = attendance.filter(a => a.qualified).length;
   const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
   const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
   return (
     <section className="pulse-grid">
+      <StreakCard streak={streak} />
       <div className="pulse-card progress-card">
         <span>Standing</span>
         <strong>Rank {student.rank}</strong>
