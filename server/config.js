@@ -7,6 +7,10 @@ export const ALLOW_STUDENT_SEARCH = process.env.ALLOW_STUDENT_SEARCH !== 'false'
 // cookie and confirms the session against this internal endpoint (same host).
 export const SAMAGAMA_AUTH_URL = process.env.SAMAGAMA_AUTH_URL || 'http://127.0.0.1:5001/api/auth/me';
 
+// HMAC secret for the local `spurti_session` cookie issued by /api/confirm
+// when a student logs in via the search flow (no Samagama cookie available).
+export const SESSION_SECRET = process.env.SESSION_SECRET || 'spurti-dev-secret-change-me-in-prod';
+
 export const SESSION_LABELS = [
   '15 May Morning',
   '15 May Evening',

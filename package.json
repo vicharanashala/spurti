@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "seed": "node server/scripts/seed.js",
+    "seed-season": "node seed-season.js",
     "rebuild": "node server/scripts/rebuild.js",
     "add-students": "node server/scripts/addStudents.js",
     "sync-students": "node server/scripts/syncStudents.js",
