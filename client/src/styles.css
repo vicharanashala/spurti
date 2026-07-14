@@ -514,3 +514,39 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+.forecast-stats {
+  display: flex;
+  gap: 16px;
+  margin: 8px 0;
+}
+
+.forecast-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.forecast-stat b {
+  font-size: 1.4em;
+}
+
+.forecast-stat em {
+  font-style: normal;
+  color: #999;
+  font-size: 0.85em;
+}
+
+.forecast-goal {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.forecast-goal input {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #444;
+  background: #1a1a1a;
+  color: #fff;
+  flex: 1;
+}
