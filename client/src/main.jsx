@@ -69,7 +69,11 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView 
+          profile={profile} 
+          onBack={config.allowStudentSearch ? () => setView('landing') : null} 
+          onSettings={() => setView('notification-settings')}
+        />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -86,6 +90,9 @@ function App() {
         />
       </>
     );
+  }
+  if (view === 'notification-settings' && profile) {
+    return <NotificationSettings onBack={() => setView('student')} />;
   }
   if (view === 'excused' && excused) {
     return <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />;
@@ -262,7 +269,7 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onBack, onSettings }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -270,7 +277,10 @@ function StudentView({ profile, onBack }) {
   return (
     <main className="page compact">
       <header className="topbar">
-        {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
+          <NotificationBell onSettings={onSettings} />
+        </div>
         <div>
           <p className="eyebrow">Student Spurti Bank</p>
           <h1>{student.name}</h1>
@@ -347,14 +357,90 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   );
 }
 
+function StreakCard({ streak, student }) {
+  const [freezes, setFreezes] = useState(student?.streakFreezesAvailable || 0);
+  const [buying, setBuying] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setFreezes(student?.streakFreezesAvailable || 0);
+  }, [student?.streakFreezesAvailable]);
+
+  const buyFreeze = async () => {
+    setBuying(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API}/streak-freeze/buy`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to buy');
+      setFreezes(data.streakFreezesAvailable);
+    } catch (err) {
+      setError(err.message);
+    }
+    setBuying(false);
+  };
+
+  if (!streak) {
+    return (
+      <div className="pulse-card streak-card">
+        <div className="streak-card-header">
+          <span>Streak & Momentum</span>
+          {freezes > 0 && <span className="streak-freeze-badge">🛡️ {freezes} freeze(s) available</span>}
+        </div>
+        <div className="streak-main">
+          <p className="muted">No sessions yet</p>
+        </div>
+      </div>
+    );
+  }
+
+  const { currentStreak, longestStreak, streakBrokenAt, isActive } = streak;
+
+  return (
+    <div className={`pulse-card streak-card ${isActive ? 'streak-active' : ''}`}>
+      <div className="streak-card-header">
+        <span>Streak & Momentum</span>
+        {freezes > 0 && <span className="streak-freeze-badge">🛡️ {freezes} freeze(s) available</span>}
+      </div>
+      <div className="streak-main">
+        <strong>{currentStreak}</strong>
+        <div className="compare-list">
+          <b>Personal Best: {longestStreak}</b>
+        </div>
+      </div>
+      
+      {isActive ? (
+        <div className="badge-row">
+          <em className="streak-flame">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path></svg>
+            Active Streak
+          </em>
+        </div>
+      ) : (
+        <p className="muted streak-ended">
+          {streakBrokenAt ? `Streak ended after: ${streakBrokenAt}` : 'No active streak'}
+        </p>
+      )}
+
+      <div className="streak-freeze-action">
+        <button className="streak-freeze-buy" onClick={buyFreeze} disabled={buying}>
+          {buying ? 'Buying...' : 'Buy Freeze (20 SP)'}
+        </button>
+        {error && <span className="streak-freeze-error">{error}</span>}
+      </div>
+    </div>
+  );
+}
+
 function StudentPulse({ profile, badges, nextActions }) {
-  const { student, cohort, attendance, polls, transactions } = profile;
+  const { student, cohort, attendance, polls, transactions, streak } = profile;
   const qualified = attendance.filter(a => a.qualified).length;
   const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
   const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
   return (
     <section className="pulse-grid">
+      <StreakCard streak={streak} student={student} />
       <div className="pulse-card progress-card">
         <span>Standing</span>
         <strong>Rank {student.rank}</strong>
@@ -846,5 +932,143 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
+
+function NotificationBell({ onSettings }) {
+  const [notifications, setNotifications] = useState([]);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const fetchNotifs = async () => {
+      try {
+        const res = await fetch(`${API}/notifications`);
+        if (res.ok && active) setNotifications(await res.json());
+      } catch (err) {}
+    };
+    fetchNotifs();
+    const id = setInterval(fetchNotifs, 45000);
+    return () => { active = false; clearInterval(id); };
+  }, []);
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  const markAllRead = async () => {
+    await fetch(`${API}/notifications/read-all`, { method: 'POST' });
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
+
+  const markRead = async (id) => {
+    await fetch(`${API}/notifications/${id}/read`, { method: 'POST' });
+    setNotifications(prev => prev.map(n => n._id === id ? { ...n, read: true } : n));
+  };
+
+  return (
+    <div className="notification-bell-wrapper">
+      <button className="secondary notification-bell-button" onClick={() => setOpen(!open)}>
+        🔔 {unreadCount > 0 && <span className="notification-bell-badge">{unreadCount}</span>}
+      </button>
+      {open && (
+        <div className="notification-dropdown">
+          <div className="notification-dropdown-header">
+            <h3 className="notification-dropdown-title">Notifications</h3>
+            <button className="secondary notification-settings-button" onClick={() => { setOpen(false); onSettings(); }}>⚙️ Settings</button>
+          </div>
+          {notifications.length === 0 ? <p className="muted notification-empty-state">No notifications</p> : (
+            <div className="notification-item-container">
+              {notifications.map(n => (
+                <div key={n._id} onClick={() => markRead(n._id)} className={`notification-item ${n.read ? '' : 'unread'}`}>
+                  <p className="notification-item-title">{n.title}</p>
+                  <p className="notification-item-message">{n.message}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {unreadCount > 0 && <button className="primary notification-mark-all" onClick={markAllRead}>Mark all as read</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificationSettings({ onBack }) {
+  const [prefs, setPrefs] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/notifications/preferences`)
+      .then(r => r.json())
+      .then(setPrefs)
+      .catch(() => {});
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    await fetch(`${API}/notifications/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categories: prefs.categories })
+    });
+    setSaving(false);
+    onBack();
+  };
+
+  const toggle = (cat, type) => {
+    setPrefs(p => ({
+      ...p,
+      categories: {
+        ...p.categories,
+        [cat]: { ...p.categories[cat], [type]: !p.categories[cat][type] }
+      }
+    }));
+  };
+
+  if (!prefs) return <main className="page"><section className="panel"><p>Loading preferences...</p></section></main>;
+
+  const labels = {
+    weeklyDigest: 'Weekly Digest',
+    streakReminders: 'Streak Reminders',
+    peerActivity: 'Peer Activity',
+    announcements: 'Announcements'
+  };
+
+  return (
+    <main className="page compact">
+      <section className="panel">
+        <div className="notification-settings-header">
+          <div>
+            <p className="eyebrow">Settings</p>
+            <h1>Notification Preferences</h1>
+          </div>
+          <button className="secondary" onClick={onBack}>Back</button>
+        </div>
+        <p className="lead notification-settings-lead">Control how you want to be notified for each type of activity.</p>
+        
+        <div className="notification-settings-list">
+          {Object.keys(labels).map(cat => (
+            <div key={cat} className="notification-settings-row">
+              <strong className="notification-settings-label">{labels[cat]}</strong>
+              <div className="notification-settings-toggles">
+                <label className="notification-settings-toggle">
+                  <input type="checkbox" checked={prefs.categories[cat]?.inApp ?? true} onChange={() => toggle(cat, 'inApp')} />
+                  In-App
+                </label>
+                <label className="notification-settings-toggle">
+                  <input type="checkbox" checked={prefs.categories[cat]?.email ?? false} onChange={() => toggle(cat, 'email')} />
+                  Email
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+        
+        <div className="notification-settings-actions">
+          <button className="primary" onClick={save} disabled={saving}>
+            {saving ? 'Saving...' : 'Save Preferences'}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);
