@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import PerformanceGraph from './PerformanceGraph';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -348,11 +349,10 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
 }
 
 function StudentPulse({ profile, badges, nextActions }) {
-  const { student, cohort, attendance, polls, transactions } = profile;
+  const { student, cohort, attendance, polls } = profile;
   const qualified = attendance.filter(a => a.qualified).length;
   const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
   const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
-  const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
   return (
     <section className="pulse-grid">
       <div className="pulse-card progress-card">
@@ -381,29 +381,12 @@ function StudentPulse({ profile, badges, nextActions }) {
         <span>Badges</span>
         <div className="badge-row">{badges.map(badge => <em key={badge}>{badge}</em>)}</div>
       </div>
-      <div className="pulse-card wide-pulse">
-        <span>SP trend</span>
-        <Sparkline points={trend} />
-      </div>
+      <PerformanceGraph profile={profile} API={API} />
       <div className="pulse-card wide-pulse">
         <span>What to do next</span>
         <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
       </div>
     </section>
-  );
-}
-
-function Sparkline({ points }) {
-  const values = points.map(p => p.value);
-  const min = Math.min(...values, 0);
-  const max = Math.max(...values, 1);
-  return (
-    <div className="sparkline">
-      {points.map((point, index) => {
-        const pct = max === min ? 50 : ((point.value - min) / (max - min)) * 100;
-        return <i key={`${point.label}-${index}`} title={`${point.label}: ${point.value} SP`} style={{ height: `${Math.max(6, pct)}%` }} />;
-      })}
-    </div>
   );
 }
 
