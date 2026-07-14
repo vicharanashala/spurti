@@ -514,3 +514,42 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* Persistent Comparison Circle Custom Styles */
+.comparison-circle-layout {
+  display: grid;
+  gap: 18px;
+}
+.circle-member-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+.circle-member-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.circle-member-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.circle-member-sp {
+  font-weight: 700;
+  color: var(--primary);
+}
+.circle-remove-btn {
+  background: #fee2e2;
+  color: var(--red);
+}
+.circle-remove-btn:hover {
+  background: #fecaca;
+}
