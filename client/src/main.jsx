@@ -13,6 +13,7 @@ function App() {
   const [adminAuth, setAdminAuth] = useState(null);
   const [config, setConfig] = useState({ allowStudentSearch: true });
   const [loading, setLoading] = useState(true);
+  const [season, setSeason] = useState(null);
 
   useEffect(() => {
     if (!profile?.student) return;
@@ -46,11 +47,13 @@ function App() {
             const data = await meRes.json();
             if (data.authenticated && data.profile && active) {
               setProfile(data.profile);
+              setSeason(data.season || { season: null });
               setExcused(null);
               setView('student');
             } else if (data.authenticated && data.excused && active) {
               setExcused(data);
               setProfile(null);
+              setSeason(null);
               setView('excused');
             }
           }
@@ -69,7 +72,7 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} season={season} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -100,10 +103,12 @@ function App() {
     if (data?.excused) {
       setExcused(data);
       setProfile(null);
+      setSeason(null);
       setView('excused');
       return;
     }
-    setProfile(data);
+    setProfile(data.profile || data);
+    setSeason(data.season || null);
     setExcused(null);
     setView('student');
   }} />;
@@ -211,7 +216,7 @@ function SearchModal({ onClose, onStudent }) {
     const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
     const data = await res.json();
     if (data.excused) return onStudent(data);
-    if (data.exact) return onStudent(data.profile);
+    if (data.exact) return onStudent({ profile: data.profile, season: data.season });
     setMatches(data.matches || []);
     setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
   };
@@ -262,11 +267,13 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, season, onBack }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+  const seasonClaimed = season?.standing?.claimedRewards?.length || 0;
+  const seasonTotalRewards = season?.rewards?.length || 0;
   return (
     <main className="page compact">
       <header className="topbar">
@@ -277,12 +284,24 @@ function StudentView({ profile, onBack }) {
         </div>
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
+      {season?.season && seasonClaimed > 0 && (
+        <div className="season-rewards-strip" title="Your earned season rewards — visit the Season tab for details">
+          <strong>Season Rewards:</strong>
+          <span className="season-rewards-count">{seasonClaimed} / {seasonTotalRewards} claimed</span>
+          {season.standing.claimedRewards.slice(0, 5).map(key => {
+            const r = (season.rewards || []).find(r2 => r2.key === key);
+            return r ? <span key={key} className="season-reward-pill" title={r.label}>{r.icon || '🎖'}</span> : null;
+          })}
+          {seasonClaimed > 5 && <span className="season-reward-pill">+{seasonClaimed - 5}</span>}
+        </div>
+      )}
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['season','Season']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'season' && <SeasonPanel season={season} />}
     </main>
   );
 }
@@ -493,6 +512,332 @@ function Polls({ polls }) {
   );
 }
 
+// --- Season Panel -----------------------------------------------------------
+
+function SeasonStatusPill({ status }) {
+  const cls = { upcoming: 'pill-upcoming', active: 'pill-active', ended: 'pill-ended' }[status] || '';
+  const txt = { upcoming: '⏳ Upcoming', active: '🔥 Live', ended: '🏁 Ended' }[status] || '';
+  return <span className={`season-pill ${cls}`}>{txt}</span>;
+}
+
+function CountdownTimer({ endDate }) {
+  const [remaining, setRemaining] = useState('');
+  useEffect(() => {
+    if (!endDate) return;
+    function tick() {
+      const diff = new Date(endDate) - Date.now();
+      if (diff <= 0) { setRemaining('0d 0h'); return; }
+      const d = Math.floor(diff / 86400000);
+      const h = Math.floor((diff % 86400000) / 3600000);
+      setRemaining(d > 0 ? `${d}d ${h}h` : `${h}h left`);
+    }
+    tick();
+    const id = setInterval(tick, 60000);
+    return () => clearInterval(id);
+  }, [endDate]);
+  return <>{remaining}</>;
+}
+
+function RewardBadge({ reward, isClaimed, isLocked }) {
+  const icon = reward.icon || '🎖';
+  let detail = '';
+  if (reward.goalType === 'sp') detail = `Earn ${reward.goalValue} SP this season`;
+  else if (reward.goalType === 'rank') detail = `Finish rank ${reward.goalValue} or better`;
+  else if (reward.goalType === 'qualified_sessions') detail = `${reward.goalValue} qualified sessions`;
+  else if (reward.goalType === 'league') detail = `Reach ${reward.goalValue} League`;
+  const bonus = Number(reward.spBonus || 0);
+  const label = reward.label || 'Reward';
+  return (
+    <div className={`reward-card ${isClaimed ? 'reward-claimed' : isLocked ? 'reward-locked' : 'reward-available'}`}>
+      <span className="reward-icon">{icon}</span>
+      <div className="reward-body">
+        <strong>{label}</strong>
+        <p>{detail}</p>
+        {bonus > 0 && (
+          <p className="reward-bonus" style={{fontSize:'11px',color:'#166534',marginTop:'2px',fontWeight:600}}>
+            🎁 +{bonus} SP on claim
+          </p>
+        )}
+      </div>
+      <div className="reward-status">
+        {isClaimed
+          ? <span className="badge-claimed">Claimed</span>
+          : isLocked
+          ? <span className="badge-locked">Locked</span>
+          : <span className="badge-available">Unlocked</span>}
+      </div>
+    </div>
+  );
+}
+
+function SeasonPanel({ season }) {
+  const [claiming, setClaiming] = useState(null);
+  const [claimMsg, setClaimMsg] = useState('');
+  const [celebration, setCelebration] = useState(null);
+  const [localSeason, setLocalSeason] = useState(null);
+
+  // Allow parent to pass season data directly, but also local state for claim refreshes
+  const data = localSeason || season;
+
+  if (!data) {
+    return (
+      <section className="panel season-panel season-empty">
+        <h2>Season</h2>
+        <p className="muted">Loading season data…</p>
+        <p style={{fontSize:'12px',color:'#e85d04',marginTop:'8px'}}>
+          ⚠️ Season data unavailable — session may have expired.<br/>
+          <strong>Log out and log in again</strong> to refresh your session.
+        </p>
+        <details style={{marginTop:'8px',fontSize:'11px',color:'#666'}}>
+          <summary>Debug info</summary>
+          <pre style={{fontSize:'10px',textAlign:'left',background:'#f8f8f8',padding:'6px',marginTop:'4px'}}>
+{JSON.stringify({
+  'typeof season': typeof season,
+  'season === null': season === null,
+  'season truthy': !!season
+}, null, 2)}
+          </pre>
+        </details>
+      </section>
+    );
+  }
+
+  if (!data.season) {
+    return (
+      <section className="panel season-panel season-empty">
+        <h2>Season</h2>
+        <div className="season-no-data">
+          <p className="season-no-icon">🏟️</p>
+          <p><strong>No active season</strong></p>
+          <p className="muted">Ask your admin to create a season to get the competition started!</p>
+        </div>
+      </section>
+    );
+  }
+
+  const s = data.season;
+  const standing = data.standing;
+  const rewards = (data.rewards || []).map(r => ({
+    ...r,
+    claimed:    standing?.claimedRewards?.includes(r.key) ?? false,
+    claimable:  (data.eligibleRewards || []).includes(r.key),
+  }));
+  const lb = data.leaderboard || [];
+  const status = s.status || 'active';
+  const theme = s.themeColor || '#176b87';
+  const earnedSp = standing?.earnedSp ?? 0;
+  const myRank = data.myRank;
+  const myLeague = standing?.peakLeague || '—';
+  const totalStudents = data.cohortSize ?? 0;
+
+  // Season elapsed fraction (0–1)
+  function seasonElapsed() {
+    if (status === 'upcoming') return 0;
+    if (status === 'ended') return 1;
+    const start = new Date(s.startDate).getTime();
+    const end = new Date(s.endDate).getTime();
+    return Math.min(1, Math.max(0, (Date.now() - start) / (end - start)));
+  }
+
+  async function handleClaim(rewardId) {
+    setClaiming(rewardId);
+    setClaimMsg('');
+    try {
+      const r = await fetch(`${API}/seasons/rewards/${rewardId}/claim`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const res = await r.json();
+      if (r.ok) {
+        const spBonus = Number(res.spBonus || 0);
+        const rewardLabel = res.rewardLabel || 'Reward';
+        if (spBonus > 0) {
+          setClaimMsg(`🎉 ${rewardLabel} claimed — +${spBonus} SP added!`);
+          setCelebration({ label: rewardLabel, spBonus });
+          setTimeout(() => setCelebration(null), 3500);
+        } else {
+          setClaimMsg(`✓ ${rewardLabel} claimed!`);
+        }
+        // Build the next season state from the current one, then push it to all
+setLocalSeason(prev => {
+          if (!prev) return prev;
+          const claimedReward = (prev.rewards || []).find(r2 => r2._id === rewardId);
+          const rewardKey = claimedReward?.key || rewardId;
+          return {
+            ...prev,
+            standing: prev.standing ? {
+              ...prev.standing,
+              earnedSp: (prev.standing.earnedSp || 0) + spBonus,
+              claimedRewards: [...(prev.standing.claimedRewards || []), rewardKey]
+            } : prev.standing,
+            rewards: prev.rewards ? prev.rewards.map(r2 => r2._id === rewardId ? { ...r2, claimed: true } : r2) : prev.rewards
+          };
+        });
+      } else {
+        setClaimMsg(res.error || 'Could not claim — please try again.');
+      }
+    } catch {
+      setClaimMsg('Network error — please try again.');
+    } finally {
+      setClaiming(null);
+    }
+  }
+
+  const elapsed = seasonElapsed();
+  const elapsedPct = (elapsed * 100).toFixed(1);
+
+  return (
+    <section className="panel season-panel" style={{position:'relative'}}>
+      {/* Celebration overlay */}
+      {celebration && (
+        <div className="season-celebration">
+          <div className="season-celebration-inner">
+            <div className="season-celebrate-icon">🎉</div>
+            <strong>{celebration.label}</strong>
+            {celebration.spBonus > 0 && <p>+{celebration.spBonus} SP added to your total</p>}
+          </div>
+        </div>
+      )}
+      {/* Season hero header */}
+      <div className="season-hero" style={{ '--season-theme': theme }}>
+        <div className="season-hero-left">
+          <div className="season-eyebrow">
+            <span className="season-num">Season {s.number}</span>
+            <SeasonStatusPill status={status} />
+          </div>
+          <h2 className="season-title">{s.name}</h2>
+          {s.description && <p className="season-desc muted">{s.description}</p>}
+        </div>
+        <div className="season-hero-right">
+          {status === 'active' && (
+            <div className="season-clock">
+              <span>Time remaining</span>
+              <strong><CountdownTimer endDate={s.endDate} /></strong>
+            </div>
+          )}
+          {status === 'upcoming' && (
+            <div className="season-clock">
+              <span>Starts</span>
+              <strong>{new Date(s.startDate).toLocaleDateString()}</strong>
+            </div>
+          )}
+          {status === 'ended' && (
+            <div className="season-clock">
+              <span>Ended</span>
+              <strong>{new Date(s.endDate).toLocaleDateString()}</strong>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Season timeline bar */}
+      <div className="season-timeline">
+        <div className="season-tl-labels">
+          <span>{new Date(s.startDate).toLocaleDateString()}</span>
+          <strong style={{ color: theme }}>{elapsedPct}% complete</strong>
+          <span>{new Date(s.endDate).toLocaleDateString()}</span>
+        </div>
+        <div className="season-tl-track">
+          <div className="season-tl-fill" style={{ width: `${elapsedPct}%`, background: theme }} />
+        </div>
+      </div>
+
+      {/* Student standing cards */}
+      {standing && (
+        <div className="season-standing-row">
+          <div className="season-standing-card">
+            <span>Season SP</span>
+            <strong style={{ color: theme }}>{earnedSp}</strong>
+            <em>earned this season</em>
+          </div>
+          {myRank && (
+            <div className="season-standing-card">
+              <span>Season Rank</span>
+              <strong style={{ color: theme }}>#{myRank}</strong>
+              <em>of {totalStudents} students</em>
+            </div>
+          )}
+          <div className="season-standing-card">
+            <span>Peak League</span>
+            <strong style={{ color: theme }}>{myLeague}</strong>
+            <em>best this season</em>
+          </div>
+          {standing?.qualifiedSessions != null && (
+            <div className="season-standing-card">
+              <span>Qualified Sessions</span>
+              <strong style={{ color: theme }}>{standing.qualifiedSessions}</strong>
+              <em>attended &amp; on-time</em>
+            </div>
+          )}
+          {rewards.length > 0 && (
+            <div className="season-standing-card">
+              <span>Rewards Claimed</span>
+              <strong style={{ color: theme }}>
+                {(standing.claimedRewards || []).length} / {rewards.length}
+              </strong>
+              <em>milestones unlocked</em>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Reward checklist */}
+      {rewards.length > 0 && (
+        <div className="season-section">
+          <h3>Season Rewards</h3>
+          <div className="reward-list">
+            {rewards.map(r => {
+              const isClaimed = !!r.claimed;
+              const isLocked = !isClaimed && !r.claimable;
+              return (
+                <div key={r._id} className="reward-item">
+                  <RewardBadge reward={r} isClaimed={isClaimed} isLocked={isLocked} />
+                  {r.claimable && !isClaimed && (
+                    <button
+                      className="secondary reward-cta"
+                      disabled={claiming === r._id}
+                      onClick={() => handleClaim(r._id)}
+                    >
+                      {claiming === r._id ? 'Claiming…' : 'Claim'}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {claimMsg && <p className={`season-msg ${claimMsg.startsWith('✓') ? 'msg-ok' : 'msg-err'}`}>{claimMsg}</p>}
+        </div>
+      )}
+
+      {/* Season leaderboard strip */}
+      {lb.length > 0 && (
+        <div className="season-section">
+          <h3>Top Season Earners</h3>
+          <div className="season-lb">
+            {lb.slice(0, 10).map((entry, i) => (
+              <div key={entry._id || entry.email || i} className={`season-lb-row ${entry.isCurrentStudent ? 'lb-self' : ''}`}>
+                <span className="lb-pos">#{entry.rank}</span>
+                <div className="lb-info">
+                  <strong>{entry.name}</strong>
+                  <span>{entry.earnedSp} SP</span>
+                </div>
+                {entry.peakLeague && entry.peakLeague !== '—' && <span className="lb-league">{entry.peakLeague}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {status === 'ended' && (
+        <div className="season-ended-banner">
+          🏁 This season has ended. Congratulations to all participants!
+        </div>
+      )}
+    </section>
+  );
+}
+
 function Leaderboard({ rows }) {
   return (
     <section className="panel">
@@ -514,6 +859,7 @@ function AdminView({ admin, auth, onBack }) {
   const [analytics, setAnalytics] = useState(null);
   const [stats, setStats] = useState(null);
   const [studentProfile, setStudentProfile] = useState(null);
+  const [seasons, setSeasons] = useState(null);
 
   const headers = adminHeaders(auth);
 
@@ -549,6 +895,10 @@ function AdminView({ admin, auth, onBack }) {
     const res = await fetch(`${API}/admin/analytics`, { headers });
     setAnalytics(await res.json());
   };
+  const loadSeasons = async () => {
+    const res = await fetch(`${API}/admin/seasons`, { headers });
+    if (res.ok) setSeasons(await res.json());
+  };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
   const fetchStats = async () => {
@@ -564,6 +914,8 @@ function AdminView({ admin, auth, onBack }) {
       return () => clearInterval(id);
     }
     if (tab === 'analytics' && !analytics) loadAnalytics();
+    if (tab === 'seasons' && !seasons) loadSeasons();
+    if (tab !== 'seasons') setSeasons(null);
   }, [tab]);
 
   return (
@@ -573,7 +925,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students'], ['seasons','Seasons']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -593,8 +945,273 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
+      {tab === 'seasons' && <SeasonsAdminPanel seasons={seasons} headers={headers} onRefresh={loadSeasons} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
+  );
+}
+
+// --- Seasons Admin Panel -----------------------------------------------------
+
+function SeasonsAdminPanel({ seasons, headers, onRefresh }) {
+  const [view, setView] = useState('list'); // 'list' | 'create' | 'edit' | 'rewards'
+  const [selected, setSelected] = useState(null); // season being edited
+  const [form, setForm] = useState({ name: '', number: '', description: '', startDate: '', endDate: '', themeColor: '#176b87', status: 'active' });
+  const [msg, setMsg] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [rewards, setRewards] = useState(null);
+  const [rewardForm, setRewardForm] = useState({ goalType: 'sp', goalValue: '', description: '', icon: '🎖', order: '' });
+  const [rewardMsg, setRewardMsg] = useState('');
+  const [recomputing, setRecomputing] = useState(false);
+
+  // Reset to list whenever prop changes (panel revisited)
+  useEffect(() => { setView('list'); setSelected(null); }, [seasons]);
+
+  async function api(method, path, body) {
+    const opts = { method, headers: { ...headers, 'Content-Type': 'application/json' } };
+    if (body) opts.body = JSON.stringify(body);
+    const r = await fetch(`${API}${path}`, opts);
+    return r;
+  }
+
+  // ---- List view ----
+  if (view === 'list') {
+    if (!seasons) return <section className="panel empty">Loading seasons…</section>;
+    return (
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Seasons</h2>
+          <button className="primary" onClick={() => { setForm({ name: '', number: '', description: '', startDate: '', endDate: '', themeColor: '#176b87', status: 'active' }); setMsg(''); setView('create'); }}>+ New Season</button>
+        </div>
+        {seasons.length === 0 && <p className="muted">No seasons yet. Create one to get started.</p>}
+        <table className="table">
+          <thead><tr><th>#</th><th>Name</th><th>Dates</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            {seasons.map(s => (
+              <tr key={s._id}>
+                <td>{s.number}</td>
+                <td><strong>{s.name}</strong><br /><span className="muted" style={{fontSize:12}}>{s.description}</span></td>
+                <td>{new Date(s.startDate).toLocaleDateString()} → {new Date(s.endDate).toLocaleDateString()}</td>
+                <td>
+                  <span className={`season-pill pill-${s.status}`}>{s.status}</span>
+                </td>
+                <td>
+                  <div className="review-actions">
+                    <button className="secondary" style={{minHeight:32,padding:'0 10px',fontSize:12}} onClick={() => { setSelected(s); setForm({ name:s.name, number: s.number, description: s.description||'', startDate: s.startDate.slice(0,10), endDate: s.endDate.slice(0,10), themeColor: s.themeColor||'#176b87', status: s.status }); setMsg(''); setView('edit'); }}>Edit</button>
+                    <button className="secondary" style={{minHeight:32,padding:'0 10px',fontSize:12}} onClick={() => { setSelected(s); setView('rewards'); setRewards(null); setRewardMsg(''); }}>Rewards</button>
+                    <button className="secondary" style={{minHeight:32,padding:'0 10px',fontSize:12}} disabled={recomputing} onClick={async () => { setRecomputing(true); const r = await api('POST', `/admin/seasons/${s._id}/recompute`); const d = await r.json(); setRecomputing(false); alert(r.ok ? `Recomputed: ${d.updated} standings updated.` : `Error: ${d.error}`); }}>{recomputing ? '…' : 'Recompute'}</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    );
+  }
+
+  // ---- Create form ----
+  if (view === 'create') {
+    return (
+      <section className="panel">
+        <div className="panel-head">
+          <h2>New Season</h2>
+          <button className="secondary" onClick={() => setView('list')}>Cancel</button>
+        </div>
+        <SeasonForm form={form} setForm={setForm} msg={msg} />
+        <div className="review-actions" style={{marginTop:14}}>
+          <button className="primary" disabled={saving} onClick={async () => {
+            setSaving(true); setMsg('');
+            const r = await api('POST', '/admin/seasons', form);
+            const d = await r.json();
+            setSaving(false);
+            if (r.ok) { onRefresh(); setView('list'); }
+            else setMsg(d.error || 'Failed to create season.');
+          }}>{saving ? 'Saving…' : 'Create Season'}</button>
+        </div>
+        {msg && <p className="error" style={{marginTop:10}}>{msg}</p>}
+      </section>
+    );
+  }
+
+  // ---- Edit form ----
+  if (view === 'edit' && selected) {
+    return (
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Edit Season</h2>
+          <button className="secondary" onClick={() => setView('list')}>Cancel</button>
+        </div>
+        <SeasonForm form={form} setForm={setForm} msg={msg} />
+        <div className="review-actions" style={{marginTop:14}}>
+          <button className="primary" disabled={saving} onClick={async () => {
+            setSaving(true); setMsg('');
+            const r = await api('PATCH', `/admin/seasons/${selected._id}`, form);
+            const d = await r.json();
+            setSaving(false);
+            if (r.ok) { onRefresh(); setView('list'); }
+            else setMsg(d.error || 'Failed to update season.');
+          }}>{saving ? 'Saving…' : 'Save Changes'}</button>
+          <button className="secondary" style={{color:'var(--red)'}} disabled={saving} onClick={async () => {
+            if (!confirm('Delete this season and all its standings?')) return;
+            const r = await api('DELETE', `/admin/seasons/${selected._id}`);
+            if (r.ok) { onRefresh(); setView('list'); }
+            else { const d = await r.json(); setMsg(d.error || 'Delete failed.'); }
+          }}>Delete</button>
+        </div>
+        {msg && <p className="error" style={{marginTop:10}}>{msg}</p>}
+      </section>
+    );
+  }
+
+  // ---- Rewards view ----
+  if (view === 'rewards' && selected) {
+    const loadRewards = async () => {
+      const r = await api('GET', `/admin/seasons/${selected._id}/rewards`);
+      if (r.ok) setRewards(await r.json());
+    };
+    if (!rewards) loadRewards();
+
+    const statusBadges = { active: 'pill-active', upcoming: 'pill-upcoming', ended: 'pill-ended' };
+    return (
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Rewards — {selected.name}</h2>
+          <button className="secondary" onClick={() => setView('list')}>Back</button>
+        </div>
+        <p style={{margin:'0 0 16px'}} className="muted">
+          Season: {new Date(selected.startDate).toLocaleDateString()} → {new Date(selected.endDate).toLocaleDateString()}{' '}
+          <span className={`season-pill ${statusBadges[selected.status] || ''}`}>{selected.status}</span>
+        </p>
+
+        {/* Existing rewards */}
+        {rewards !== null && (
+          <>
+            {rewards.length > 0 && (
+              <table className="table" style={{marginBottom:20}}>
+                <thead><tr><th>Icon</th><th>Description</th><th>Type</th><th>Goal</th><th>Order</th><th></th></tr></thead>
+                <tbody>
+                  {rewards.map(r => (
+                    <tr key={r._id}>
+                      <td>{r.icon || '🎖'}</td>
+                      <td>{r.rewardLabel || r.description || '—'}</td>
+                      <td>{r.goalType}</td>
+                      <td>{r.goalValue}</td>
+                      <td>{r.order}</td>
+                      <td>
+                        <button className="secondary" style={{minHeight:30,padding:'0 10px',fontSize:12,color:'var(--red)'}} onClick={async () => {
+                          if (!confirm('Delete this reward?')) return;
+                          const r2 = await api('DELETE', `/admin/seasons/${selected._id}/rewards/${r._id}`);
+                          if (r2.ok) loadRewards();
+                          else { const d = await r2.json(); setRewardMsg(d.error || 'Delete failed.'); }
+                        }}>Remove</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {rewards.length === 0 && <p className="muted" style={{marginBottom:16}}>No rewards yet. Add one below.</p>}
+          </>
+        )}
+        {rewards === null && <p className="muted">Loading rewards…</p>}
+
+        {/* Add reward form */}
+        <div className="admin-box" style={{marginTop:0}}>
+          <h3 style={{margin:'0 0 12px'}}>Add Reward</h3>
+          <div className="form-grid">
+            <div className="form-field">
+              <label>Icon (emoji)</label>
+              <input value={rewardForm.icon} onChange={e => setRewardForm(f => ({...f, icon: e.target.value}))} placeholder="🎖" />
+            </div>
+            <div className="form-field">
+              <label>Description</label>
+              <input value={rewardForm.description} onChange={e => setRewardForm(f => ({...f, description: e.target.value}))} placeholder="Top 10 finish" />
+            </div>
+            <div className="form-field">
+              <label>Goal type</label>
+              <select value={rewardForm.goalType} onChange={e => setRewardForm(f => ({...f, goalType: e.target.value}))}>
+                <option value="sp">SP earned</option>
+                <option value="rank">Rank</option>
+                <option value="qualified_sessions">Qualified sessions</option>
+                <option value="league">Trophy League</option>
+              </select>
+            </div>
+            <div className="form-field">
+              <label>Goal value</label>
+              <input type="number" value={rewardForm.goalValue} onChange={e => setRewardForm(f => ({...f, goalValue: e.target.value}))} placeholder="100" />
+            </div>
+            <div className="form-field">
+              <label>Sort order</label>
+              <input type="number" value={rewardForm.order} onChange={e => setRewardForm(f => ({...f, order: e.target.value}))} placeholder="1" />
+            </div>
+          </div>
+          {rewardMsg && <p className="error" style={{margin:'8px 0 0'}}>{rewardMsg}</p>}
+          <button className="primary" style={{marginTop:12}} onClick={async () => {
+            setRewardMsg('');
+            const payload = { ...rewardForm, goalValue: Number(rewardForm.goalValue), order: Number(rewardForm.order || 0) };
+            const r = await api('POST', `/admin/seasons/${selected._id}/rewards`, payload);
+            const d = await r.json();
+            if (r.ok) { setRewardForm({ goalType: 'sp', goalValue: '', description: '', icon: '🎖', order: '' }); setRewardMsg('Reward added!'); loadRewards(); }
+            else setRewardMsg(d.error || 'Failed to add reward.');
+          }}>Add Reward</button>
+        </div>
+
+        <div style={{marginTop:20,padding:14,background:'#f8fafc',border:'1px solid var(--line)',borderRadius:8}}>
+          <p style={{margin:'0 0 8px',fontWeight:900,fontSize:13}}>Goal types explained</p>
+          <p style={{margin:'0 0 4px',fontSize:13}}><strong>sp</strong> — student earns this reward once they accumulate <em>goalValue</em> season-relative SP</p>
+          <p style={{margin:'0 0 4px',fontSize:13}}><strong>rank</strong> — student reaches <em>goalValue</em> or better on the season leaderboard</p>
+          <p style={{margin:'0 0 4px',fontSize:13}}><strong>qualified_sessions</strong> — student has <em>goalValue</em> qualified attendance records in this season</p>
+          <p style={{margin:0,fontSize:13}}><strong>league</strong> — student's peak league this season reaches <em>goalValue</em> (e.g. Gold, Platinum)</p>
+        </div>
+      </section>
+    );
+  }
+
+  return null;
+}
+
+function SeasonForm({ form, setForm, msg }) {
+  return (
+    <div className="admin-box" style={{marginTop:0}}>
+      <div className="form-grid">
+        <div className="form-field">
+          <label>Season name</label>
+          <input value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} placeholder="Summer 2026" />
+        </div>
+        <div className="form-field">
+          <label>Season number</label>
+          <input type="number" min="1" value={form.number} onChange={e => setForm(f => ({...f, number: e.target.value}))} placeholder="1" />
+        </div>
+        <div className="form-field" style={{gridColumn:'1/-1'}}>
+          <label>Description</label>
+          <input value={form.description} onChange={e => setForm(f => ({...f, description: e.target.value}))} placeholder="Three-month intensive — earn SP, climb the leaderboard!" />
+        </div>
+        <div className="form-field">
+          <label>Start date</label>
+          <input type="date" value={form.startDate} onChange={e => setForm(f => ({...f, startDate: e.target.value}))} />
+        </div>
+        <div className="form-field">
+          <label>End date</label>
+          <input type="date" value={form.endDate} onChange={e => setForm(f => ({...f, endDate: e.target.value}))} />
+        </div>
+        <div className="form-field">
+          <label>Theme colour</label>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input type="color" value={form.themeColor} onChange={e => setForm(f => ({...f, themeColor: e.target.value}))} style={{width:48,padding:2}} />
+            <input value={form.themeColor} onChange={e => setForm(f => ({...f, themeColor: e.target.value}))} placeholder="#176b87" style={{flex:1}} />
+          </div>
+        </div>
+        <div className="form-field">
+          <label>Status</label>
+          <select value={form.status} onChange={e => setForm(f => ({...f, status: e.target.value}))}>
+            <option value="upcoming">Upcoming</option>
+            <option value="active">Active</option>
+            <option value="ended">Ended</option>
+          </select>
+        </div>
+      </div>
+    </div>
   );
 }
 

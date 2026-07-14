@@ -13,6 +13,16 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import Season from './models/Season.js';
+import SeasonStanding from './models/SeasonStanding.js';
+import SeasonReward from './models/SeasonReward.js';
+import {
+  getActiveSeason, getStudentSeasonContext,
+  seasonLeaderboard, claimReward,
+  recomputeStanding, recomputeAllStandings,
+  invalidateSeasonCache
+} from './services/seasonService.js';
+import { SESSION_SECRET } from './config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -95,6 +105,14 @@ const liveViewers = new Map();
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+// Catch corrupt / non-JSON bodies so one bad webhook doesn't crash the server
+app.use((err, _req, res, _next) => {
+  if (err.type === 'entity.parse.failed') {
+    console.error('[JSON parse error]', err.message);
+    return res.status(400).json({ error: 'Invalid JSON' });
+  }
+  return _next(err);
+});
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
@@ -127,6 +145,32 @@ function parseCookies(header = '') {
   }).filter(Boolean));
 }
 
+// Signed-cookie helpers for the search-login flow.
+// /api/confirm issues `spurti_session` after the student proves email ownership,
+// and studentEmailFromRequest accepts it as a fallback when the Samagama
+// chatengine_token cookie is not present.
+import crypto from 'crypto';
+
+function signSessionCookie(email) {
+  const value = String(email).toLowerCase();
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(value).digest('hex').slice(0, 32);
+  return `${value}.${sig}`;
+}
+
+function verifySessionCookie(signed) {
+  if (!signed) return null;
+  const dotIndex = signed.lastIndexOf('.');
+  if (dotIndex < 1) return null;
+  const email = signed.slice(0, dotIndex);
+  const sig = signed.slice(dotIndex + 1);
+  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(email).digest('hex').slice(0, 32);
+  // Constant-time comparison
+  if (sig.length !== expected.length) return null;
+  let mismatch = 0;
+  for (let i = 0; i < sig.length; i++) mismatch |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
+  return mismatch === 0 ? email : null;
+}
+
 // Validate the student's Samagama session by forwarding their chatengine_token
 // cookie to Samagama's internal auth endpoint. Returns the email on success.
 async function getSamagamaUser(chatengineToken) {
@@ -145,12 +189,26 @@ async function getSamagamaUser(chatengineToken) {
 
 async function studentEmailFromRequest(req) {
   const cookies = parseCookies(req.headers.cookie || '');
+  // Path 1: Samagama SSO cookie (real production login)
   const data = await getSamagamaUser(cookies.chatengine_token);
-  // Samagama's /api/auth/me nests the user as { user: { email, ... } };
-  // fall back to a top-level email in case the shape ever flattens.
-  const email = data?.user?.email || data?.email;
-  if (!email) return null;
-  return normalizeEmail(email);
+  const samagamaEmail = data?.user?.email || data?.email;
+  if (samagamaEmail) return normalizeEmail(samagamaEmail);
+  // Path 2: signed local session cookie (search-login flow)
+  const signed = verifySessionCookie(cookies.spurti_session);
+  if (signed) return normalizeEmail(signed);
+  return null;
+}
+
+// Samagama-only auth — used by /api/me so refresh always lands on the Landing
+// page when the student hasn't completed the real SSO flow. The search-login
+// `spurti_session` cookie is intentionally NOT accepted here; it is only used
+// by post-login action endpoints (e.g. reward claim) that run after a fresh
+// /api/confirm or /api/search exact-match login in the same session.
+async function samagamaEmailFromRequest(req) {
+  const cookies = parseCookies(req.headers.cookie || '');
+  const data = await getSamagamaUser(cookies.chatengine_token);
+  const samagamaEmail = data?.user?.email || data?.email;
+  return samagamaEmail ? normalizeEmail(samagamaEmail) : null;
 }
 
 async function rankFor(email) {
@@ -255,6 +313,7 @@ function adminGuard(req, res, next) {
 
 api.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
+// Temp debug route to test season context with a hardcoded student email
 api.get('/config', (_req, res) => res.json({
   allowStudentSearch: ALLOW_STUDENT_SEARCH,
   survey: surveyPublic(SURVEY),
@@ -262,12 +321,14 @@ api.get('/config', (_req, res) => res.json({
 }));
 
 api.get('/me', async (req, res) => {
-  const email = await studentEmailFromRequest(req);
+  const email = await samagamaEmailFromRequest(req);
   if (!email) return res.status(401).json({ authenticated: false });
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
-  res.json({ authenticated: true, profile: await studentPayload(student) });
+  const seasonContext = await getStudentSeasonContext(email);
+  const response = { authenticated: true, profile: await studentPayload(student), season: seasonContext };
+  res.json(response);
 });
 
 api.get('/search', async (req, res) => {
@@ -279,7 +340,11 @@ api.get('/search', async (req, res) => {
     const email = normalizeEmail(q);
     const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
     if (student?.status === 'excused') return res.json(excusedPayload(student));
-    if (student) return res.json({ exact: true, profile: await studentPayload(student) });
+    if (student) {
+      const seasonContext = await getStudentSeasonContext(student.email);
+      res.setHeader('Set-Cookie', `spurti_session=${encodeURIComponent(signSessionCookie(student.email))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
+      return res.json({ exact: true, profile: await studentPayload(student), season: seasonContext });
+    }
   }
 
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -304,7 +369,12 @@ api.post('/confirm', async (req, res) => {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
-  res.json(await studentPayload(student));
+  // Issue a signed local session cookie so subsequent authenticated calls
+  // (e.g. /api/seasons/rewards/:id/claim) can identify the student without
+  // needing a Samagama cookie.
+  res.setHeader('Set-Cookie', `spurti_session=${encodeURIComponent(signSessionCookie(student.email))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
+  const seasonContext = await getStudentSeasonContext(student.email);
+  res.json({ authenticated: true, profile: await studentPayload(student), season: seasonContext });
 });
 
 api.get('/leaderboard', async (req, res) => {
@@ -397,6 +467,206 @@ function registerSurveyRoutes(base, cfg) {
 }
 registerSurveyRoutes('/survey', SURVEY);
 registerSurveyRoutes('/poll2', POLL2);
+
+// ─── Season routes ────────────────────────────────────────────────────────
+
+// GET /api/seasons/current — active season + authenticated student's standing
+api.get('/seasons/current', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const { season, standing, rewards, eligibleRewards, myRank, cohortSize } =
+    await getStudentSeasonContext(email);
+
+  if (!season) {
+    return res.json({ active: false, message: 'No active season' });
+  }
+
+  // Timeline: how far through the season are we?
+  const now        = Date.now();
+  const startMs    = new Date(season.startDate).getTime();
+  const endMs      = new Date(season.endDate).getTime();
+  const totalMs    = endMs - startMs;
+  const elapsedMs  = Math.max(0, Math.min(now - startMs, totalMs));
+  const pct        = totalMs > 0 ? Math.round((elapsedMs / totalMs) * 100) : 0;
+
+  res.json({
+    active:    true,
+    season: {
+      _id:          String(season._id),
+      name:         season.name,
+      number:       season.number ?? null,
+      startDate:    season.startDate,
+      endDate:      season.endDate,
+      status:       season.status,
+      themeColor:   season.themeColor || '#176b87',
+      description:  season.description || '',
+    },
+    standing: standing ? {
+      earnedSp:           standing.earnedSp,
+      baselineSp:         standing.baselineSp,
+      peakLeague:         standing.peakLeague,
+      qualifiedSessions:  standing.qualifiedSessions ?? 0,
+      claimedRewards:     standing.claimedRewards || [],
+    } : null,
+    rewards: rewards.map(r => ({
+      _id:         String(r._id),
+      key:         r.key,
+      label:       r.label,
+      description: r.description || '',
+      goalType:    r.goalType,
+      goalValue:   r.goalValue,
+      icon:        r.icon || '🏆',
+      claimed:     standing?.claimedRewards?.includes(r.key) ?? false,
+      eligible:    eligibleRewards.includes(r.key),
+    })),
+    progress: { pct, startDate: season.startDate, endDate: season.endDate, now },
+    rank: myRank,
+    cohortSize,
+  });
+});
+
+// GET /api/seasons/leaderboard?limit=50 — season-scoped leaderboard
+api.get('/seasons/leaderboard', async (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+  const season = await getActiveSeason();
+  if (!season) return res.json({ rows: [], myRank: null, cohortSize: 0 });
+  const email = await studentEmailFromRequest(req);
+  const { rows, myRank, cohortSize } = await seasonLeaderboard(season._id, { limit, email });
+  res.json({ rows, myRank, cohortSize });
+});
+
+// POST /api/seasons/rewards/:rewardId/claim — claim a milestone reward
+api.post('/seasons/rewards/:rewardId/claim', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  const result = await claimReward(email, req.params.rewardId);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+// Admin: list all seasons
+api.get('/admin/seasons', adminGuard, async (_req, res) => {
+  const seasons = await Season.find().sort({ startDate: -1 }).lean();
+  res.json(seasons.map(s => ({
+    _id:         String(s._id),
+    name:        s.name,
+    number:      s.number ?? null,
+    startDate:   s.startDate,
+    endDate:     s.endDate,
+    status:      s.status,
+    themeColor:  s.themeColor,
+    description: s.description,
+  })));
+});
+
+// Admin: create a new season
+api.post('/admin/seasons', adminGuard, async (req, res) => {
+  const { name, startDate, endDate, themeColor, number, description } = req.body || {};
+  if (!name || !startDate || !endDate) {
+    return res.status(400).json({ error: 'name, startDate, endDate are required' });
+  }
+  const start = new Date(startDate);
+  const end   = new Date(endDate);
+  if (end <= start) return res.status(400).json({ error: 'endDate must be after startDate' });
+  const season = await Season.create({ name, startDate: start, endDate: end,
+    themeColor: themeColor || '#176b87', number: number || null, description: description || '' });
+  invalidateSeasonCache();
+  res.json({ _id: String(season._id), name: season.name, startDate: season.startDate,
+    endDate: season.endDate, status: season.status, themeColor: season.themeColor });
+});
+
+// Admin: update a season
+api.patch('/admin/seasons/:id', adminGuard, async (req, res) => {
+  const allowed = ['name', 'startDate', 'endDate', 'themeColor', 'number', 'description'];
+  const updates = {};
+  for (const k of allowed) { if (req.body[k] !== undefined) updates[k] = req.body[k]; }
+  if (updates.startDate) updates.startDate = new Date(updates.startDate);
+  if (updates.endDate)   updates.endDate   = new Date(updates.endDate);
+  if (updates.startDate && updates.endDate && updates.endDate <= updates.startDate) {
+    return res.status(400).json({ error: 'endDate must be after startDate' });
+  }
+  const season = await Season.findByIdAndUpdate(req.params.id, updates, { new: true }).lean();
+  if (!season) return res.status(404).json({ error: 'Season not found' });
+  invalidateSeasonCache();
+  res.json({ _id: String(season._id), name: season.name, startDate: season.startDate,
+    endDate: season.endDate, status: season.status, themeColor: season.themeColor });
+});
+
+// Admin: recompute standings for a season
+api.post('/admin/seasons/:id/recompute', adminGuard, async (req, res) => {
+  const result = await recomputeAllStandings(req.params.id);
+  res.json(result);
+});
+
+// Admin: claim stats for a season — per-reward claim counts + per-student claim list
+api.get('/admin/seasons/:id/claims', adminGuard, async (req, res) => {
+  const seasonId = req.params.id;
+  const [rewards, standings] = await Promise.all([
+    SeasonReward.find({ seasonId }).sort({ order: 1 }).lean(),
+    SeasonStanding.find({ seasonId, claimedRewards: { $exists: true, $not: { $size: 0 } } })
+      .select({ email: 1, name: 1, earnedSp: 1, claimedRewards: 1 })
+      .lean()
+  ]);
+
+  // Per-reward claim counts
+  const byReward = rewards.map(r => {
+    const count = standings.filter(s => (s.claimedRewards || []).includes(r.key)).length;
+    return {
+      key: r.key,
+      label: r.label,
+      icon: r.icon,
+      spBonus: r.spBonus || 0,
+      claimCount: count,
+    };
+  });
+
+  // Per-student claim rollup
+  const students = standings.map(s => ({
+    email: s.email,
+    name: s.name,
+    earnedSp: s.earnedSp,
+    claimed: s.claimedRewards || []
+  }));
+
+  // Sort students by most-claimed first
+  students.sort((a, b) => b.claimed.length - a.claimed.length);
+
+  res.json({
+    cohortSize: await SeasonStanding.countDocuments({ seasonId }),
+    claimsByReward: byReward,
+    studentsWithClaims: students
+  });
+});
+
+// Admin: add rewards to a season
+api.post('/admin/seasons/:id/rewards', adminGuard, async (req, res) => {
+  const { rewards } = req.body || {};
+  if (!Array.isArray(rewards) || !rewards.length) {
+    return res.status(400).json({ error: 'rewards array required' });
+  }
+  const docs = rewards.map(r => ({
+    seasonId:    req.params.id,
+    key:         r.key,
+    label:       r.label,
+    description: r.description || '',
+    goalType:    r.goalType,
+    goalValue:   r.goalValue,
+    order:       r.order ?? 0,
+    icon:        r.icon || '🏆',
+    spBonus:     Number(r.spBonus || 0),
+  }));
+  const created = await SeasonReward.insertMany(docs);
+  res.json(created.map(r => ({ _id: String(r._id), key: r.key, label: r.label })));
+});
+
+// Admin: list rewards for a season
+api.get('/admin/seasons/:id/rewards', adminGuard, async (req, res) => {
+  const rewards = await SeasonReward.find({ seasonId: req.params.id }).sort({ order: 1 }).lean();
+  res.json(rewards);
+});
 
 api.get('/admin/stats', adminGuard, async (_req, res) => {
   const [yetToOnboard, excusedStudents, sessions, txns, activeStudents] = await Promise.all([

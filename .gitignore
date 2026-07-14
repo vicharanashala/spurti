@@ -1,26 +1,58 @@
+# Node
 node_modules/
 dist/
-.env
-.env.*
-!.env.example
-!.env.ssh.example
-.DS_Store
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Environment
+.env
+.env.*
+!.env.example
+!.env.ssh.example
+
+# OS
+.DS_Store
+Thumbs.db
 # raw uploaded session data (not source)
 
-# editor backups
+# Editors
 *.bak
 *.bak.*
+.vscode/
+.idea/
+
+# Local MongoDB data (runtime, not source)
+mongo-data/
+mongod.conf
+
+# Runtime logs
+server.log
+server-err.log
+*.log
+
+# Test artifacts and debug scripts
+_*.cjs
+_*.mjs
+_*.js
+_*.ps1
+_*.bat
+_*.png
+_*.log
+_chrome-*
+
+# raw uploaded session data (not source)
+data/uploads/
+pipeline/.env
 
 # pipeline secrets — never commit
 pipeline/.env
 
-# runtime log + local DB backups (not for the repo)
-server.log
+# runtime local DB backups
 sp-runs/
 
+# OS temp files
+tmp/
+temp/
 # student data — LOCAL ONLY, never commit (untracked 2026-07-14)
 data/
