@@ -279,10 +279,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['peers','⭐ Peers']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'peers' && <PeersTab profile={profile} />}
     </main>
   );
 }
@@ -846,5 +847,297 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
+
+// ── Peer Stars, Search & Comparison ─────────────────────────────────────────
+
+function starKey(email) { return `spurti_starred_${String(email || 'guest')}`; }
+
+function loadStarred(email) {
+  try { return JSON.parse(localStorage.getItem(starKey(email)) || '[]'); }
+  catch { return []; }
+}
+
+function saveStar(email, peer) {
+  const list = loadStarred(email);
+  if (!list.find(p => p._id === peer._id)) {
+    list.unshift(peer);
+    localStorage.setItem(starKey(email), JSON.stringify(list.slice(0, 50)));
+  }
+}
+
+function removeStar(email, peerId) {
+  const list = loadStarred(email).filter(p => p._id !== peerId);
+  localStorage.setItem(starKey(email), JSON.stringify(list));
+}
+
+function PeersTab({ profile }) {
+  const { student, leaderboard, cohort } = profile;
+  const myEmail = student.email;
+  const [starred, setStarred] = useState(() => loadStarred(myEmail));
+  const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchMsg, setSearchMsg] = useState('');
+  const [comparePeer, setComparePeer] = useState(null);
+
+  const isStarred = (id) => starred.some(p => p._id === id);
+
+  function toggleStar(peer) {
+    if (isStarred(peer._id)) {
+      removeStar(myEmail, peer._id);
+      setStarred(prev => prev.filter(p => p._id !== peer._id));
+    } else {
+      saveStar(myEmail, peer);
+      setStarred(prev => [peer, ...prev.filter(p => p._id !== peer._id)]);
+    }
+  }
+
+  async function doSearch() {
+    const q = query.trim();
+    if (q.length < 2) { setSearchMsg('Type at least 2 characters.'); setSearchResults([]); return; }
+    setSearching(true);
+    setSearchMsg('');
+    try {
+      const res = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (data.exact && data.profile) {
+        const p = data.profile.student;
+        setSearchResults([{ _id: p._id, name: p.name, maskedEmail: maskEmailClient(p.email || ''), totalSp: p.totalSp, level: p.level, trophyLeague: p.trophyLeague }]);
+        setSearchMsg('1 result found.');
+      } else {
+        const hits = (data.matches || []).filter(m => m._id !== student._id);
+        setSearchResults(hits);
+        setSearchMsg(hits.length ? `${hits.length} result${hits.length > 1 ? 's' : ''} found.` : 'No matching student found.');
+      }
+    } catch {
+      setSearchMsg('Search failed — please try again.');
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  // Leaderboard rows (exclude self), enriched with _id from profile leaderboard
+  const lbPeers = leaderboard
+    .filter(row => !row.isCurrentStudent)
+    .map(row => ({
+      _id: row.maskedEmail, // use maskedEmail as stable ID for leaderboard peers
+      name: row.name,
+      maskedEmail: row.maskedEmail,
+      totalSp: row.totalSp,
+      level: row.level,
+      trophyLeague: row.trophyLeague || '',
+      rank: row.rank
+    }));
+
+  return (
+    <section className="panel peers-panel">
+      <div className="peers-search-bar">
+        <h2 className="peers-heading">⭐ Peers</h2>
+        <div className="peers-search-row">
+          <input
+            id="peer-search-input"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && doSearch()}
+            placeholder="Search peers by name or email…"
+          />
+          <button id="peer-search-btn" className="primary" onClick={doSearch} disabled={searching}>
+            {searching ? 'Searching…' : 'Search'}
+          </button>
+        </div>
+        {searchMsg && <p className={searchMsg.includes('No') || searchMsg.includes('failed') ? 'error' : 'muted peers-msg'}>{searchMsg}</p>}
+        {searchResults.length > 0 && (
+          <div className="peer-results">
+            {searchResults.map(peer => (
+              <PeerCard
+                key={peer._id}
+                peer={peer}
+                starred={isStarred(peer._id)}
+                onStar={() => toggleStar(peer)}
+                onCompare={() => setComparePeer(peer)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {starred.length > 0 && (
+        <div className="peers-section">
+          <h3 className="peers-section-title">★ Starred Peers <span className="peers-count">{starred.length}</span></h3>
+          <div className="peer-cards">
+            {starred.map(peer => (
+              <PeerCard
+                key={peer._id}
+                peer={peer}
+                starred
+                onStar={() => toggleStar(peer)}
+                onCompare={() => setComparePeer(peer)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="peers-section">
+        <h3 className="peers-section-title">☆ Star from Leaderboard <span className="peers-count">{lbPeers.length}</span></h3>
+        <div className="peers-lb-list">
+          {lbPeers.map(peer => (
+            <div key={peer._id} className="peers-lb-row">
+              <span className="peers-lb-rank">#{peer.rank}</span>
+              <span className="peers-lb-name">{peer.name}</span>
+              <span className="peers-lb-sp">{peer.totalSp} SP</span>
+              <span className="peers-lb-league">{peer.trophyLeague}</span>
+              <div className="peers-lb-actions">
+                <button
+                  id={`star-lb-${peer.rank}`}
+                  className={`star-btn${isStarred(peer._id) ? ' starred' : ''}`}
+                  onClick={() => toggleStar(peer)}
+                  title={isStarred(peer._id) ? 'Unstar' : 'Star this peer'}
+                >{isStarred(peer._id) ? '★' : '☆'}</button>
+                <button
+                  id={`compare-lb-${peer.rank}`}
+                  className="secondary compare-btn"
+                  onClick={() => setComparePeer(peer)}
+                >vs</button>
+              </div>
+            </div>
+          ))}
+          {lbPeers.length === 0 && <p className="muted">No leaderboard peers to show.</p>}
+        </div>
+      </div>
+
+      {comparePeer && (
+        <PeerCompareModal
+          me={student}
+          cohort={cohort}
+          peer={comparePeer}
+          onClose={() => setComparePeer(null)}
+        />
+      )}
+    </section>
+  );
+}
+
+function maskEmailClient(email) {
+  const [name, domain] = String(email || '').split('@');
+  if (!name || !domain) return email || '—';
+  const start = name.slice(0, Math.min(2, name.length));
+  const end = name.length > 4 ? name.slice(-2) : '';
+  return `${start}${'*'.repeat(Math.max(3, name.length - start.length - end.length))}${end}@${domain}`;
+}
+
+function PeerCard({ peer, starred, onStar, onCompare }) {
+  return (
+    <div className={`peer-card${starred ? ' peer-card--starred' : ''}`}>
+      <div className="peer-card-info">
+        <strong className="peer-card-name">{peer.name}</strong>
+        <span className="peer-card-email">{peer.maskedEmail}</span>
+        <div className="peer-card-stats">
+          <span className="peer-stat">{peer.totalSp} SP</span>
+          {peer.rank && <span className="peer-stat">Rank #{peer.rank}</span>}
+          {peer.level != null && <span className="peer-stat">Lv {peer.level}</span>}
+          {peer.trophyLeague && <span className="peer-stat peer-league">{peer.trophyLeague}</span>}
+        </div>
+      </div>
+      <div className="peer-card-actions">
+        <button
+          className={`star-btn${starred ? ' starred' : ''}`}
+          onClick={onStar}
+          title={starred ? 'Unstar peer' : 'Star this peer'}
+        >{starred ? '★' : '☆'}</button>
+        <button className="secondary compare-btn" onClick={onCompare}>vs</button>
+      </div>
+    </div>
+  );
+}
+
+function PeerCompareModal({ me, cohort, peer, onClose }) {
+  const metrics = [
+    {
+      label: 'Spurti Points',
+      mine: me.totalSp,
+      theirs: peer.totalSp,
+      better: 'higher',
+      format: v => `${v} SP`
+    },
+    {
+      label: 'Rank',
+      mine: me.rank,
+      theirs: peer.rank,
+      better: 'lower',
+      format: v => v ? `#${v}` : '—'
+    },
+    {
+      label: 'Level',
+      mine: me.level,
+      theirs: peer.level,
+      better: 'higher',
+      format: v => v != null ? `Level ${v}` : '—'
+    },
+    {
+      label: 'Trophy League',
+      mine: me.trophyLeague,
+      theirs: peer.trophyLeague,
+      better: null,
+      format: v => v || '—'
+    },
+    {
+      label: 'vs Cohort Avg',
+      mine: me.totalSp - (cohort?.averageSp || 0),
+      theirs: peer.totalSp - (cohort?.averageSp || 0),
+      better: 'higher',
+      format: v => v >= 0 ? `+${v} SP` : `${v} SP`
+    }
+  ];
+
+  function indicator(mine, theirs, better) {
+    if (better === null || mine == null || theirs == null) return { me: '', peer: '' };
+    const mineN = Number(mine);
+    const theirsN = Number(theirs);
+    if (isNaN(mineN) || isNaN(theirsN)) return { me: '', peer: '' };
+    if (mineN === theirsN) return { me: '─', peer: '─' };
+    const meWins = better === 'higher' ? mineN > theirsN : mineN < theirsN;
+    return meWins
+      ? { me: <span className="cmp-win">↑</span>, peer: <span className="cmp-lose">↓</span> }
+      : { me: <span className="cmp-lose">↓</span>, peer: <span className="cmp-win">↑</span> };
+  }
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <section className="modal compare-modal">
+        <div className="modal-head">
+          <h2>Progress Comparison</h2>
+          <button className="icon" onClick={onClose}>x</button>
+        </div>
+        <div className="compare-cols-header">
+          <div className="compare-col-label">YOU</div>
+          <div className="compare-metric-label"></div>
+          <div className="compare-col-label peer-col-label">{peer.name.split(' ')[0]}</div>
+        </div>
+        <div className="compare-rows">
+          {metrics.map(({ label, mine, theirs, better, format }) => {
+            const ind = indicator(mine, theirs, better);
+            return (
+              <div className="compare-row" key={label}>
+                <div className="compare-cell compare-cell--me">
+                  <span className="compare-val">{format(mine)}</span>
+                  <span className="compare-ind">{ind.me}</span>
+                </div>
+                <div className="compare-metric">{label}</div>
+                <div className="compare-cell compare-cell--peer">
+                  <span className="compare-ind">{ind.peer}</span>
+                  <span className="compare-val">{format(theirs)}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="compare-footer">
+          <button className="secondary" onClick={onClose}>Close</button>
+        </div>
+      </section>
+    </div>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);
