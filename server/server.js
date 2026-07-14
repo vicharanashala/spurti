@@ -837,107 +837,23 @@ api.post('/spin-wheel', async (req, res) => {
 
 // --- Motivation Dashboard Endpoints ---
 
-// --- Milestone Badges & Friends Activity Helpers ---
-async function getStudentDailySp(student) {
-  const emails = [student.email];
-  if (student.alternateEmail) {
-    emails.push(student.alternateEmail);
-  }
-  const transactions = await SPTransaction.find({
-    email: { $in: emails.map(e => e.toLowerCase()) }
-  }).sort({ dateTime: 1, createdAt: 1 }).lean();
-
-  const dailySp = {};
-  for (const tx of transactions) {
-    const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
-    const isSpinWheelReward = tx.category === 'manual' && tx.reason && tx.reason.includes('Spin Wheel Reward');
-    if (isPerfectWeekBonus || isSpinWheelReward || tx.category === 'initial') {
-      continue;
-    }
-    const dateStr = getISTDateStr(tx.dateTime);
-    if (dateStr) {
-      dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
-    }
-  }
-  return dailySp;
-}
-
-async function getStudentStreak10(student, dailySp) {
-  const startDateStr = getISTDateStr(student.internshipStartDate);
-  const todayStr = getISTDateStr(new Date());
-
-  if (!startDateStr || !todayStr) return 0;
-
-  const start = new Date(startDateStr);
-  const end = new Date(todayStr);
-
-  const days = [];
-  let curr = new Date(start);
-  while (curr <= end) {
-    const dateStr = curr.toISOString().split('T')[0];
-    const sp = dailySp[dateStr] || 0;
-    days.push({
-      dateStr,
-      success: sp === 10
-    });
-    curr.setDate(curr.getDate() + 1);
-  }
-
-  let activeRuns = [];
-  let currentRun = [];
-
-  const protectedDates = new Set(
-    (student.streakProtectedSessions || [])
-      .map(label => {
-        const dt = SESSION_DATETIME_MAP[label];
-        return dt ? getISTDateStr(dt) : '';
-      })
-      .filter(Boolean)
-  );
-
-  for (const day of days) {
-    if (day.success) {
-      currentRun.push(day.dateStr);
-    } else if (protectedDates.has(day.dateStr)) {
-      continue;
-    } else {
-      if (currentRun.length > 0) {
-        activeRuns.push(currentRun);
-        currentRun = [];
-      }
-    }
-  }
-  if (currentRun.length > 0) {
-    activeRuns.push(currentRun);
-  }
-
-  let currentStreak = 0;
-  if (days.length > 0) {
-    const nonProtectedDays = days.filter(d => !protectedDates.has(d.dateStr));
-    if (nonProtectedDays.length > 0) {
-      const lastDay = nonProtectedDays[nonProtectedDays.length - 1];
-      if (lastDay.success) {
-        const lastRun = activeRuns[activeRuns.length - 1] || [];
-        currentStreak = lastRun.length;
-      } else if (nonProtectedDays.length > 1) {
-        const yesterday = nonProtectedDays[nonProtectedDays.length - 2];
-        if (yesterday.success) {
-          const lastRun = activeRuns.find(run => run.includes(yesterday.dateStr)) || [];
-          currentStreak = lastRun.length;
-        }
-      }
-    }
-  }
-  return currentStreak;
-}
+// Deprecated getStudentDailySp and getStudentStreak10 removed as logic is aligned with computeStreak.
 
 api.get('/badges/milestones/:studentId', async (req, res) => {
   try {
     const student = await Student.findById(req.params.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found' });
 
-    const dailySp = await getStudentDailySp(student);
-    const currentStreak = await getStudentStreak10(student, dailySp);
+    const emails = [student.email];
+    if (student.alternateEmail) {
+      emails.push(student.alternateEmail);
+    }
+    const attendance = await AttendanceRecord.find({
+      email: { $in: emails.map(e => e.toLowerCase()) }
+    }).lean();
+
+    const streakInfo = computeStreak(attendance, student.streakProtectedSessions || []);
+    const currentStreak = streakInfo.currentStreak;
 
     const badgesToAward = [];
     if (currentStreak >= 3) badgesToAward.push('Beginner');
@@ -1101,20 +1017,7 @@ api.get('/streak-leaderboard/:studentId', async (req, res) => {
         }
       }
 
-      const dailySp = {};
-      for (const tx of studentTx) {
-        const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
-        const isSpinWheelReward = tx.category === 'manual' && tx.reason && tx.reason.includes('Spin Wheel Reward');
-        if (isPerfectWeekBonus || isSpinWheelReward || tx.category === 'initial') {
-          continue;
-        }
-        const dateStr = getISTDateStr(tx.dateTime);
-        if (dateStr) {
-          dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
-        }
-      }
-
-      const streak = await getStudentStreak10(s, dailySp);
+      const streak = attStreak.currentStreak;
       activityList.push({
         _id: s._id,
         name: s.name,
