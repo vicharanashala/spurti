@@ -10,7 +10,6 @@ yarn-debug.log*
 yarn-error.log*
 
 # raw uploaded session data (not source)
-data/uploads/
 
 # editor backups
 *.bak
@@ -60,3 +59,5 @@ mongo-data/
 
 # node_modules everywhere
 **/node_modules/
+# student data — LOCAL ONLY, never commit (untracked 2026-07-14)
+data/
