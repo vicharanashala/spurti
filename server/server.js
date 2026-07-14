@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
-import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL, STREAK_FREEZE_COST_SP, SESSION_DATETIME_MAP } from './config.js';
+import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL, STREAK_FREEZE_COST_SP, SESSION_DATETIME_MAP, SESSION_LABELS } from './config.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
@@ -223,116 +223,98 @@ async function awardSp(student, delta, category, reason, sessionLabel = '', date
   return txn;
 }
 
-async function checkAndAwardPerfectWeekBonus(student) {
+export async function checkAndAwardPerfectWeekBonus(student) {
   const emails = [student.email];
   if (student.alternateEmail) {
     emails.push(student.alternateEmail);
   }
+  const attendanceRecords = await AttendanceRecord.find({
+    email: { $in: emails.map(e => e.toLowerCase()) }
+  }).lean();
+
+  if (!attendanceRecords || attendanceRecords.length === 0) {
+    return {
+      currentStreak: 0,
+      bonusesAwarded: 0,
+      newlyAwardedCount: 0
+    };
+  }
+
+  const sortedSessions = [...attendanceRecords].sort((a, b) => {
+    const idxA = SESSION_LABELS.indexOf(a.sessionLabel);
+    const idxB = SESSION_LABELS.indexOf(b.sessionLabel);
+    if (idxA !== -1 && idxB !== -1) {
+      return idxA - idxB;
+    }
+    if (a.sessionLabel < b.sessionLabel) return -1;
+    if (a.sessionLabel > b.sessionLabel) return 1;
+    return 0;
+  });
+
   const transactions = await SPTransaction.find({
     email: { $in: emails.map(e => e.toLowerCase()) }
   }).sort({ dateTime: 1, createdAt: 1 }).lean();
 
-  const dailySp = {};
-  const existingBonusDates = new Set();
+  const sessionSp = {};
+  const existingBonusLabels = new Set();
 
   for (const tx of transactions) {
     const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
     if (isPerfectWeekBonus) {
-      const match = tx.reason.match(/ending (\d{4}-\d{2}-\d{2})/);
+      const match = tx.reason.match(/ending (.+)$/);
       if (match) {
-        existingBonusDates.add(match[1]);
+        existingBonusLabels.add(match[1].trim());
       }
       continue;
     }
-    if (tx.category === 'initial') {
+    if (tx.category === 'initial' || tx.category === 'streakFreeze') {
       continue;
     }
-    const dateStr = getISTDateStr(tx.dateTime);
-    if (dateStr) {
-      dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
+    if (tx.reason && tx.reason.includes('Spin Wheel')) {
+      continue;
     }
-  }
-
-  const startDateStr = getISTDateStr(student.internshipStartDate);
-  const todayStr = getISTDateStr(new Date());
-
-  if (!startDateStr || !todayStr) return { currentStreak: 0, bonusesAwarded: 0 };
-
-  const start = new Date(startDateStr);
-  const end = new Date(todayStr);
-
-  const days = [];
-  let curr = new Date(start);
-  while (curr <= end) {
-    const dateStr = curr.toISOString().split('T')[0];
-    const spEarned = dailySp[dateStr] || 0;
-    days.push({
-      dateStr,
-      success: spEarned === 20
-    });
-    curr.setDate(curr.getDate() + 1);
+    const label = tx.sessionLabel;
+    if (label) {
+      sessionSp[label] = (sessionSp[label] || 0) + (tx.appliedDelta || 0);
+    }
   }
 
   let currentStreak = 0;
-  let activeRuns = [];
-  let currentRun = [];
-
-  for (const day of days) {
-    if (day.success) {
-      currentRun.push(day.dateStr);
-    } else {
-      if (currentRun.length > 0) {
-        activeRuns.push(currentRun);
-        currentRun = [];
-      }
-    }
-  }
-  if (currentRun.length > 0) {
-    activeRuns.push(currentRun);
-  }
-
   let newlyAwardedCount = 0;
-  for (const run of activeRuns) {
-    const runLength = run.length;
-    const numBonuses = Math.floor(runLength / 7);
-    for (let i = 1; i <= numBonuses; i++) {
-      const bonusDayIndex = i * 7 - 1;
-      const bonusEndDateStr = run[bonusDayIndex];
+  let count = 0;
 
-      if (!existingBonusDates.has(bonusEndDateStr)) {
-        await awardSp(
-          student,
-          5, // +5 SP Perfect Week Bonus
-          'manual',
-          `Perfect Week Bonus: 7 consecutive days ending ${bonusEndDateStr}`,
-          '',
-          new Date(bonusEndDateStr + 'T12:00:00Z')
-        );
-        existingBonusDates.add(bonusEndDateStr);
-        newlyAwardedCount++;
-      }
-    }
-  }
+  for (const session of sortedSessions) {
+    const spEarned = sessionSp[session.sessionLabel] || 0;
+    if (spEarned >= 20) {
+      count++;
+      if (count === 6) {
+        const endingLabel = session.sessionLabel;
+        if (!existingBonusLabels.has(endingLabel)) {
+          let sessionDateTime = new Date();
+          if (SESSION_DATETIME_MAP[endingLabel]) {
+            sessionDateTime = new Date(SESSION_DATETIME_MAP[endingLabel]);
+          }
 
-  if (days.length > 0) {
-    const lastDay = days[days.length - 1];
-    if (lastDay.success) {
-      const lastRun = activeRuns[activeRuns.length - 1] || [];
-      currentStreak = lastRun.length;
-    } else if (days.length > 1) {
-      const yesterday = days[days.length - 2];
-      if (yesterday.success) {
-        const lastRun = activeRuns.find(run => run.includes(yesterday.dateStr)) || [];
-        currentStreak = lastRun.length;
-      } else {
-        currentStreak = 0;
+          await awardSp(
+            student,
+            5,
+            'manual',
+            `Perfect Week Bonus: 6 consecutive sessions ending ${endingLabel}`,
+            '',
+            sessionDateTime
+          );
+          existingBonusLabels.add(endingLabel);
+          newlyAwardedCount++;
+        }
+        count = 0;
       }
     } else {
-      currentStreak = 0;
+      count = 0;
     }
   }
 
-  const totalBonusesCount = existingBonusDates.size;
+  currentStreak = count;
+  const totalBonusesCount = existingBonusLabels.size;
 
   return {
     currentStreak,
