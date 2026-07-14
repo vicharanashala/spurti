@@ -69,7 +69,11 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView 
+          profile={profile} 
+          onBack={config.allowStudentSearch ? () => setView('landing') : null} 
+          onSettings={() => setView('notification-settings')}
+        />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -86,6 +90,9 @@ function App() {
         />
       </>
     );
+  }
+  if (view === 'notification-settings' && profile) {
+    return <NotificationSettings onBack={() => setView('student')} />;
   }
   if (view === 'excused' && excused) {
     return <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />;
@@ -262,7 +269,7 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onBack, onSettings }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -270,7 +277,10 @@ function StudentView({ profile, onBack }) {
   return (
     <main className="page compact">
       <header className="topbar">
-        {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
+          <NotificationBell onSettings={onSettings} />
+        </div>
         <div>
           <p className="eyebrow">Student Spurti Bank</p>
           <h1>{student.name}</h1>
@@ -846,5 +856,143 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
+
+function NotificationBell({ onSettings }) {
+  const [notifications, setNotifications] = useState([]);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const fetchNotifs = async () => {
+      try {
+        const res = await fetch(`${API}/notifications`);
+        if (res.ok && active) setNotifications(await res.json());
+      } catch (err) {}
+    };
+    fetchNotifs();
+    const id = setInterval(fetchNotifs, 45000);
+    return () => { active = false; clearInterval(id); };
+  }, []);
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  const markAllRead = async () => {
+    await fetch(`${API}/notifications/read-all`, { method: 'POST' });
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
+
+  const markRead = async (id) => {
+    await fetch(`${API}/notifications/${id}/read`, { method: 'POST' });
+    setNotifications(prev => prev.map(n => n._id === id ? { ...n, read: true } : n));
+  };
+
+  return (
+    <div className="notification-bell-wrapper">
+      <button className="secondary notification-bell-button" onClick={() => setOpen(!open)}>
+        🔔 {unreadCount > 0 && <span className="notification-bell-badge">{unreadCount}</span>}
+      </button>
+      {open && (
+        <div className="notification-dropdown">
+          <div className="notification-dropdown-header">
+            <h3 className="notification-dropdown-title">Notifications</h3>
+            <button className="secondary notification-settings-button" onClick={() => { setOpen(false); onSettings(); }}>⚙️ Settings</button>
+          </div>
+          {notifications.length === 0 ? <p className="muted notification-empty-state">No notifications</p> : (
+            <div className="notification-item-container">
+              {notifications.map(n => (
+                <div key={n._id} onClick={() => markRead(n._id)} className={`notification-item ${n.read ? '' : 'unread'}`}>
+                  <p className="notification-item-title">{n.title}</p>
+                  <p className="notification-item-message">{n.message}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {unreadCount > 0 && <button className="primary notification-mark-all" onClick={markAllRead}>Mark all as read</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificationSettings({ onBack }) {
+  const [prefs, setPrefs] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/notifications/preferences`)
+      .then(r => r.json())
+      .then(setPrefs)
+      .catch(() => {});
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    await fetch(`${API}/notifications/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categories: prefs.categories })
+    });
+    setSaving(false);
+    onBack();
+  };
+
+  const toggle = (cat, type) => {
+    setPrefs(p => ({
+      ...p,
+      categories: {
+        ...p.categories,
+        [cat]: { ...p.categories[cat], [type]: !p.categories[cat][type] }
+      }
+    }));
+  };
+
+  if (!prefs) return <main className="page"><section className="panel"><p>Loading preferences...</p></section></main>;
+
+  const labels = {
+    weeklyDigest: 'Weekly Digest',
+    streakReminders: 'Streak Reminders',
+    peerActivity: 'Peer Activity',
+    announcements: 'Announcements'
+  };
+
+  return (
+    <main className="page compact">
+      <section className="panel">
+        <div className="notification-settings-header">
+          <div>
+            <p className="eyebrow">Settings</p>
+            <h1>Notification Preferences</h1>
+          </div>
+          <button className="secondary" onClick={onBack}>Back</button>
+        </div>
+        <p className="lead notification-settings-lead">Control how you want to be notified for each type of activity.</p>
+        
+        <div className="notification-settings-list">
+          {Object.keys(labels).map(cat => (
+            <div key={cat} className="notification-settings-row">
+              <strong className="notification-settings-label">{labels[cat]}</strong>
+              <div className="notification-settings-toggles">
+                <label className="notification-settings-toggle">
+                  <input type="checkbox" checked={prefs.categories[cat]?.inApp ?? true} onChange={() => toggle(cat, 'inApp')} />
+                  In-App
+                </label>
+                <label className="notification-settings-toggle">
+                  <input type="checkbox" checked={prefs.categories[cat]?.email ?? false} onChange={() => toggle(cat, 'email')} />
+                  Email
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+        
+        <div className="notification-settings-actions">
+          <button className="primary" onClick={save} disabled={saving}>
+            {saving ? 'Saving...' : 'Save Preferences'}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);
