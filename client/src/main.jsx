@@ -295,7 +295,7 @@ function StudentView({ profile, onBack, onRefreshProfile, onSettings }) {
       <header className="topbar">
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
-          <NotificationBell onSettings={onSettings} />
+          <NotificationBell onSettings={onSettings} onRefreshProfile={onRefreshProfile} freezes={student.streakFreezesAvailable || 0} />
         </div>
         <div>
           <p className="eyebrow">Student Spurti Bank</p>
@@ -304,7 +304,7 @@ function StudentView({ profile, onBack, onRefreshProfile, onSettings }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
+      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} onRefreshProfile={onRefreshProfile} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['motivation','Motivation & Rewards']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
@@ -386,35 +386,52 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   );
 }
 
-function StreakCard({ streak, student }) {
+function StreakCard({ streak, student, attendance, onRefreshProfile }) {
   const [freezes, setFreezes] = useState(student?.streakFreezesAvailable || 0);
-  const [buying, setBuying] = useState(false);
+  const [using, setUsing] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     setFreezes(student?.streakFreezesAvailable || 0);
   }, [student?.streakFreezesAvailable]);
 
-  const buyFreeze = async () => {
-    setBuying(true);
+  const buyAndUseFreeze = async () => {
+    if (!streak?.streakBrokenAt) return;
+    setUsing(true);
     setError(null);
     try {
-      const res = await fetch(`${API}/streak-freeze/buy`, { method: 'POST' });
+      const res = await fetch(`${API}/streak/freeze/use`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionLabel: streak.streakBrokenAt })
+      });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to buy');
+      if (!res.ok) throw new Error(data.error || 'Failed to use freeze');
       setFreezes(data.streakFreezesAvailable);
+      if (onRefreshProfile) onRefreshProfile();
     } catch (err) {
       setError(err.message);
     }
-    setBuying(false);
+    setUsing(false);
   };
+
+  const qualified = attendance ? attendance.filter(a => a.qualified).length : 0;
+  const totalAttendance = attendance ? attendance.length : 0;
+  const attendancePercentage = totalAttendance > 0 ? (qualified / totalAttendance) * 100 : 100;
+
+  const badgeStyle = freezes === 0 ? { opacity: 0.5, filter: 'grayscale(1)' } : {};
 
   if (!streak) {
     return (
       <div className="pulse-card streak-card">
         <div className="streak-card-header">
           <span>Streak & Momentum</span>
-          {freezes > 0 && <span className="streak-freeze-badge">🛡️ {freezes} freeze(s) available</span>}
+          <span 
+            className={`streak-freeze-badge ${freezes === 0 ? 'disabled' : ''}`}
+            style={badgeStyle}
+          >
+            🛡️ {freezes} streak(s) available
+          </span>
         </div>
         <div className="streak-main">
           <p className="muted">No sessions yet</p>
@@ -425,11 +442,20 @@ function StreakCard({ streak, student }) {
 
   const { currentStreak, longestStreak, streakBrokenAt, isActive } = streak;
 
+  const hasMissed = !isActive && streakBrokenAt;
+  const hasSp = (student?.totalSp || 0) >= 20;
+  const isEligible = hasMissed && attendancePercentage > 85 && freezes > 0 && hasSp;
+
   return (
     <div className={`pulse-card streak-card ${isActive ? 'streak-active' : ''}`}>
       <div className="streak-card-header">
         <span>Streak & Momentum</span>
-        {freezes > 0 && <span className="streak-freeze-badge">🛡️ {freezes} freeze(s) available</span>}
+        <span 
+          className={`streak-freeze-badge ${freezes === 0 ? 'disabled' : ''}`}
+          style={badgeStyle}
+        >
+          🛡️ {freezes} streak(s) available
+        </span>
       </div>
       <div className="streak-main">
         <strong>{currentStreak}</strong>
@@ -452,16 +478,46 @@ function StreakCard({ streak, student }) {
       )}
 
       <div className="streak-freeze-action">
-        <button className="streak-freeze-buy" onClick={buyFreeze} disabled={buying}>
-          {buying ? 'Buying...' : 'Buy Freeze (20 SP)'}
+        <button 
+          className="streak-freeze-buy" 
+          onClick={buyAndUseFreeze} 
+          disabled={using || !isEligible}
+          title={
+            !hasMissed 
+              ? 'No missed sessions to protect.' 
+              : attendancePercentage <= 85 
+                ? 'Requires >85% attendance to purchase a streak freeze.' 
+                : freezes <= 0 
+                  ? '0 streak freezes available to spend.' 
+                  : !hasSp 
+                    ? 'Not enough SP to buy a streak freeze (costs 20 SP).' 
+                    : ''
+          }
+        >
+          {using ? 'Buying...' : 'Buy Freeze (20 SP)'}
         </button>
+        {hasMissed && attendancePercentage <= 85 && (
+          <span className="streak-freeze-error" style={{ fontSize: '11px', display: 'block', marginTop: '4px' }}>
+            Requires &gt;85% attendance (current: {attendancePercentage.toFixed(1)}%)
+          </span>
+        )}
+        {hasMissed && freezes === 0 && (
+          <span className="streak-freeze-error" style={{ fontSize: '11px', display: 'block', marginTop: '4px', color: '#dc2626' }}>
+            No streak freezes available (0 remaining)
+          </span>
+        )}
+        {hasMissed && freezes > 0 && !hasSp && (
+          <span className="streak-freeze-error" style={{ fontSize: '11px', display: 'block', marginTop: '4px', color: '#dc2626' }}>
+            Not enough SP (costs 20 SP)
+          </span>
+        )}
         {error && <span className="streak-freeze-error">{error}</span>}
       </div>
     </div>
   );
 }
 
-function StudentPulse({ profile, badges, nextActions }) {
+function StudentPulse({ profile, badges, nextActions, onRefreshProfile }) {
   const { student, cohort, attendance, polls, transactions, streak } = profile;
   const qualified = attendance.filter(a => a.qualified).length;
   const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
@@ -469,7 +525,7 @@ function StudentPulse({ profile, badges, nextActions }) {
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
   return (
     <section className="pulse-grid">
-      <StreakCard streak={streak} student={student} />
+      <StreakCard streak={streak} student={student} attendance={attendance} onRefreshProfile={onRefreshProfile} />
       <div className="pulse-card progress-card">
         <span>Standing</span>
         <strong>Rank {student.rank}</strong>
@@ -975,18 +1031,20 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
 }
 
 
-function NotificationBell({ onSettings }) {
+function NotificationBell({ onSettings, onRefreshProfile, freezes }) {
   const [notifications, setNotifications] = useState([]);
   const [open, setOpen] = useState(false);
+  const [using, setUsing] = useState(false);
+
+  const fetchNotifs = async () => {
+    try {
+      const res = await fetch(`${API}/notifications`);
+      if (res.ok) setNotifications(await res.json());
+    } catch (err) {}
+  };
 
   useEffect(() => {
     let active = true;
-    const fetchNotifs = async () => {
-      try {
-        const res = await fetch(`${API}/notifications`);
-        if (res.ok && active) setNotifications(await res.json());
-      } catch (err) {}
-    };
     fetchNotifs();
     const id = setInterval(fetchNotifs, 45000);
     return () => { active = false; clearInterval(id); };
@@ -1004,6 +1062,26 @@ function NotificationBell({ onSettings }) {
     setNotifications(prev => prev.map(n => n._id === id ? { ...n, read: true } : n));
   };
 
+  const useFreeze = async (e, id, sessionLabel) => {
+    e.stopPropagation();
+    setUsing(true);
+    try {
+      const res = await fetch(`${API}/streak/freeze/use`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionLabel })
+      });
+      if (res.ok) {
+        await fetch(`${API}/notifications/${id}/read`, { method: 'POST' });
+        await fetchNotifs();
+        if (onRefreshProfile) onRefreshProfile();
+      }
+    } catch (err) {
+      console.error('Use freeze notification failed:', err);
+    }
+    setUsing(false);
+  };
+
   return (
     <div className="notification-bell-wrapper">
       <button className="secondary notification-bell-button" onClick={() => setOpen(!open)}>
@@ -1017,12 +1095,27 @@ function NotificationBell({ onSettings }) {
           </div>
           {notifications.length === 0 ? <p className="muted notification-empty-state">No notifications</p> : (
             <div className="notification-item-container">
-              {notifications.map(n => (
-                <div key={n._id} onClick={() => markRead(n._id)} className={`notification-item ${n.read ? '' : 'unread'}`}>
-                  <p className="notification-item-title">{n.title}</p>
-                  <p className="notification-item-message">{n.message}</p>
-                </div>
-              ))}
+              {notifications.map(n => {
+                const showUseBtn = n.title === 'Protect your streak!' && n.sessionLabel && freezes > 0 && !n.read;
+                return (
+                  <div key={n._id} onClick={() => markRead(n._id)} className={`notification-item ${n.read ? '' : 'unread'}`} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+                    <div className="notification-item-content">
+                      <p className="notification-item-title">{n.title}</p>
+                      <p className="notification-item-message">{n.message}</p>
+                    </div>
+                    {showUseBtn && (
+                      <button 
+                        className="primary notification-use-freeze-btn" 
+                        onClick={(e) => useFreeze(e, n._id, n.sessionLabel)}
+                        disabled={using}
+                        style={{ fontSize: '10px', padding: '4px 8px', marginTop: '4px', alignSelf: 'flex-start' }}
+                      >
+                        {using ? 'Buying...' : 'Buy Freeze (20 SP)'}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
           {unreadCount > 0 && <button className="primary notification-mark-all" onClick={markAllRead}>Mark all as read</button>}
@@ -1064,7 +1157,7 @@ function NotificationSettings({ onBack }) {
     }));
   };
 
-  if (!prefs) return <main className="page"><section className="panel"><p>Loading preferences...</p></section></main>;
+  if (!prefs || !prefs.categories) return <main className="page"><section className="panel"><p>Loading preferences...</p></section></main>;
 
   const labels = {
     weeklyDigest: 'Weekly Digest',

@@ -9,7 +9,7 @@ export async function getOrCreatePreferences(email) {
   );
 }
 
-export async function notify(email, category, { title, message }) {
+export async function notify(email, category, { title, message, sessionLabel }) {
   const prefs = await getOrCreatePreferences(email);
   
   if (prefs.categories[category]?.inApp) {
@@ -17,7 +17,8 @@ export async function notify(email, category, { title, message }) {
       email,
       category,
       title,
-      message
+      message,
+      sessionLabel: sessionLabel || ''
     });
   }
   

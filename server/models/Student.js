@@ -22,7 +22,7 @@ const studentSchema = new mongoose.Schema({
   surveyCompleted: { type: Boolean, default: false, index: true },
   surveyCompletedAt: { type: Date, default: null },
   lastNotifiedStreakBreak: { type: String, default: null },
-  streakFreezesAvailable: { type: Number, default: 0 },
+  streakFreezesAvailable: { type: Number, default: 3 },
   streakProtectedSessions: { type: [String], default: [] },
   // Second perception pop-up ("poll2") — same mechanism as surveyCompleted, but an
   // independent flag so it never disturbs the first survey's completion state.

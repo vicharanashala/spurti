@@ -9,6 +9,7 @@ const notificationSchema = new mongoose.Schema({
   },
   title: { type: String, required: true },
   message: { type: String, required: true },
+  sessionLabel: { type: String, default: '' },
   read: { type: Boolean, default: false }
 }, { timestamps: true });
 

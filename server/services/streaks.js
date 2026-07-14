@@ -6,6 +6,8 @@
  * array of their attendance records.
  */
 
+import { SESSION_LABELS } from '../config.js';
+
 export function computeStreak(attendanceRecords, protectedSessionLabels = []) {
   if (!attendanceRecords || attendanceRecords.length === 0) {
     return {
@@ -16,8 +18,13 @@ export function computeStreak(attendanceRecords, protectedSessionLabels = []) {
     };
   }
 
-  // Defensively sort the input by sessionLabel ascending without mutating original array.
+  // Defensively sort the input chronologically based on SESSION_LABELS index.
   const sorted = [...attendanceRecords].sort((a, b) => {
+    const idxA = SESSION_LABELS.indexOf(a.sessionLabel);
+    const idxB = SESSION_LABELS.indexOf(b.sessionLabel);
+    if (idxA !== -1 && idxB !== -1) {
+      return idxA - idxB;
+    }
     if (a.sessionLabel < b.sessionLabel) return -1;
     if (a.sessionLabel > b.sessionLabel) return 1;
     return 0;
