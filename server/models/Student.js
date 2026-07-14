@@ -24,7 +24,9 @@ const studentSchema = new mongoose.Schema({
   // Second perception pop-up ("poll2") — same mechanism as surveyCompleted, but an
   // independent flag so it never disturbs the first survey's completion state.
   poll2Completed: { type: Boolean, default: false, index: true },
-  poll2CompletedAt: { type: Date, default: null }
+  poll2CompletedAt: { type: Date, default: null },
+  weeklyGoalSp: { type: Number, default: 0 },
+  weeklyGoalSetAt: { type: Date, default: null }
 }, { timestamps: true });
 
 studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });
