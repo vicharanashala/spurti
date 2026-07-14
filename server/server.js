@@ -433,7 +433,23 @@ api.get('/admin/leaderboard', adminGuard, async (req, res) => {
     totalSp: s.totalSp
   })));
 });
+api.get('/sessions', async (_req, res) => {
+  try {
+    const sessions = await Session.find({})
+      .sort({ endDateTime: 1 })
+      .lean();
 
+    res.json(
+      sessions.map(s => ({
+        label: s.label,
+        date: s.endDateTime,
+        duration: s.totalMinutes
+      }))
+    );
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load sessions' });
+  }
+});
 api.get('/admin/attendance', adminGuard, async (_req, res) => {
   const [sessions, students, records] = await Promise.all([
     Session.find().sort({ endDateTime: 1 }).lean(),
