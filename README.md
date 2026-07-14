@@ -1,6 +1,20 @@
 
 # Student Self-Motivation Engine
 
+> **Public repository — sensitive data removed 2026-07-14**
+>
+> This is the public mirror of the Spurti / Student Self-Motivation Engine.
+> Real student data (rosters, SP ledger CSVs, attendance reports, SP
+> balance PDFs, excused-student emails, seed manifests, all exports) used
+> to live under `data/`. Those files have been replaced with placeholders
+> on the `main` branch. The repository contains no personally-identifying
+> information at HEAD. If you cloned before 2026-07-14, your local clone
+> and the git history still contain those files — see `data/example/README.md`
+> for details and shape references.
+>
+> All schema, services, scripts, configuration samples (`.env.example`,
+> `.env.ssh.example`), and code are present and runnable.
+
 ## Problem Statement
 
 Many students begin a course, subject, internship, certification, or learning program with interest, but lose consistency over time. This is especially common in large-scale learning environments where hundreds or thousands of learners are enrolled at once. Students may miss sessions, delay tasks, avoid practice, stop reflecting on progress, or slowly disconnect from the learning process.

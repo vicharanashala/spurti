@@ -1,0 +1,14 @@
+[
+  {
+    "_comment": "Single-row fake example of data/students.json shape. Real data was removed from the public repo on 2026-07-14.",
+    "name": "Example Student",
+    "email": "student.example@example.invalid",
+    "internshipStartDate": "2026-07-13T00:00:00.000Z",
+    "totalSp": 0,
+    "highestSpEver": 0,
+    "level": 1,
+    "trophyLeague": "Bronze III",
+    "legendBadgeUnlocked": false,
+    "createdAt": "2026-07-13T00:00:00.000Z"
+  }
+]
