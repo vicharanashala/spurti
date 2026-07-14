@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { validateTip } from './services/tipping.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -197,6 +198,7 @@ async function studentPayload(student) {
   const myGroup = leaderboardGroup(student.internshipStartDate);
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
   const mapRow = (row, index) => ({
+    id: String(row._id),
     rank: index + 1,
     name: row.name,
     maskedEmail: maskEmail(row.email),
@@ -307,12 +309,156 @@ api.post('/confirm', async (req, res) => {
   res.json(await studentPayload(student));
 });
 
+api.post('/tip', async (req, res) => {
+  const fromEmail = await studentEmailFromRequest(req);
+  if (!fromEmail) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { toStudentId, amount, note } = req.body || {};
+  if (!toStudentId || !mongoose.Types.ObjectId.isValid(toStudentId)) return res.status(404).json({ error: 'Recipient not found' });
+
+  const cleanNote = String(note || '').replace(/<[^>]*>?/gm, '').trim().slice(0, 140);
+  const amt = Number(amount);
+
+  const fromStudent = await Student.findOne({ $or: [{ email: fromEmail }, { alternateEmail: fromEmail }] }).lean();
+  if (!fromStudent) return res.status(401).json({ error: 'Sender not found' });
+  const toStudent = await Student.findById(toStudentId).lean();
+  if (!toStudent) return res.status(404).json({ error: 'Recipient not found' });
+
+  const windowDays = 7;
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000);
+
+  // Compute recentTipsSent and recentTipsToRecipient using an aggregation pipeline
+  const recentTips = await SPTransaction.aggregate([
+    {
+      $match: {
+        email: fromStudent.email,
+        category: 'tip',
+        appliedDelta: { $lt: 0 },
+        dateTime: { $gte: cutoff, $lte: now }
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        totalSent: { $sum: { $abs: "$appliedDelta" } },
+        totalToRecipient: {
+          $sum: {
+            $cond: [ { $eq: ["$counterpartEmail", toStudent.email] }, { $abs: "$appliedDelta" }, 0 ]
+          }
+        }
+      }
+    }
+  ]);
+
+  const recentTipsSent = recentTips.length ? recentTips[0].totalSent : 0;
+  const recentTipsToRecipient = recentTips.length ? recentTips[0].totalToRecipient : 0;
+
+  const lastTip = await SPTransaction.findOne({ email: fromStudent.email, category: 'tip', appliedDelta: { $lt: 0 } })
+    .sort({ dateTime: -1, createdAt: -1 })
+    .select('dateTime')
+    .lean();
+
+  const validation = validateTip({
+    fromStudent,
+    toStudent,
+    amount: amt,
+    recentTipsSent,
+    recentTipsToRecipient,
+    lastTipDateTime: lastTip?.dateTime
+  });
+
+  if (!validation.ok) {
+    return res.status(400).json({ error: validation.reason });
+  }
+
+  // Perform the debit atomically
+  // The conditional $inc is a concurrency-safe replacement for read-then-write
+  // in a single-node MongoDB deployment without replica-set transactions.
+  const debited = await Student.findOneAndUpdate(
+    { email: fromStudent.email, totalSp: { $gte: amt + 20 } },
+    { $inc: { totalSp: -amt } },
+    { new: true }
+  );
+
+  if (!debited) {
+    return res.status(409).json({ error: 'Balance too low or concurrent transaction conflict.' });
+  }
+
+  let credited;
+  try {
+    // If debit succeeded, perform the credit
+    credited = await Student.findOneAndUpdate(
+      { email: toStudent.email },
+      { $inc: { totalSp: amt } },
+      { new: true }
+    );
+  } catch (creditErr) {
+    // Nothing else has happened yet — safe to refund the sender.
+    try {
+      await Student.findOneAndUpdate({ email: fromStudent.email }, { $inc: { totalSp: amt } });
+      console.warn(`Tip from ${fromStudent.email} to ${toStudent.email} failed before crediting recipient; sender refunded ${amt} SP.`);
+      return res.status(500).json({ error: 'Tip could not be completed. Your balance was not affected.' });
+    } catch (reversalErr) {
+      console.error('CRITICAL: tip credit failed AND sender reversal also failed.', {
+        fromEmail: fromStudent.email, toEmail: toStudent.email, amount: amt,
+        debitedBalance: debited.totalSp, originalError: creditErr.message || creditErr,
+        reversalError: reversalErr.message || reversalErr
+      });
+      return res.status(500).json({ error: 'Internal server error. Please contact support to restore your balance.' });
+    }
+  }
+
+  try {
+    // Insert transactions using the new counterpartEmail field
+    const senderReason = `Sent tip to ${toStudent.name}${cleanNote ? ` - "${cleanNote}"` : ''}`;
+    await SPTransaction.create({
+      email: fromStudent.email,
+      studentId: fromStudent._id,
+      category: 'tip',
+      sessionLabel: 'Peer Tip',
+      counterpartEmail: toStudent.email,
+      deltaMode: 'absolute',
+      deltaValue: -amt,
+      appliedDelta: -amt,
+      balanceAfter: debited.totalSp,
+      reason: senderReason,
+      dateTime: now
+    });
+
+    const recipientReason = `Received tip from ${fromStudent.name}${cleanNote ? ` - "${cleanNote}"` : ''}`;
+    await SPTransaction.create({
+      email: toStudent.email,
+      studentId: toStudent._id,
+      category: 'tip',
+      sessionLabel: 'Peer Tip',
+      counterpartEmail: fromStudent.email,
+      deltaMode: 'absolute',
+      deltaValue: amt,
+      appliedDelta: amt,
+      balanceAfter: credited.totalSp,
+      reason: recipientReason,
+      dateTime: now
+    });
+
+    res.json({ ok: true, newBalance: debited.totalSp, sentTo: maskEmail(toStudent.email) });
+  } catch (writeErr) {
+    console.error('CRITICAL: tip credit succeeded but transaction record write failed. DO NOT REFUND SENDER — money movement is real.', {
+      fromEmail: fromStudent.email, toEmail: toStudent.email, amount: amt,
+      debitedBalance: debited.totalSp, creditedBalance: credited.totalSp,
+      error: writeErr.message || writeErr
+    });
+    return res.status(500).json({ error: 'Your tip was sent, but we could not confirm it. Please check your SP Bank, and contact support if anything looks wrong.' });
+  }
+});
+
 api.get('/leaderboard', async (req, res) => {
   const type = String(req.query.leaderboardType || 'overall');
   const filter = { status: { $ne: 'excused' } };
   if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
   const students = await Student.find(filter).sort({ totalSp: -1, name: 1 }).limit(50).lean();
   res.json(students.map((s, i) => ({
+    id: String(s._id),
     rank: i + 1,
     name: s.name,
     maskedEmail: maskEmail(s.email),

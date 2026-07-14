@@ -63,13 +63,21 @@ function App() {
     return () => { active = false; };
   }, []);
 
+  const refreshProfile = async () => {
+    const meRes = await fetch(`${API}/me`);
+    if (meRes.ok) {
+      const data = await meRes.json();
+      if (data.authenticated && data.profile) setProfile(data.profile);
+    }
+  };
+
   if (loading) {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
   }
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} onRefresh={refreshProfile} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -262,8 +270,9 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onBack, onRefresh }) {
   const [tab, setTab] = useState('bank');
+  const [tipRecipient, setTipRecipient] = useState(null);
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
@@ -282,7 +291,8 @@ function StudentView({ profile, onBack }) {
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
-      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} onTip={setTipRecipient} />}
+      {tipRecipient && <TipModal recipient={tipRecipient} onClose={() => setTipRecipient(null)} onTipSuccess={onRefresh} />}
     </main>
   );
 }
@@ -321,7 +331,7 @@ function LevelStatus({ student }) {
   );
 }
 
-function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
+function LeaderboardTabs({ overall = [], group = [], groupLabel, onTip }) {
   const [type, setType] = useState('overall');
   const rows = type === 'overall' ? overall : group;
   return (
@@ -336,10 +346,11 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
       {type === 'my_onboarding_group' && groupLabel &&
         <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
       <table className="table">
-        <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
+        <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th><th>Action</th></tr></thead>
         <tbody>{rows.map(row => (
           <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
             <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
+            <td>{!row.isCurrentStudent && <button className="tip-action-btn" onClick={() => onTip(row)}>Tip</button>}</td>
           </tr>
         ))}</tbody>
       </table>
@@ -846,5 +857,96 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
+
+function TipModal({ onClose, recipient, onTipSuccess }) {
+  const [step, setStep] = useState('form');
+  const [amount, setAmount] = useState(1);
+  const [note, setNote] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [amountTouched, setAmountTouched] = useState(false);
+  const [newBalance, setNewBalance] = useState(null);
+
+  const amountValue = Number(amount);
+  const isAmountValid = Number.isInteger(amountValue) && amountValue >= 1 && amountValue <= 10;
+
+  const confirmSubmit = async () => {
+    setStep('loading');
+    setErrorMsg('');
+    try {
+      const res = await fetch(`${API}/tip`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toStudentId: recipient.id, amount: Number(amount), note })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setStep('error');
+        setErrorMsg(data.error || 'Failed to send tip.');
+        return;
+      }
+      setNewBalance(data.newBalance);
+      setStep('success');
+      setTimeout(() => {
+        onTipSuccess();
+        onClose();
+      }, 2500);
+    } catch {
+      setStep('error');
+      setErrorMsg('Network error. Please try again.');
+    }
+  };
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <section className="modal tip-modal">
+        <div className="modal-head">
+          <h2>Peer Tip</h2>
+          <button className="icon" onClick={onClose} disabled={step === 'loading'}>x</button>
+        </div>
+        
+        {step === 'success' && (
+          <div className="tip-success">
+            <h3>Sent!</h3>
+            <p className="muted">{recipient.name} now knows you appreciate them.</p>
+            {newBalance !== null && <p className="muted">Your new balance: {newBalance} SP</p>}
+          </div>
+        )}
+
+        {(step === 'form' || step === 'error') && (
+          <div className="tip-form">
+             <p className="lead" style={{marginBottom: 0}}>Recognize <strong>{recipient.name}</strong> for their contribution to the cohort.</p>
+             <label>Amount (SP)</label>
+             <input type="number" min="1" max="10" value={amount} onChange={e => setAmount(e.target.value)} onBlur={() => setAmountTouched(true)} />
+             {amountTouched && !isAmountValid && <p className="muted" style={{margin: '-6px 0 0', fontSize: 13}}>Enter a whole number between 1 and 10.</p>}
+             
+             <div className="note-label"><label>Note</label><span className="muted">{note.length}/140</span></div>
+             <input type="text" maxLength={140} placeholder="e.g. Great answer today!" value={note} onChange={e => setNote(e.target.value)} />
+             
+             {step === 'error' && <p className="error">{errorMsg}</p>}
+             
+             <button className="primary" onClick={() => setStep('confirm')} style={{ marginTop: 12 }} disabled={!isAmountValid}>Review Tip</button>
+          </div>
+        )}
+
+        {step === 'confirm' && (
+          <div className="tip-confirm">
+             <p style={{marginBottom: 8}}>Are you sure you want to send <strong>{Number(amount)} SP</strong> to <strong>{recipient.name}</strong>?</p>
+             <p className="error" style={{ fontSize: 13, marginBottom: 0 }}>This is a real deduction from your SP Bank and cannot be undone.</p>
+             <div className="search-row" style={{ marginTop: 24 }}>
+               <button className="secondary" onClick={() => setStep('form')} disabled={step === 'loading'}>Cancel</button>
+               <button className="primary tip-send-btn" onClick={confirmSubmit} disabled={step === 'loading'}>Confirm & Send</button>
+             </div>
+          </div>
+        )}
+
+        {step === 'loading' && (
+          <div className="tip-form" style={{textAlign: 'center', padding: '32px 0'}}>
+            <p className="muted" style={{margin: 0}}>Sending tip...</p>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);
