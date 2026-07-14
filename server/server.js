@@ -12,6 +12,8 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import Nudge from './models/Nudge.js';
+import { detectAtRiskStudents, sendEmailNudge } from './nudgeEngine.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -98,6 +100,16 @@ app.use(express.json({ limit: '2mb' }));
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+// Same trust model as /api/confirm: only masked emails are ever exposed
+// publicly (e.g. via /api/search), so knowing a student's full, unmasked
+// email is treated as proof of identity for their own by-id resources.
+function studentEmailMatches(student, email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized || !student) return false;
+  return normalized === normalizeEmail(student.email) ||
+    (student.alternateEmail && normalized === normalizeEmail(student.alternateEmail));
 }
 
 function maskEmail(email) {
@@ -468,6 +480,25 @@ api.get('/admin/student/:id', adminGuard, async (req, res) => {
   res.json(await studentPayload(student));
 });
 
+api.post('/admin/nudges/run', adminGuard, async (_req, res) => {
+  const generated = await detectAtRiskStudents();
+  const errors = [];
+  let sent = 0;
+  for (const nudge of generated) {
+    const result = await sendEmailNudge(nudge);
+    if (result.success) sent++;
+    else errors.push({ studentEmail: nudge.studentEmail, error: result.error });
+  }
+  res.json({ generated: generated.length, sent, errors });
+});
+
+api.get('/admin/nudges', adminGuard, async (req, res) => {
+  const filter = {};
+  if (['pending', 'sent', 'dismissed'].includes(req.query.status)) filter.status = req.query.status;
+  const nudges = await Nudge.find(filter).sort({ createdAt: -1 }).lean();
+  res.json(nudges);
+});
+
 api.get('/admin/active', adminGuard, (_req, res) => {
   const now = new Date();
   const cutoff = now.getTime() - 60_000;
@@ -616,6 +647,28 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
+
+api.post('/nudges/:id/dismiss', async (req, res) => {
+  const nudge = await Nudge.findById(req.params.id);
+  if (!nudge) return res.status(404).json({ error: 'Nudge not found' });
+  const claimedEmail = req.body?.studentEmail || req.headers['x-student-email'];
+  if (normalizeEmail(claimedEmail) !== normalizeEmail(nudge.studentEmail)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  nudge.status = 'dismissed';
+  nudge.dismissedAt = new Date();
+  await nudge.save();
+  res.json(nudge);
+});
+
+api.get('/students/:id/nudges', async (req, res) => {
+  const student = await Student.findById(req.params.id).lean();
+  if (!student || !studentEmailMatches(student, req.headers['x-student-email'])) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const nudges = await Nudge.find({ studentId: req.params.id, status: 'pending' }).sort({ createdAt: -1 }).lean();
+  res.json(nudges);
+});
 
 app.use('/api', api);
 app.use('/spurti/api', api);
