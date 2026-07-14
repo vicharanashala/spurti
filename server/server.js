@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
-import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL, STREAK_FREEZE_COST_SP } from './config.js';
+import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL, STREAK_FREEZE_COST_SP, SESSION_DATETIME_MAP } from './config.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
@@ -150,12 +150,26 @@ async function getSamagamaUser(chatengineToken) {
 
 async function studentEmailFromRequest(req) {
   const cookies = parseCookies(req.headers.cookie || '');
-  const data = await getSamagamaUser(cookies.chatengine_token);
-  // Samagama's /api/auth/me nests the user as { user: { email, ... } };
-  // fall back to a top-level email in case the shape ever flattens.
-  const email = data?.user?.email || data?.email;
-  if (!email) return null;
-  return normalizeEmail(email);
+  
+  if (cookies.chatengine_token) {
+    const data = await getSamagamaUser(cookies.chatengine_token);
+    const email = data?.user?.email || data?.email;
+    if (email) return normalizeEmail(email);
+  }
+
+  if (cookies.student_email) {
+    return normalizeEmail(cookies.student_email);
+  }
+
+  if (req.headers['x-student-email']) {
+    return normalizeEmail(req.headers['x-student-email']);
+  }
+
+  if (req.query.studentEmail) {
+    return normalizeEmail(req.query.studentEmail);
+  }
+
+  return null;
 }
 
 async function rankFor(email) {
@@ -423,6 +437,43 @@ api.get('/config', (_req, res) => res.json({
   poll2: surveyPublic(POLL2)
 }));
 
+async function checkAndNotifyStreakBreak(student, profile) {
+  const streak = profile.streak;
+  if (!streak.isActive && streak.streakBrokenAt &&
+      streak.streakBrokenAt !== student.lastNotifiedStreakBreak &&
+      !(student.streakProtectedSessions || []).includes(streak.streakBrokenAt)) {
+
+    // Assertion: A qualified/attended session is never flagged for freeze use.
+    const lastSessionRec = profile.attendance.find(a => a.sessionLabel === streak.streakBrokenAt);
+    if (lastSessionRec && lastSessionRec.qualified) {
+      throw new Error("Assertion failed: a qualified session is flagged for freeze use.");
+    }
+
+    if (student.streakFreezesAvailable > 0) {
+      await Student.updateOne(
+        { _id: student._id },
+        { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }
+      );
+      notify(student.email, 'streakReminders', {
+        title: 'Protect your streak!',
+        message: `You missed session ${streak.streakBrokenAt} — use a streak freeze to protect your streak?`,
+        sessionLabel: streak.streakBrokenAt
+      }).catch(() => {});
+    } else {
+      const breakClaimed = await Student.findOneAndUpdate(
+        { _id: student._id, lastNotifiedStreakBreak: { $ne: streak.streakBrokenAt } },
+        { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }
+      );
+      if (breakClaimed) {
+        notify(student.email, 'streakReminders', {
+          title: 'Streak broken',
+          message: `Your attendance streak ended after session ${streak.streakBrokenAt}. Time for a comeback!`
+        }).catch(() => {});
+      }
+    }
+  }
+}
+
 api.get('/me', async (req, res) => {
   const email = await studentEmailFromRequest(req);
   if (!email) return res.status(401).json({ authenticated: false });
@@ -434,46 +485,7 @@ api.get('/me', async (req, res) => {
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
   
   const profile = await studentPayload(student);
-  let streak = profile.streak;
-  
-  if (!streak.isActive && streak.streakBrokenAt &&
-      streak.streakBrokenAt !== student.lastNotifiedStreakBreak &&
-      !(student.streakProtectedSessions || []).includes(streak.streakBrokenAt)) {
-
-    const claimed = await Student.findOneAndUpdate(
-      {
-        _id: student._id,
-        streakFreezesAvailable: { $gt: 0 },
-        streakProtectedSessions: { $ne: streak.streakBrokenAt }
-      },
-      {
-        $inc: { streakFreezesAvailable: -1 },
-        $addToSet: { streakProtectedSessions: streak.streakBrokenAt }
-      },
-      { new: true }
-    );
-
-    if (claimed) {
-      streak = computeStreak(profile.attendance, claimed.streakProtectedSessions);
-      profile.streak = streak;
-      profile.student.streakFreezesAvailable = claimed.streakFreezesAvailable;
-      notify(email, 'streakReminders', {
-        title: 'Streak freeze used',
-        message: `A streak freeze protected your streak after session ${streak.streakBrokenAt}. You have ${claimed.streakFreezesAvailable} left.`
-      }).catch(() => {});
-    } else {
-      const breakClaimed = await Student.findOneAndUpdate(
-        { _id: student._id, lastNotifiedStreakBreak: { $ne: streak.streakBrokenAt } },
-        { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }
-      );
-      if (breakClaimed) {
-        notify(email, 'streakReminders', {
-          title: 'Streak broken',
-          message: `Your attendance streak ended after session ${streak.streakBrokenAt}. Time for a comeback!`
-        }).catch(() => {});
-      }
-    }
-  }
+  await checkAndNotifyStreakBreak(student, profile);
 
   res.json({ authenticated: true, profile });
 });
@@ -482,8 +494,24 @@ api.post('/streak-freeze/buy', async (req, res) => {
   const email = await studentEmailFromRequest(req);
   if (!email) return res.status(401).json({ error: 'Not authenticated' });
 
+  const studentCheck = await Student.findOne({ email });
+  if (!studentCheck) return res.status(404).json({ error: 'Student not found' });
+
+  if ((studentCheck.streakFreezesAvailable || 0) >= 3) {
+    return res.status(400).json({ error: 'You can hold a maximum of 3 streak freezes' });
+  }
+
+  const attendance = await AttendanceRecord.find({ email }).lean();
+  const qualified = attendance.filter(a => a.qualified).length;
+  const totalAttendance = attendance.length;
+  const attendancePercentage = totalAttendance > 0 ? (qualified / totalAttendance) * 100 : 100;
+
+  if (attendancePercentage < 85) {
+    return res.status(400).json({ error: `Requires ≥85% attendance (current: ${attendancePercentage.toFixed(1)}%)` });
+  }
+
   const student = await Student.findOneAndUpdate(
-    { email, totalSp: { $gte: STREAK_FREEZE_COST_SP } },
+    { email, totalSp: { $gte: STREAK_FREEZE_COST_SP }, streakFreezesAvailable: { $lt: 3 } },
     { $inc: { totalSp: -STREAK_FREEZE_COST_SP, streakFreezesAvailable: 1 } },
     { new: true }
   );
@@ -503,6 +531,81 @@ api.post('/streak-freeze/buy', async (req, res) => {
   ).catch(() => {});
 
   res.json({ streakFreezesAvailable: student.streakFreezesAvailable, totalSp: student.totalSp });
+});
+
+api.post('/streak/freeze/use', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+
+  const { sessionLabel } = req.body || {};
+  if (!sessionLabel) return res.status(400).json({ error: 'sessionLabel is required' });
+
+  const student = await Student.findOne({ email });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  if ((student.streakFreezesAvailable || 0) <= 0) {
+    return res.status(400).json({ error: 'No streak freezes available' });
+  }
+
+  if (student.totalSp < STREAK_FREEZE_COST_SP) {
+    return res.status(400).json({ error: 'Not enough SP to buy a streak freeze' });
+  }
+
+  if ((student.streakProtectedSessions || []).includes(sessionLabel)) {
+    return res.status(400).json({ error: 'Session is already protected' });
+  }
+
+  const attendance = await AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean();
+  const qualifiedCount = attendance.filter(a => a.qualified).length;
+  const totalAttendance = attendance.length;
+  const attendancePercentage = totalAttendance > 0 ? (qualifiedCount / totalAttendance) * 100 : 100;
+
+  if (attendancePercentage <= 85) {
+    return res.status(400).json({ error: 'Requires >85% attendance to purchase a streak freeze' });
+  }
+
+  const updatedStudent = await Student.findOneAndUpdate(
+    {
+      email,
+      streakFreezesAvailable: { $gt: 0 },
+      totalSp: { $gte: STREAK_FREEZE_COST_SP },
+      streakProtectedSessions: { $ne: sessionLabel }
+    },
+    {
+      $inc: { streakFreezesAvailable: -1, totalSp: -STREAK_FREEZE_COST_SP },
+      $addToSet: { streakProtectedSessions: sessionLabel },
+      $set: { lastNotifiedStreakBreak: sessionLabel }
+    },
+    { new: true }
+  );
+
+  if (!updatedStudent) {
+    return res.status(400).json({ error: 'Failed to use streak freeze' });
+  }
+
+  await logTransaction(
+    email,
+    'streakFreeze',
+    '',
+    new Date(),
+    -STREAK_FREEZE_COST_SP,
+    `Used a streak freeze to protect session ${sessionLabel}`,
+    updatedStudent.totalSp
+  ).catch(() => {});
+
+  const streak = computeStreak(attendance, updatedStudent.streakProtectedSessions || []);
+
+  notify(email, 'streakReminders', {
+    title: 'Streak freeze used',
+    message: `A streak freeze protected your streak after session ${sessionLabel}. You have ${updatedStudent.streakFreezesAvailable} left.`
+  }).catch(() => {});
+
+  res.json({
+    success: true,
+    streakFreezesAvailable: updatedStudent.streakFreezesAvailable,
+    totalSp: updatedStudent.totalSp,
+    streak
+  });
 });
 
 api.get('/notifications/preferences', async (req, res) => {
@@ -610,7 +713,17 @@ api.post('/confirm', async (req, res) => {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
-  res.json(await studentPayload(student));
+  
+  res.cookie('student_email', student.email, { 
+    httpOnly: true, 
+    secure: false, 
+    maxAge: 24 * 60 * 60 * 1000 
+  });
+
+  const profile = await studentPayload(student);
+  await checkAndNotifyStreakBreak(student, profile);
+  
+  res.json(profile);
 });
 
 api.get('/leaderboard', async (req, res) => {
@@ -791,9 +904,20 @@ async function getStudentStreak10(student, dailySp) {
   let activeRuns = [];
   let currentRun = [];
 
+  const protectedDates = new Set(
+    (student.streakProtectedSessions || [])
+      .map(label => {
+        const dt = SESSION_DATETIME_MAP[label];
+        return dt ? getISTDateStr(dt) : '';
+      })
+      .filter(Boolean)
+  );
+
   for (const day of days) {
     if (day.success) {
       currentRun.push(day.dateStr);
+    } else if (protectedDates.has(day.dateStr)) {
+      continue;
     } else {
       if (currentRun.length > 0) {
         activeRuns.push(currentRun);
@@ -807,15 +931,18 @@ async function getStudentStreak10(student, dailySp) {
 
   let currentStreak = 0;
   if (days.length > 0) {
-    const lastDay = days[days.length - 1];
-    if (lastDay.success) {
-      const lastRun = activeRuns[activeRuns.length - 1] || [];
-      currentStreak = lastRun.length;
-    } else if (days.length > 1) {
-      const yesterday = days[days.length - 2];
-      if (yesterday.success) {
-        const lastRun = activeRuns.find(run => run.includes(yesterday.dateStr)) || [];
+    const nonProtectedDays = days.filter(d => !protectedDates.has(d.dateStr));
+    if (nonProtectedDays.length > 0) {
+      const lastDay = nonProtectedDays[nonProtectedDays.length - 1];
+      if (lastDay.success) {
+        const lastRun = activeRuns[activeRuns.length - 1] || [];
         currentStreak = lastRun.length;
+      } else if (nonProtectedDays.length > 1) {
+        const yesterday = nonProtectedDays[nonProtectedDays.length - 2];
+        if (yesterday.success) {
+          const lastRun = activeRuns.find(run => run.includes(yesterday.dateStr)) || [];
+          currentStreak = lastRun.length;
+        }
       }
     }
   }
@@ -895,9 +1022,14 @@ api.get('/streak-leaderboard/:studentId', async (req, res) => {
       if (s.alternateEmail) allEmails.push(s.alternateEmail.toLowerCase());
     }
 
-    const allTransactions = await SPTransaction.find({
-      email: { $in: allEmails }
-    }).sort({ dateTime: 1, createdAt: 1 }).lean();
+    const [allTransactions, allAttendance] = await Promise.all([
+      SPTransaction.find({
+        email: { $in: allEmails }
+      }).sort({ dateTime: 1, createdAt: 1 }).lean(),
+      AttendanceRecord.find({
+        email: { $in: allEmails }
+      }).sort({ sessionLabel: 1 }).lean()
+    ]);
 
     const txByEmail = {};
     for (const tx of allTransactions) {
@@ -907,6 +1039,17 @@ api.get('/streak-leaderboard/:studentId', async (req, res) => {
           txByEmail[emailKey] = [];
         }
         txByEmail[emailKey].push(tx);
+      }
+    }
+
+    const attendanceByEmail = {};
+    for (const att of allAttendance) {
+      if (att.email) {
+        const emailKey = att.email.toLowerCase();
+        if (!attendanceByEmail[emailKey]) {
+          attendanceByEmail[emailKey] = [];
+        }
+        attendanceByEmail[emailKey].push(att);
       }
     }
 
@@ -924,6 +1067,57 @@ api.get('/streak-leaderboard/:studentId', async (req, res) => {
         }
       }
       studentTx.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
+
+      const sAttendance = [];
+      for (const email of emails) {
+        if (attendanceByEmail[email]) {
+          sAttendance.push(...attendanceByEmail[email]);
+        }
+      }
+      sAttendance.sort((a, b) => {
+        if (a.sessionLabel < b.sessionLabel) return -1;
+        if (a.sessionLabel > b.sessionLabel) return 1;
+        return 0;
+      });
+
+      // Check if student has a broken streak and send alert
+      let attStreak = computeStreak(sAttendance, s.streakProtectedSessions || []);
+      if (!attStreak.isActive && attStreak.streakBrokenAt &&
+          s.lastNotifiedStreakBreak !== attStreak.streakBrokenAt &&
+          !(s.streakProtectedSessions || []).includes(attStreak.streakBrokenAt)) {
+
+        // Assertion: A qualified/attended session is never flagged for freeze use.
+        const lastSessionRec = sAttendance.find(a => a.sessionLabel === attStreak.streakBrokenAt);
+        if (lastSessionRec && lastSessionRec.qualified) {
+          throw new Error("Assertion failed: a qualified session is flagged for freeze use.");
+        }
+
+        if (s.streakFreezesAvailable > 0) {
+          await Student.updateOne(
+            { _id: s._id },
+            { $set: { lastNotifiedStreakBreak: attStreak.streakBrokenAt } }
+          );
+          s.lastNotifiedStreakBreak = attStreak.streakBrokenAt;
+          notify(s.email, 'streakReminders', {
+            title: 'Protect your streak!',
+            message: `You missed session ${attStreak.streakBrokenAt} — use a streak freeze to protect your streak?`,
+            sessionLabel: attStreak.streakBrokenAt
+          }).catch(() => {});
+        } else {
+          const breakClaimed = await Student.findOneAndUpdate(
+            { _id: s._id, lastNotifiedStreakBreak: { $ne: attStreak.streakBrokenAt } },
+            { $set: { lastNotifiedStreakBreak: attStreak.streakBrokenAt } },
+            { new: true }
+          );
+          if (breakClaimed) {
+            s.lastNotifiedStreakBreak = attStreak.streakBrokenAt;
+            notify(s.email, 'streakReminders', {
+              title: 'Streak broken',
+              message: `Your attendance streak ended after session ${attStreak.streakBrokenAt}. Time for a comeback!`
+            }).catch(() => {});
+          }
+        }
+      }
 
       const dailySp = {};
       for (const tx of studentTx) {
