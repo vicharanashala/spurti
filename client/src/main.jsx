@@ -514,6 +514,10 @@ function AdminView({ admin, auth, onBack }) {
   const [analytics, setAnalytics] = useState(null);
   const [stats, setStats] = useState(null);
   const [studentProfile, setStudentProfile] = useState(null);
+  const [adminNote, setAdminNote] = useState('');
+  const [adminNoteUpdatedAt, setAdminNoteUpdatedAt] = useState(null);
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteError, setNoteError] = useState('');
 
   const headers = adminHeaders(auth);
 
@@ -539,7 +543,11 @@ function AdminView({ admin, auth, onBack }) {
   };
   const loadStudent = async (id) => {
     const res = await fetch(`${API}/admin/student/${id}`, { headers });
-    setStudentProfile(await res.json());
+    const data = await res.json();
+    setStudentProfile(data);
+    setAdminNote(data.student?.adminNote || '');
+    setAdminNoteUpdatedAt(data.student?.adminNoteUpdatedAt || null);
+    setNoteError('');
   };
   const loadActive = async () => {
     const res = await fetch(`${API}/admin/active`, { headers });
@@ -548,6 +556,35 @@ function AdminView({ admin, auth, onBack }) {
   const loadAnalytics = async () => {
     const res = await fetch(`${API}/admin/analytics`, { headers });
     setAnalytics(await res.json());
+  };
+  const saveAdminNote = async (noteOverride) => {
+    if (!studentProfile) return;
+    setNoteSaving(true);
+    setNoteError('');
+    try {
+      const email = encodeURIComponent(studentProfile.student.email);
+      const res = await fetch(`${API}/admin/student/by-email/${email}/note`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: noteOverride !== undefined ? noteOverride : adminNote })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setAdminNote(data.adminNote ?? '');
+      // The endpoint returns the new timestamp; show it immediately so the
+      // admin sees their save was acknowledged even if the page is stale.
+      if (data.adminNoteUpdatedAt) setAdminNoteUpdatedAt(new Date(data.adminNoteUpdatedAt));
+    } catch (err) {
+      setNoteError(err.message);
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
+  const clearAdminNote = () => {
+    if (!window.confirm('Clear this admin note? This cannot be undone.')) return;
+    setAdminNote('');
+    saveAdminNote('');
   };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
@@ -593,7 +630,51 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
-      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
+      {studentProfile && (
+        <div className="overlay">
+          <section className="modal wide">
+            <div className="modal-head">
+              <h2>{studentProfile.student.name}</h2>
+              <button className="icon" onClick={() => setStudentProfile(null)}>x</button>
+            </div>
+            <div className="admin-note-wrap">
+              <div className="admin-note-head">
+                <span>Admin Notes</span>
+                <span className="muted">
+                  Last edited: {adminNoteUpdatedAt
+                    ? new Date(adminNoteUpdatedAt).toLocaleString()
+                    : 'Never edited'}
+                </span>
+              </div>
+              <textarea
+                className="admin-note-input"
+                value={adminNote}
+                onChange={e => setAdminNote(e.target.value)}
+                placeholder="Network issue reported, medical leave, reached out via email..."
+                rows={3}
+                maxLength={2000}
+              />
+              <div className="admin-note-meta">
+                <span className={adminNote.length > 1800 ? 'admin-note-counter danger' : 'admin-note-counter'}>
+                  {adminNote.length} / 2000
+                </span>
+                {adminNote && (
+                  <button className="secondary admin-note-clear" onClick={clearAdminNote} type="button">
+                    Clear note
+                  </button>
+                )}
+              </div>
+              <div className="admin-note-actions">
+                <button className="primary" onClick={saveAdminNote} disabled={noteSaving || adminNote.length > 2000}>
+                  {noteSaving ? 'Saving...' : 'Save note'}
+                </button>
+                {noteError && <span className="error">{noteError}</span>}
+              </div>
+            </div>
+            <SpBank transactions={studentProfile.transactions} />
+          </section>
+        </div>
+      )}
     </main>
   );
 }
