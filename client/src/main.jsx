@@ -339,7 +339,13 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
         <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
         <tbody>{rows.map(row => (
           <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
-            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
+            <td>
+              {row.rank}
+              {row.rankDelta > 0 && <span className="momentum up">▲ +{row.rankDelta}</span>}
+              {row.rankDelta < 0 && <span className="momentum down">▼ {row.rankDelta}</span>}
+              {(row.rankDelta === 0 || row.rankDelta === undefined) && <span className="momentum neutral">-</span>}
+            </td>
+            <td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
           </tr>
         ))}</tbody>
       </table>
@@ -357,7 +363,12 @@ function StudentPulse({ profile, badges, nextActions }) {
     <section className="pulse-grid">
       <div className="pulse-card progress-card">
         <span>Standing</span>
-        <strong>Rank {student.rank}</strong>
+        <strong>
+          Rank {student.rank}
+          {student.rankDelta > 0 && <span className="momentum up" style={{ fontSize: '0.9rem', verticalAlign: 'middle' }}>▲ +{student.rankDelta}</span>}
+          {student.rankDelta < 0 && <span className="momentum down" style={{ fontSize: '0.9rem', verticalAlign: 'middle' }}>▼ {student.rankDelta}</span>}
+          {(student.rankDelta === 0 || student.rankDelta === undefined) && <span className="momentum neutral" style={{ fontSize: '0.9rem', verticalAlign: 'middle' }}>-</span>}
+        </strong>
         <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP needed to enter Top 50.`}</p>
         <p>{cohort.pointsToNextRank === 0 ? 'You are leading your comparison group.' : `${cohort.pointsToNextRank} SP needed for next rank.`}</p>
       </div>

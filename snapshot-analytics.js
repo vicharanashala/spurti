@@ -43,11 +43,12 @@ async function main() {
 
   await mongoose.connect(MONGO_URI);
 
-  const [allStudents, sessions, recentTx, recentEvents] = await Promise.all([
+  const [allStudents, sessions, recentTx, recentEvents, lastSnapshot] = await Promise.all([
     Student.find({}).lean(),
     Session.find().sort({ endDateTime: 1 }).lean(),
     SPTransaction.find({ createdAt: { $gte: last30min } }).lean(),
     SessionEvent.find({ timestamp: { $gte: last30min } }).lean(),
+    AnalyticsSnapshot.findOne({}).sort({ timestamp: -1 }).lean(),
   ]);
 
   const active = allStudents.filter(s => s.status === 'active');
@@ -89,6 +90,49 @@ async function main() {
 
   const redZoneCount = active.filter(s => s.totalSp !== undefined && s.totalSp < 100).length;
 
+  // Compute rankings & deltas
+  const sortedActive = [...active].sort((a, b) => {
+    const spA = Number(a.totalSp) || 0;
+    const spB = Number(b.totalSp) || 0;
+    if (spB !== spA) return spB - spA;
+    return a.name.localeCompare(b.name);
+  });
+
+  const prevRankMap = {};
+  if (lastSnapshot && lastSnapshot.studentRanks) {
+    if (Array.isArray(lastSnapshot.studentRanks)) {
+      for (const r of lastSnapshot.studentRanks) {
+        if (r && r.email) {
+          prevRankMap[r.email.toLowerCase()] = r.rank;
+        }
+      }
+    } else if (lastSnapshot.studentRanks instanceof Map) {
+      for (const [email, r] of lastSnapshot.studentRanks.entries()) {
+        prevRankMap[email.toLowerCase()] = r;
+      }
+    } else {
+      for (const [email, r] of Object.entries(lastSnapshot.studentRanks)) {
+        prevRankMap[email.toLowerCase()] = r;
+      }
+    }
+  }
+
+  const studentRanks = [];
+  const studentDeltas = [];
+
+  sortedActive.forEach((s, index) => {
+    const emailKey = s.email.toLowerCase();
+    const currentRank = index + 1;
+    studentRanks.push({ email: emailKey, rank: currentRank });
+
+    let delta = 0;
+    const prevRank = prevRankMap[emailKey];
+    if (prevRank !== undefined && prevRank !== null) {
+      delta = prevRank - currentRank;
+    }
+    studentDeltas.push({ email: emailKey, delta });
+  });
+
   await AnalyticsSnapshot.create({
     timestamp: now,
     activeStudents: active.length,
@@ -110,6 +154,8 @@ async function main() {
     topGainersLast30min: topGainers,
     topLosersLast30min: topLosers,
     redZoneCount,
+    studentRanks,
+    studentDeltas,
     snapshotType: 'scheduled',
   });
 
