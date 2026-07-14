@@ -13,6 +13,11 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import Resource from './models/Resource.js';
+import ResourceLike from './models/ResourceLike.js';
+import ResourceBookmark from './models/ResourceBookmark.js';
+import ResourceDownload from './models/ResourceDownload.js';
+import ResourceReport from './models/ResourceReport.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -253,6 +258,30 @@ function adminGuard(req, res, next) {
   next();
 }
 
+async function authenticateStudent(req, res, next) {
+  try {
+    let email = await studentEmailFromRequest(req);
+    if (!email && ALLOW_STUDENT_SEARCH) {
+      email = normalizeEmail(req.headers['x-student-email']);
+    }
+    if (!email) {
+      return res.status(401).json({ error: 'Unauthorized. Please login.' });
+    }
+    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+    if (!student) {
+      return res.status(404).json({ error: 'Student not found.' });
+    }
+    if (student.status === 'excused') {
+      return res.status(403).json({ error: 'Student account is excused.' });
+    }
+    req.student = student;
+    next();
+  } catch (error) {
+    console.error('Student authentication error:', error);
+    res.status(500).json({ error: 'Internal server error during authentication.' });
+  }
+}
+
 api.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 api.get('/config', (_req, res) => res.json({
@@ -397,6 +426,323 @@ function registerSurveyRoutes(base, cfg) {
 }
 registerSurveyRoutes('/survey', SURVEY);
 registerSurveyRoutes('/poll2', POLL2);
+
+// --- Community Resource Hub APIs ---
+
+// 1. Get Resources List
+api.get('/resources', authenticateStudent, async (req, res) => {
+  try {
+    const { feed = 'latest', search, category, semester, fileType, subject } = req.query;
+    
+    let query = {};
+
+    if (category) query.category = category;
+    if (semester) query.semester = semester;
+    if (fileType) query.fileType = fileType;
+    if (subject) query.subject = { $regex: subject, $options: 'i' };
+
+    if (search && search.trim()) {
+      const cleanSearch = search.trim();
+      query.$or = [
+        { title: { $regex: cleanSearch, $options: 'i' } },
+        { description: { $regex: cleanSearch, $options: 'i' } },
+        { subject: { $regex: cleanSearch, $options: 'i' } },
+        { tags: { $regex: cleanSearch, $options: 'i' } },
+        { uploaderName: { $regex: cleanSearch, $options: 'i' } }
+      ];
+    }
+
+    let sort = { isPinned: -1, createdAt: -1 };
+
+    if (feed === 'trending') {
+      sort = { isPinned: -1, likesCount: -1, createdAt: -1 };
+    } else if (feed === 'downloads') {
+      sort = { isPinned: -1, downloadsCount: -1, createdAt: -1 };
+    } else if (feed === 'verified') {
+      query.isVerified = true;
+    } else if (feed === 'my_uploads') {
+      query.uploaderId = req.student._id;
+    } else if (feed === 'bookmarks') {
+      const bookmarks = await ResourceBookmark.find({ studentId: req.student._id }).lean();
+      const resourceIds = bookmarks.map(b => b.resourceId);
+      query._id = { $in: resourceIds };
+    }
+
+    const resources = await Resource.find(query).sort(sort).lean();
+
+    const resourceIds = resources.map(r => r._id);
+    const [userLikes, userBookmarks] = await Promise.all([
+      ResourceLike.find({ studentId: req.student._id, resourceId: { $in: resourceIds } }).lean(),
+      ResourceBookmark.find({ studentId: req.student._id, resourceId: { $in: resourceIds } }).lean()
+    ]);
+
+    const likedSet = new Set(userLikes.map(l => String(l.resourceId)));
+    const bookmarkedSet = new Set(userBookmarks.map(b => String(b.resourceId)));
+
+    const results = resources.map(r => ({
+      ...r,
+      likedByMe: likedSet.has(String(r._id)),
+      bookmarkedByMe: bookmarkedSet.has(String(r._id))
+    }));
+
+    res.json({ resources: results });
+  } catch (error) {
+    console.error('Failed to list resources:', error);
+    res.status(500).json({ error: 'Failed to fetch resources.' });
+  }
+});
+
+// 2. Upload Resource
+api.post('/resources', authenticateStudent, async (req, res) => {
+  try {
+    const { title, description, subject, category, fileType, url, semester, tags } = req.body || {};
+    
+    if (!title || !description || !subject || !category || !fileType || !url) {
+      return res.status(400).json({ error: 'Missing required resource fields.' });
+    }
+
+    const newResource = await Resource.create({
+      title,
+      description,
+      subject,
+      category,
+      fileType,
+      url,
+      semester: semester || '',
+      tags: tags || [],
+      uploaderId: req.student._id,
+      uploaderName: req.student.name,
+      uploaderEmail: req.student.email
+    });
+
+    res.json({ resource: newResource });
+  } catch (error) {
+    console.error('Upload resource error:', error);
+    res.status(500).json({ error: 'Failed to upload resource.' });
+  }
+});
+
+// 3. Edit Resource
+api.put('/resources/:id', authenticateStudent, async (req, res) => {
+  try {
+    const { title, description, subject, category, fileType, url, semester, tags } = req.body || {};
+    const resource = await Resource.findById(req.params.id);
+    
+    if (!resource) return res.status(404).json({ error: 'Resource not found.' });
+
+    const isOwner = String(resource.uploaderId) === String(req.student._id);
+    const adminCheck = isAdmin(req);
+    
+    if (!isOwner && !adminCheck) {
+      return res.status(403).json({ error: 'Unauthorized to edit this resource.' });
+    }
+
+    if (title) resource.title = title;
+    if (description) resource.description = description;
+    if (subject) resource.subject = subject;
+    if (category) resource.category = category;
+    if (fileType) resource.fileType = fileType;
+    if (url) resource.url = url;
+    if (semester !== undefined) resource.semester = semester;
+    if (tags) resource.tags = tags;
+
+    await resource.save();
+    res.json({ resource });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update resource.' });
+  }
+});
+
+// 4. Delete Resource
+api.delete('/resources/:id', authenticateStudent, async (req, res) => {
+  try {
+    const resource = await Resource.findById(req.params.id);
+    if (!resource) return res.status(404).json({ error: 'Resource not found.' });
+
+    const isOwner = String(resource.uploaderId) === String(req.student._id);
+    const adminCheck = isAdmin(req);
+
+    if (!isOwner && !adminCheck) {
+      return res.status(403).json({ error: 'Unauthorized to delete this resource.' });
+    }
+
+    await Promise.all([
+      Resource.deleteOne({ _id: req.params.id }),
+      ResourceLike.deleteMany({ resourceId: req.params.id }),
+      ResourceBookmark.deleteMany({ resourceId: req.params.id }),
+      ResourceDownload.deleteMany({ resourceId: req.params.id }),
+      ResourceReport.deleteMany({ resourceId: req.params.id })
+    ]);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete resource error:', error);
+    res.status(500).json({ error: 'Failed to delete resource.' });
+  }
+});
+
+// 5. Toggle Like
+api.post('/resources/:id/like', authenticateStudent, async (req, res) => {
+  try {
+    const resourceId = req.params.id;
+    const studentId = req.student._id;
+
+    const resource = await Resource.findById(resourceId);
+    if (!resource) return res.status(404).json({ error: 'Resource not found.' });
+
+    const existingLike = await ResourceLike.findOne({ resourceId, studentId });
+    if (existingLike) {
+      await ResourceLike.deleteOne({ _id: existingLike._id });
+      resource.likesCount = Math.max(0, resource.likesCount - 1);
+    } else {
+      await ResourceLike.create({ resourceId, studentId });
+      resource.likesCount += 1;
+    }
+
+    await resource.save();
+    res.json({ likesCount: resource.likesCount, likedByMe: !existingLike });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to toggle like.' });
+  }
+});
+
+// 6. Toggle Bookmark
+api.post('/resources/:id/bookmark', authenticateStudent, async (req, res) => {
+  try {
+    const resourceId = req.params.id;
+    const studentId = req.student._id;
+
+    const resource = await Resource.findById(resourceId);
+    if (!resource) return res.status(404).json({ error: 'Resource not found.' });
+
+    const existingBookmark = await ResourceBookmark.findOne({ resourceId, studentId });
+    if (existingBookmark) {
+      await ResourceBookmark.deleteOne({ _id: existingBookmark._id });
+      resource.bookmarksCount = Math.max(0, resource.bookmarksCount - 1);
+    } else {
+      await ResourceBookmark.create({ resourceId, studentId });
+      resource.bookmarksCount += 1;
+    }
+
+    await resource.save();
+    res.json({ bookmarksCount: resource.bookmarksCount, bookmarkedByMe: !existingBookmark });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to toggle bookmark.' });
+  }
+});
+
+// 7. Track Download
+api.post('/resources/:id/download', authenticateStudent, async (req, res) => {
+  try {
+    const resourceId = req.params.id;
+    const resource = await Resource.findById(resourceId);
+    if (!resource) return res.status(404).json({ error: 'Resource not found.' });
+
+    await ResourceDownload.create({ resourceId, studentId: req.student._id });
+    resource.downloadsCount += 1;
+    await resource.save();
+
+    res.json({ downloadsCount: resource.downloadsCount });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to track download.' });
+  }
+});
+
+// 8. File Report
+api.post('/resources/:id/report', authenticateStudent, async (req, res) => {
+  try {
+    const resourceId = req.params.id;
+    const { reason, details } = req.body || {};
+
+    if (!reason) return res.status(400).json({ error: 'Reason for report is required.' });
+
+    const resource = await Resource.findById(resourceId);
+    if (!resource) return res.status(404).json({ error: 'Resource not found.' });
+
+    const existingReport = await ResourceReport.findOne({ resourceId, studentId: req.student._id });
+    if (existingReport) {
+      return res.status(400).json({ error: 'You have already reported this resource.' });
+    }
+
+    await ResourceReport.create({
+      resourceId,
+      studentId: req.student._id,
+      reason,
+      details: details || ''
+    });
+
+    resource.reportsCount += 1;
+    await resource.save();
+
+    res.json({ success: true, reportsCount: resource.reportsCount });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to submit report.' });
+  }
+});
+
+// 9. Verify Resource (Admin only)
+api.post('/resources/:id/verify', adminGuard, async (req, res) => {
+  try {
+    const resource = await Resource.findById(req.params.id);
+    if (!resource) return res.status(404).json({ error: 'Resource not found.' });
+
+    resource.isVerified = !resource.isVerified;
+    await resource.save();
+
+    res.json({ isVerified: resource.isVerified });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to verify resource.' });
+  }
+});
+
+// 10. Highlight Resource (Admin only)
+api.post('/resources/:id/highlight', adminGuard, async (req, res) => {
+  try {
+    const resource = await Resource.findById(req.params.id);
+    if (!resource) return res.status(404).json({ error: 'Resource not found.' });
+
+    resource.isHighlighted = !resource.isHighlighted;
+    await resource.save();
+
+    res.json({ isHighlighted: resource.isHighlighted });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to highlight resource.' });
+  }
+});
+
+// 11. Pin Resource (Admin only)
+api.post('/resources/:id/pin', adminGuard, async (req, res) => {
+  try {
+    const resource = await Resource.findById(req.params.id);
+    if (!resource) return res.status(404).json({ error: 'Resource not found.' });
+
+    resource.isPinned = !resource.isPinned;
+    await resource.save();
+
+    res.json({ isPinned: resource.isPinned });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to pin resource.' });
+  }
+});
+
+// 12. Get Moderation/Reported Resources list (Admin only)
+api.get('/admin/resources/reports', adminGuard, async (req, res) => {
+  try {
+    const reportedResources = await Resource.find({ reportsCount: { $gt: 0 } }).sort({ reportsCount: -1 }).lean();
+    
+    const resourceIds = reportedResources.map(r => r._id);
+    const reports = await ResourceReport.find({ resourceId: { $in: resourceIds } }).lean();
+
+    const result = reportedResources.map(r => ({
+      ...r,
+      reports: reports.filter(rep => String(rep.resourceId) === String(r._id))
+    }));
+
+    res.json({ resources: result });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch reported resources.' });
+  }
+});
 
 api.get('/admin/stats', adminGuard, async (_req, res) => {
   const [yetToOnboard, excusedStudents, sessions, txns, activeStudents] = await Promise.all([
