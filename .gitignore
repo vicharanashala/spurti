@@ -14,6 +14,7 @@ yarn-error.log*
 # OS
 .DS_Store
 Thumbs.db
+# raw uploaded session data (not source)
 
 # Editors
 *.bak
@@ -53,3 +54,5 @@ sp-runs/
 # OS temp files
 tmp/
 temp/
+# student data — LOCAL ONLY, never commit (untracked 2026-07-14)
+data/
