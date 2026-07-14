@@ -8,6 +8,7 @@ const API = `${APP_BASE}/api`;
 function App() {
   const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('admin') === '1' ? 'admin-login' : 'landing');
   const [profile, setProfile] = useState(null);
+  const [learningMap, setLearningMap] = useState(null);
   const [excused, setExcused] = useState(null);
   const [admin, setAdmin] = useState(null);
   const [adminAuth, setAdminAuth] = useState(null);
@@ -46,6 +47,7 @@ function App() {
             const data = await meRes.json();
             if (data.authenticated && data.profile && active) {
               setProfile(data.profile);
+              setLearningMap(data.learningMap || null);
               setExcused(null);
               setView('student');
             } else if (data.authenticated && data.excused && active) {
@@ -69,7 +71,7 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} learningMap={learningMap} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -100,10 +102,16 @@ function App() {
     if (data?.excused) {
       setExcused(data);
       setProfile(null);
+      setLearningMap(null);
       setView('excused');
       return;
     }
-    setProfile(data);
+    // Search response can be the bare profile (data.profile) or the full
+    // payload from /api/confirm, which now includes `learningMap`. Detect both.
+    const profileObj = data?.profile || data;
+    const lm = data?.learningMap || null;
+    setProfile(profileObj);
+    setLearningMap(lm);
     setExcused(null);
     setView('student');
   }} />;
@@ -211,7 +219,7 @@ function SearchModal({ onClose, onStudent }) {
     const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
     const data = await res.json();
     if (data.excused) return onStudent(data);
-    if (data.exact) return onStudent(data.profile);
+    if (data.exact) return onStudent({ profile: data.profile, learningMap: data.learningMap });
     setMatches(data.matches || []);
     setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
   };
@@ -262,7 +270,7 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, learningMap, onBack }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -279,10 +287,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['map','Learning Map']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'map' && <LearningMapPanel learningMap={learningMap} student={student} />}
     </main>
   );
 }
@@ -430,6 +439,192 @@ function buildNextActions(profile) {
 
 function Tabs({ tab, setTab, tabs }) {
   return <nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>;
+}
+
+function LearningMapPanel({ learningMap, student }) {
+  const [selected, setSelected] = useState(null);
+
+  if (!learningMap) {
+    return (
+      <section className="panel learning-map-panel">
+        <h2>The Spurti Learning Map</h2>
+        <p className="muted">Your journey map is loading…</p>
+        <div className="learning-map-empty">
+          <span className="learning-map-empty-icon">🗺️</span>
+          <p>Once your SP transactions are in, your weekly progress will show here.</p>
+        </div>
+      </section>
+    );
+  }
+
+  const {
+    currentSp, peakSp, level, league, legendUnlocked,
+    weeks, current, next, completedCount, totalCount, weekCount, endDate
+  } = learningMap;
+  const focused = selected || current || weeks[0] || null;
+
+  return (
+    <section className="panel learning-map-panel">
+      <header className="learning-map-head">
+        <div>
+          <h2>The Spurti Learning Map</h2>
+          <p className="muted">
+            {weekCount} weeks of internship, one box per week — track SP earned and attendance each week.
+            {endDate ? ` Journey ends ${endDate}.` : ''}
+          </p>
+        </div>
+        <div className="learning-map-stats">
+          <span><strong>{currentSp}</strong> current SP</span>
+          <span><strong>{peakSp}</strong> peak SP</span>
+          <span>Level <strong>{level}</strong></span>
+          <span><strong>{league}</strong></span>
+          {legendUnlocked && <span className="legend-pill">👑 Legend Badge</span>}
+        </div>
+      </header>
+
+      <div className="learning-map-progress">
+        <div className="learning-map-progress-text">
+          {current ? (
+            <span>You are in <strong>{current.label}</strong> ({current.subLabel})</span>
+          ) : completedCount >= totalCount ? (
+            <span>All <strong>{totalCount}</strong> weeks completed — internship journey finished.</span>
+          ) : (
+            <span>Internship hasn't started yet.</span>
+          )}
+          <span>{completedCount}/{totalCount} weeks done · {Math.round((completedCount / totalCount) * 100)}%</span>
+        </div>
+        <div className="learning-map-progress-bar">
+          <div className="learning-map-progress-fill" style={{ width: `${Math.round((completedCount / totalCount) * 100)}%` }} />
+        </div>
+        <div className="learning-map-progress-foot">
+          {next ? (
+            <span>Next: <strong>{next.label}</strong> opens {next.subLabel.split(' – ')[0]}</span>
+          ) : current ? (
+            <span>This is the final week — finish strong.</span>
+          ) : (
+            <span>Journey complete.</span>
+          )}
+        </div>
+      </div>
+
+      <div className="learning-map-grid">
+        {weeks.map(t => {
+          const isCurrent = t.status === 'current';
+          const isCompleted = t.status === 'completed';
+          return (
+            <button
+              key={t.weekNumber}
+              type="button"
+              className={`territory ${t.status}`}
+              style={{ '--territory-color': t.color || '#888' }}
+              onClick={() => setSelected(t)}
+            >
+              <div className="territory-icon">{isCompleted ? '✅' : isCurrent ? '📍' : (t.icon || `W${t.weekNumber}`)}</div>
+              <div className="territory-info">
+                <div className="territory-name">{t.label}</div>
+                <div className="territory-sub">
+                  {isCurrent ? <span className="current-pill">Current</span> : isCompleted ? <span className="completed-pill">Completed</span> : <span className="locked-pill">Locked</span>}
+                  <span>{t.subLabel}</span>
+                </div>
+                <div className="territory-sp">
+                  {t.spEarned} SP earned{t.attendanceTotal ? ` · ${t.attendanceQualified}/${t.attendanceTotal} qualified` : ''}
+                </div>
+              </div>
+              {isCurrent && <span className="territory-marker" aria-hidden>You</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {focused && (
+        <div className="learning-map-detail">
+          <div className="learning-map-detail-head">
+            <h3><span aria-hidden>{focused.icon || '📅'}</span> {focused.label} · {focused.subLabel}</h3>
+            {selected && (
+              <button type="button" className="week-clear-btn" onClick={() => setSelected(null)}>
+                ← Back to current week
+              </button>
+            )}
+          </div>
+          {focused.lore && <p className="territory-lore">{focused.lore}</p>}
+
+          <div className="week-summary">
+            <span><strong>{focused.spEarned}</strong> SP earned</span>
+            <span><strong>{focused.attendanceQualified}/{focused.attendanceTotal}</strong> sessions qualified</span>
+            <span><strong>{focused.doneCount}</strong> done</span>
+            <span><strong>{focused.todoCount}</strong> to do</span>
+            <span><strong>{focused.missedCount}</strong> missed</span>
+          </div>
+
+          {(!focused.sessions || focused.sessions.length === 0) ? (
+            <p className="muted week-empty">No sessions are scheduled for this week.</p>
+          ) : (
+            <div className="week-buckets">
+              {(() => {
+                // Flatten per-session tasks into three buckets with session
+                // context preserved on each task. Each row shows which
+                // session the task belongs to.
+                const done = [];
+                const todo = [];
+                const missed = [];
+                for (const s of focused.sessions) {
+                  for (const t of (s.tasks || [])) {
+                    const row = { ...t, sessionLabel: s.label, sessionDate: s.date, sessionType: s.type };
+                    if (t.status === 'done') done.push(row);
+                    else if (t.status === 'todo') todo.push(row);
+                    else if (t.status === 'missed') missed.push(row);
+                  }
+                }
+                const renderList = (rows, kind) => {
+                  if (rows.length === 0) return <p className="muted week-bucket-empty">Nothing here.</p>;
+                  return (
+                    <ul className="week-task-list">
+                      {rows.map((t, i) => (
+                        <li key={`${t.sessionLabel}-${kind}-${i}`} className={`week-task ${t.status}`}>
+                          <span className="week-task-icon" aria-hidden>
+                            {t.status === 'done' ? '✅' : t.status === 'todo' ? '📋' : '⚠️'}
+                          </span>
+                          <div className="week-task-body">
+                            <div className="week-task-text">{t.text}</div>
+                            <div className="week-task-meta">
+                              <span className="week-task-session">{t.sessionLabel}</span>
+                              {t.detail && <span className="week-task-detail"> · {t.detail}</span>}
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  );
+                };
+                return (
+                  <>
+                    <section className="week-bucket done">
+                      <h4>✅ Done <span className="muted">({done.length})</span></h4>
+                      {renderList(done, 'done')}
+                    </section>
+                    <section className="week-bucket todo">
+                      <h4>📋 To do <span className="muted">({todo.length})</span></h4>
+                      {renderList(todo, 'todo')}
+                    </section>
+                    {focused.status === 'completed' && (
+                      <section className="week-bucket missed">
+                        <h4>⚠️ Missed <span className="muted">({missed.length})</span></h4>
+                        {renderList(missed, 'missed')}
+                      </section>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+
+      <p className="learning-map-foot muted">
+        {completedCount} of {totalCount} weeks completed · {legendUnlocked ? 'Legend Badge unlocked.' : `${Math.max(0, 1500 - currentSp)} SP to Legend.`}
+      </p>
+    </section>
+  );
 }
 
 function SpBank({ transactions }) {
