@@ -24,7 +24,15 @@ const studentSchema = new mongoose.Schema({
   // Second perception pop-up ("poll2") — same mechanism as surveyCompleted, but an
   // independent flag so it never disturbs the first survey's completion state.
   poll2Completed: { type: Boolean, default: false, index: true },
-  poll2CompletedAt: { type: Date, default: null }
+  poll2CompletedAt: { type: Date, default: null },
+  // Weekly Goal Planner & Reflections (Self-Regulated Learning support)
+  weeklyGoals: [{
+    weekLabel: { type: String, required: true }, // Format: YYYY-WXX
+    targetLeague: { type: String, default: '' },
+    focusArea: { type: String, enum: ['attendance', 'polls', 'both', 'none'], default: 'both' },
+    reflection: { type: String, trim: true, default: '' },
+    createdAt: { type: Date, default: Date.now }
+  }]
 }, { timestamps: true });
 
 studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });
