@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import BackToTop from './components/BackToTop';
+import SpProgressBar from './components/SpProgressBar';
+import ShareCard from './components/ShareCard';
+import SettingsModal from './components/SettingsModal';
+import DarkModeToggle from './components/DarkModeToggle';
+import GroupLeaderboard from './components/GroupLeaderboard';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -15,6 +21,12 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const saved = localStorage.getItem('theme');
+    const theme = saved || (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', theme);
+  }, []);
+
+  useEffect(() => {
     if (!profile?.student) return;
     const send = () => fetch(`${API}/ping`, {
       method: 'POST',
@@ -25,7 +37,7 @@ function App() {
         page: 'record',
         recordViewed: profile.student.email
       })
-    }).catch(() => {});
+    }).catch(() => { });
     send();
     const id = setInterval(send, 30000);
     return () => clearInterval(id);
@@ -67,9 +79,16 @@ function App() {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
   }
   if (view === 'student' && profile) {
+    const handleUpdateStudent = (updatedStudent) => {
+      setProfile(prev => ({ ...prev, student: updatedStudent }));
+    };
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView
+          profile={profile}
+          onBack={config.allowStudentSearch ? () => setView('landing') : null}
+          onUpdateStudent={handleUpdateStudent}
+        />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -84,29 +103,45 @@ function App() {
           completedKey="poll2Completed"
           onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll2Completed: true } }))}
         />
+        <BackToTop />
       </>
     );
   }
   if (view === 'excused' && excused) {
-    return <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />;
+    return (
+      <>
+        <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <BackToTop />
+      </>
+    );
   }
   if (view === 'admin-login') {
     return <AdminLogin onAdmin={(data, auth) => { setAdmin(data); setAdminAuth(auth); setView('admin'); }} onBack={() => setView('landing')} />;
   }
   if (view === 'admin' && admin && adminAuth) {
-    return <AdminView admin={admin} auth={adminAuth} onBack={() => setView('landing')} />;
+    return (
+      <>
+        <AdminView admin={admin} auth={adminAuth} onBack={() => setView('landing')} />
+        <BackToTop />
+      </>
+    );
   }
-  return <Landing config={config} onStudent={(data) => {
-    if (data?.excused) {
-      setExcused(data);
-      setProfile(null);
-      setView('excused');
-      return;
-    }
-    setProfile(data);
-    setExcused(null);
-    setView('student');
-  }} />;
+  return (
+    <>
+      <Landing config={config} onStudent={(data) => {
+        if (data?.excused) {
+          setExcused(data);
+          setProfile(null);
+          setView('excused');
+          return;
+        }
+        setProfile(data);
+        setExcused(null);
+        setView('student');
+      }} />
+      <BackToTop />
+    </>
+  );
 }
 
 function Landing({ config, onStudent }) {
@@ -114,6 +149,9 @@ function Landing({ config, onStudent }) {
 
   return (
     <main className="page">
+      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 0' }}>
+        <DarkModeToggle />
+      </div>
       <section className="hero">
         <div className="hero-copy">
           <p className="eyebrow">Spurti Motivation Engine</p>
@@ -262,8 +300,11 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onBack, onUpdateStudent }) {
   const [tab, setTab] = useState('bank');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shareCardOpen, setShareCardOpen] = useState(false);
+
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
@@ -275,14 +316,42 @@ function StudentView({ profile, onBack }) {
           <p className="eyebrow">Student Spurti Bank</p>
           <h1>{student.name}</h1>
         </div>
-        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
+        <div className="header-actions">
+          <button className="icon" onClick={() => setSettingsOpen(true)} title="Settings" aria-label="Settings">⚙️</button>
+          <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
+        </div>
       </header>
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <SpProgressBar totalSp={student.totalSp} internshipStartDate={student.internshipStartDate} />
+      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} onShare={() => setShareCardOpen(true)} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank', 'SP Bank'], ['polls', 'Polls'], ['leaderboard', 'Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
-      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'leaderboard' && (
+        <LeaderboardTabs
+          overall={profile.leaderboard}
+          group={profile.groupLeaderboard}
+          groupLabel={student.leaderboardGroupLabel}
+          student={student}
+          onShareRank={() => setShareCardOpen(true)}
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsModal
+          student={student}
+          onUpdateStudent={onUpdateStudent}
+          API={API}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+      {shareCardOpen && (
+        <ShareCard
+          student={student}
+          badges={badges}
+          onClose={() => setShareCardOpen(false)}
+        />
+      )}
     </main>
   );
 }
@@ -321,9 +390,8 @@ function LevelStatus({ student }) {
   );
 }
 
-function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
+function LeaderboardTabs({ overall = [], group = [], groupLabel, student, onShareRank }) {
   const [type, setType] = useState('overall');
-  const rows = type === 'overall' ? overall : group;
   return (
     <section className="panel">
       <div className="panel-head">
@@ -333,21 +401,42 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
           <option value="my_onboarding_group">My Onboarding Group</option>
         </select>
       </div>
-      {type === 'my_onboarding_group' && groupLabel &&
-        <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
-      <table className="table">
-        <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
-        <tbody>{rows.map(row => (
-          <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
-            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
-          </tr>
-        ))}</tbody>
-      </table>
+
+      {type === 'overall' && (
+        <>
+          <table className="table">
+            <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
+            <tbody>{overall.map(row => (
+              <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
+                <td>{row.rank}</td>
+                <td>
+                  {row.name}
+                  {row.isCurrentStudent && student?.shareEnabled !== false && onShareRank && (
+                    <button className="inline-share-btn" onClick={onShareRank} title="Share My Rank">
+                      📢 Share Rank
+                    </button>
+                  )}
+                </td>
+                <td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </>
+      )}
+
+      {type === 'my_onboarding_group' && (
+        <GroupLeaderboard
+          group={group}
+          groupLabel={groupLabel}
+          student={student}
+          onShareRank={onShareRank}
+        />
+      )}
     </section>
   );
 }
 
-function StudentPulse({ profile, badges, nextActions }) {
+function StudentPulse({ profile, badges, nextActions, onShare }) {
   const { student, cohort, attendance, polls, transactions } = profile;
   const qualified = attendance.filter(a => a.qualified).length;
   const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
@@ -360,6 +449,11 @@ function StudentPulse({ profile, badges, nextActions }) {
         <strong>Rank {student.rank}</strong>
         <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP needed to enter Top 50.`}</p>
         <p>{cohort.pointsToNextRank === 0 ? 'You are leading your comparison group.' : `${cohort.pointsToNextRank} SP needed for next rank.`}</p>
+        {student.shareEnabled !== false && onShare && (
+          <button className="primary share-trigger-btn" onClick={onShare} style={{ width: '100%' }}>
+            📢 Share Achievements
+          </button>
+        )}
       </div>
       <div className="pulse-card">
         <span>Cohort comparison</span>
@@ -524,7 +618,7 @@ function AdminView({ admin, auth, onBack }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: auth.email, name: auth.email, page })
-    }).catch(() => {});
+    }).catch(() => { });
     doPing('admin-analytics');
     const id = setInterval(() => doPing('admin-live'), 30000);
     return () => clearInterval(id);
@@ -571,9 +665,12 @@ function AdminView({ admin, auth, onBack }) {
       <header className="topbar">
         <button className="secondary" onClick={onBack}>Back</button>
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
-        <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
+        <div className="header-actions">
+          <DarkModeToggle />
+          <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
+        </div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard', 'Leaderboard'], ['attendance', 'Attendance'], ['live', 'Live'], ['analytics', 'Analytics'], ['students', 'Students']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -766,7 +863,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
       {loading ? <p>Loading...</p> : list.length === 0 ? <p className="empty">No students in this category.</p> : (
         <table className="table">
           <thead><tr><th>Name</th><th>Email</th><th>SP</th><th>Start Date</th></tr></thead>
-          <tbody>{list.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{cursor:'pointer'}}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
+          <tbody>{list.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{ cursor: 'pointer' }}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
         </table>
       )}
     </section>
@@ -845,6 +942,5 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
     </div>
   );
 }
-
 
 createRoot(document.getElementById('root')).render(<App />);
