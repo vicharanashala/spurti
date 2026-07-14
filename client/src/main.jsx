@@ -5,6 +5,13 @@ import './styles.css';
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
 
+function getWeekLabel(date = new Date()) {
+  const d = new Date(date);
+  const first = new Date(d.getFullYear(), 0, 1);
+  const week = Math.ceil((((d - first) / 86400000) + d.getDay() + 1) / 7);
+  return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
 function App() {
   const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('admin') === '1' ? 'admin-login' : 'landing');
   const [profile, setProfile] = useState(null);
@@ -69,7 +76,7 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} onUpdate={setProfile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -262,7 +269,171 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function WeeklyGoalPlanner({ profile, onUpdate }) {
+  const { student } = profile;
+  const currentWeek = useMemo(() => getWeekLabel(), []);
+  const currentGoal = useMemo(() => student.weeklyGoals?.find(g => g.weekLabel === currentWeek), [student.weeklyGoals, currentWeek]);
+
+  const [isEditing, setIsEditing] = useState(!currentGoal);
+  const [targetLeague, setTargetLeague] = useState('Gold III');
+  const [focusArea, setFocusArea] = useState('both');
+  const [reflection, setReflection] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (currentGoal) {
+      setTargetLeague(currentGoal.targetLeague || 'Gold III');
+      setFocusArea(currentGoal.focusArea || 'both');
+      setReflection(currentGoal.reflection || '');
+      setIsEditing(false);
+    } else {
+      setIsEditing(true);
+    }
+  }, [currentGoal]);
+
+  const progress = useMemo(() => {
+    const weekTransactions = profile.transactions.filter(t => getWeekLabel(new Date(t.dateTime)) === currentWeek);
+    const attendanceTxns = weekTransactions.filter(t => t.category === 'attendance');
+    const qualifiedAttendance = attendanceTxns.filter(t => t.appliedDelta > 0).length;
+    
+    const pollTxns = weekTransactions.filter(t => t.category === 'poll');
+    const qualifiedPolls = pollTxns.filter(t => t.appliedDelta > 0).length;
+
+    return {
+      attendance: { done: qualifiedAttendance, total: attendanceTxns.length },
+      polls: { done: qualifiedPolls, total: pollTxns.length }
+    };
+  }, [profile.transactions, currentWeek]);
+
+  const saveGoal = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError('');
+    try {
+      const res = await fetch(`${API}/goals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetLeague, focusArea, reflection })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save goal');
+      onUpdate(data.profile);
+      setIsEditing(false);
+    } catch (err) {
+      setError(err?.message || 'Error saving goal.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const leagues = ['Bronze III', 'Bronze II', 'Bronze I', 'Silver III', 'Silver II', 'Silver I', 'Gold III', 'Gold II', 'Gold I', 'Platinum III', 'Platinum II', 'Platinum I', 'Diamond III', 'Diamond II', 'Diamond I', 'Legend'];
+
+  const getFocusAreaLabel = (key) => {
+    if (key === 'both') return 'Attendance & Polls';
+    if (key === 'attendance') return 'Attendance only';
+    if (key === 'polls') return 'Polls only';
+    return 'None';
+  };
+
+  return (
+    <section className="weekly-goal-card panel">
+      <div className="goal-card-header">
+        <div>
+          <span className="eyebrow">Self-Regulation Planner</span>
+          <h2>🎯 My Weekly Goal</h2>
+        </div>
+        <span className="week-tag">Week: {currentWeek}</span>
+      </div>
+
+      {isEditing ? (
+        <form onSubmit={saveGoal} className="goal-form">
+          <p className="muted" style={{margin: '0 0 16px', fontSize: '14px'}}>Set your learning targets and strategy to build consistent study habits this week.</p>
+          <div className="goal-form-row">
+            <div className="form-field">
+              <label>Target Trophy League</label>
+              <select value={targetLeague} onChange={e => setTargetLeague(e.target.value)}>
+                {leagues.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </div>
+            <div className="form-field">
+              <label>Focus Area</label>
+              <select value={focusArea} onChange={e => setFocusArea(e.target.value)}>
+                <option value="both">Attendance & Polls</option>
+                <option value="attendance">Attendance Only</option>
+                <option value="polls">Polls Only</option>
+                <option value="none">No Specific Focus</option>
+              </select>
+            </div>
+          </div>
+          <div className="form-field">
+            <label>Reflection Prompt: What is your strategy to stay consistent this week?</label>
+            <textarea 
+              value={reflection} 
+              onChange={e => setReflection(e.target.value)} 
+              placeholder="e.g. I will join by 09:00 IST to ensure my attendance is fully captured."
+              rows={2}
+            />
+          </div>
+          <div className="goal-actions">
+            {currentGoal && <button type="button" className="secondary" onClick={() => setIsEditing(false)}>Cancel</button>}
+            <button type="submit" className="primary" disabled={submitting}>
+              {submitting ? 'Saving...' : 'Commit to Goal'}
+            </button>
+          </div>
+          {error && <p className="error" style={{marginTop: '12px'}}>{error}</p>}
+        </form>
+      ) : (
+        <div className="goal-details">
+          <div className="goal-details-header">
+            <div>
+              <h3>Target League: <span className="highlight-text">{currentGoal.targetLeague}</span></h3>
+              <p className="focus-desc">Focus commitment: <strong>{getFocusAreaLabel(currentGoal.focusArea)}</strong></p>
+            </div>
+            <button className="secondary" onClick={() => setIsEditing(true)}>Edit Goal</button>
+          </div>
+          {currentGoal.reflection && (
+            <blockquote className="reflection-quote">
+              <strong>My Strategy:</strong> "{currentGoal.reflection}"
+            </blockquote>
+          )}
+          <div className="weekly-tracker-section">
+            <h4>Commitment Progress</h4>
+            <div className="tracker-bars">
+              {(currentGoal.focusArea === 'both' || currentGoal.focusArea === 'attendance') && (
+                <div className="tracker-bar-item">
+                  <div className="bar-labels">
+                    <span>Attendance Qualified</span>
+                    <b>{progress.attendance.done} / {progress.attendance.total} sessions</b>
+                  </div>
+                  <div className="bar-track">
+                    <div className="bar-fill" style={{ width: `${progress.attendance.total ? (progress.attendance.done / progress.attendance.total) * 100 : 0}%` }} />
+                  </div>
+                </div>
+              )}
+              {(currentGoal.focusArea === 'both' || currentGoal.focusArea === 'polls') && (
+                <div className="tracker-bar-item">
+                  <div className="bar-labels">
+                    <span>Polls Attempted</span>
+                    <b>{progress.polls.done} / {progress.polls.total} sessions</b>
+                  </div>
+                  <div className="bar-track">
+                    <div className="bar-fill" style={{ width: `${progress.polls.total ? (progress.polls.done / progress.polls.total) * 100 : 0}%` }} />
+                  </div>
+                </div>
+              )}
+            </div>
+            {progress.attendance.total === 0 && progress.polls.total === 0 && (
+              <p className="muted" style={{fontSize: '13px', marginTop: '8px'}}>No session transactions logged this week. Your progress will update automatically.</p>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StudentView({ profile, onUpdate, onBack }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -275,9 +446,10 @@ function StudentView({ profile, onBack }) {
           <p className="eyebrow">Student Spurti Bank</p>
           <h1>{student.name}</h1>
         </div>
-        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
+        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong>...</div>
       </header>
       <LevelStatus student={student} />
+      <WeeklyGoalPlanner profile={profile} onUpdate={onUpdate} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}

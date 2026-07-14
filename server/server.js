@@ -143,6 +143,13 @@ async function getSamagamaUser(chatengineToken) {
   }
 }
 
+function getWeekLabel(date = new Date()) {
+  const d = new Date(date);
+  const first = new Date(d.getFullYear(), 0, 1);
+  const week = Math.ceil((((d - first) / 86400000) + first.getDay() + 1) / 7);
+  return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
 async function studentEmailFromRequest(req) {
   const cookies = parseCookies(req.headers.cookie || '');
   const data = await getSamagamaUser(cookies.chatengine_token);
@@ -225,7 +232,8 @@ async function studentPayload(student) {
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      poll2Completed: Boolean(student.poll2Completed),
+      weeklyGoals: student.weeklyGoals || []
     },
     transactions,
     polls,
@@ -268,6 +276,47 @@ api.get('/me', async (req, res) => {
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
   res.json({ authenticated: true, profile: await studentPayload(student) });
+});
+
+api.post('/goals', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (student.status === 'excused') return res.status(403).json({ error: 'Account is excused' });
+
+  const { targetLeague, focusArea, reflection } = req.body || {};
+  if (!targetLeague || !focusArea) {
+    return res.status(400).json({ error: 'targetLeague and focusArea are required' });
+  }
+  const validFocusAreas = ['attendance', 'polls', 'both', 'none'];
+  if (!validFocusAreas.includes(focusArea)) {
+    return res.status(400).json({ error: 'Invalid focusArea value' });
+  }
+
+  const weekLabel = getWeekLabel();
+  const existingGoalIdx = student.weeklyGoals.findIndex(g => g.weekLabel === weekLabel);
+
+  const goalData = {
+    weekLabel,
+    targetLeague,
+    focusArea,
+    reflection: String(reflection || '').trim()
+  };
+
+  if (existingGoalIdx >= 0) {
+    student.weeklyGoals[existingGoalIdx] = {
+      ...student.weeklyGoals[existingGoalIdx].toObject(),
+      ...goalData,
+      createdAt: new Date()
+    };
+  } else {
+    student.weeklyGoals.push(goalData);
+  }
+
+  await student.save();
+  res.json({ success: true, profile: await studentPayload(student) });
 });
 
 api.get('/search', async (req, res) => {
