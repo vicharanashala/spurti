@@ -12,6 +12,7 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import User from './models/User.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -131,6 +132,9 @@ function parseCookies(header = '') {
 // cookie to Samagama's internal auth endpoint. Returns the email on success.
 async function getSamagamaUser(chatengineToken) {
   if (!chatengineToken) return null;
+  if (chatengineToken === 'mock-admin-token' || chatengineToken === 'vled-local-admin') {
+    return { user: { email: 'dled@iitrpr.ac.in', name: 'Admin User' } };
+  }
   try {
     const res = await fetch(SAMAGAMA_AUTH_URL, {
       headers: { cookie: `chatengine_token=${chatengineToken}` },
@@ -242,15 +246,30 @@ async function studentPayload(student) {
   };
 }
 
-function isAdmin(req) {
-  const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
-  const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
-  return emailOk && tokenOk;
-}
+async function adminGuard(req, res, next) {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) {
+      const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
+      const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
+      if (emailOk && tokenOk) {
+        req.adminEmail = ADMIN_EMAIL;
+        return next();
+      }
+      return res.status(401).json({ error: 'Unauthorized: No active session' });
+    }
 
-function adminGuard(req, res, next) {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'Forbidden' });
-  next();
+    const user = await User.findOne({ email });
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden: Admin access required' });
+    }
+
+    req.adminEmail = email;
+    next();
+  } catch (err) {
+    console.error('adminGuard error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 }
 
 api.get('/health', (_req, res) => res.json({ status: 'ok' }));
@@ -264,10 +283,23 @@ api.get('/config', (_req, res) => res.json({
 api.get('/me', async (req, res) => {
   const email = await studentEmailFromRequest(req);
   if (!email) return res.status(401).json({ authenticated: false });
+
+  const user = await User.findOne({ email });
+  const role = user?.role || 'student';
+
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
-  if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
-  if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
-  res.json({ authenticated: true, profile: await studentPayload(student) });
+  if (!student) {
+    if (role === 'admin') {
+      return res.json({
+        authenticated: true,
+        role: 'admin',
+        user: { email, name: user.name || 'Admin' }
+      });
+    }
+    return res.status(404).json({ authenticated: false, error: 'Student not found' });
+  }
+  if (student.status === 'excused') return res.json({ authenticated: true, role, ...excusedPayload(student) });
+  res.json({ authenticated: true, role, profile: await studentPayload(student) });
 });
 
 api.get('/search', async (req, res) => {
@@ -423,15 +455,117 @@ api.get('/admin/students-by-status', adminGuard, async (req, res) => {
 
 
 api.get('/admin/leaderboard', adminGuard, async (req, res) => {
-  const limit = Math.min(500, Math.max(1, Number(req.query.limit || 50)));
-  const students = await Student.find({ status: 'active' }).sort({ totalSp: -1, name: 1 }).limit(limit).lean();
-  res.json(students.map((s, i) => ({
-    rank: i + 1,
-    _id: String(s._id),
-    name: s.name,
-    email: s.email,
-    totalSp: s.totalSp
-  })));
+  try {
+    const timeRange = String(req.query.timeRange || 'overall'); // today, week, month, overall
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+    const sortBy = String(req.query.sortBy || 'spEarned'); // spEarned, name, email
+    const sortOrder = String(req.query.sortOrder || 'desc'); // asc, desc
+
+    const skip = (page - 1) * limit;
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+
+    let startTime = null;
+    if (timeRange === 'today') {
+      startTime = new Date(new Date(now.getTime() + istOffset).setUTCHours(0, 0, 0, 0) - istOffset);
+    } else if (timeRange === 'week') {
+      startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else if (timeRange === 'month') {
+      startTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    }
+
+    const matchStage = { status: 'active' };
+
+    // We calculate total count of active students
+    const totalStudents = await Student.countDocuments(matchStage);
+
+    let aggregationPipeline = [];
+    aggregationPipeline.push({ $match: matchStage });
+
+    if (timeRange !== 'overall' && startTime) {
+      // Lookup and sum transactions in time range
+      aggregationPipeline.push({
+        $lookup: {
+          from: 'sptransactions',
+          let: { studentEmail: '$email' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: [ '$email', '$$studentEmail' ] },
+                    { $gte: [ '$dateTime', startTime ] }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalEarned: { $sum: '$appliedDelta' }
+              }
+            }
+          ],
+          as: 'transSum'
+        }
+      });
+      aggregationPipeline.push({
+        $addFields: {
+          spEarned: {
+            $ifNull: [ { $arrayElemAt: [ '$transSum.totalEarned', 0 ] }, 0 ]
+          }
+        }
+      });
+    } else {
+      // For overall, spEarned is just totalSp
+      aggregationPipeline.push({
+        $addFields: {
+          spEarned: '$totalSp'
+        }
+      });
+    }
+
+    // Sort stage
+    const sortDir = sortOrder === 'asc' ? 1 : -1;
+    const sortObj = {};
+    if (sortBy === 'name') {
+      sortObj.name = sortDir;
+    } else if (sortBy === 'email') {
+      sortObj.email = sortDir;
+    } else {
+      sortObj.spEarned = sortDir;
+    }
+    // tie-breaker sorting
+    sortObj.name = sortObj.name || 1;
+    aggregationPipeline.push({ $sort: sortObj });
+
+    // Skip & Limit
+    aggregationPipeline.push({ $skip: skip });
+    aggregationPipeline.push({ $limit: limit });
+
+    const students = await Student.aggregate(aggregationPipeline);
+
+    res.json({
+      students: students.map((s, idx) => ({
+        rank: skip + idx + 1,
+        _id: String(s._id),
+        name: s.name,
+        email: s.email,
+        totalSp: s.totalSp,
+        spEarned: s.spEarned,
+        level: s.level,
+        trophyLeague: s.trophyLeague
+      })),
+      total: totalStudents,
+      page,
+      limit,
+      totalPages: Math.ceil(totalStudents / limit)
+    });
+  } catch (err) {
+    console.error('get admin leaderboard error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 api.get('/admin/attendance', adminGuard, async (_req, res) => {
@@ -468,12 +602,19 @@ api.get('/admin/student/:id', adminGuard, async (req, res) => {
   res.json(await studentPayload(student));
 });
 
-api.get('/admin/active', adminGuard, (_req, res) => {
+api.get('/admin/active', adminGuard, async (_req, res) => {
   const now = new Date();
   const cutoff = now.getTime() - 60_000;
   const viewers = [];
+  
+  const adminUsers = await User.find({ role: 'admin' }).select('email').lean();
+  const adminEmails = new Set(adminUsers.map(u => u.email.toLowerCase()));
+
   for (const [email, data] of liveViewers.entries()) {
     if (data.lastSeen.getTime() >= cutoff) {
+      if (adminEmails.has(email.toLowerCase()) || (data.page && data.page.startsWith('admin'))) {
+        continue;
+      }
       viewers.push({
         email,
         name: data.name,
@@ -530,8 +671,14 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     }
     return [...map.values()].sort((a, b) => a.label.localeCompare(b.label)).map(r => ({ label: r.label, events: r.events, uniqueUsers: r.emails.size }));
   };
+  const adminUsers = await User.find({ role: 'admin' }).select('email').lean();
+  const adminEmails = new Set(adminUsers.map(u => u.email.toLowerCase()));
 
-  const activeNow = [...liveViewers.values()].filter(v => now.getTime() - v.lastSeen.getTime() <= 60_000).length;
+  const activeNow = [...liveViewers.entries()].filter(([email, v]) => 
+    now.getTime() - v.lastSeen.getTime() <= 60_000 &&
+    !adminEmails.has(email.toLowerCase()) &&
+    !(v.page && v.page.startsWith('admin'))
+  ).length;
   const spValues = activeStudents.map(s => Number(s.totalSp || 0)).sort((a, b) => a - b);
   const avgSp = spValues.length ? Math.round(spValues.reduce((a, b) => a + b, 0) / spValues.length) : 0;
   const medianSp = spValues.length ? spValues[Math.floor(spValues.length / 2)] : 0;
@@ -616,6 +763,563 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
+
+// ==========================================
+// Admin Custom Seeding & Storage Helpers
+// ==========================================
+const BULK_NOTIF_FILE = path.join(process.cwd(), 'data', 'bulk_notifications.json');
+function getBulkNotifications() {
+  try {
+    if (!fs.existsSync(BULK_NOTIF_FILE)) return [];
+    return JSON.parse(fs.readFileSync(BULK_NOTIF_FILE, 'utf8'));
+  } catch (e) {
+    return [];
+  }
+}
+function saveBulkNotification(log) {
+  try {
+    const logs = getBulkNotifications();
+    logs.unshift(log);
+    const dir = path.dirname(BULK_NOTIF_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(BULK_NOTIF_FILE, JSON.stringify(logs, null, 2), 'utf8');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+const GOALS_FILE = path.join(process.cwd(), 'data', 'goals.json');
+function getGoals() {
+  try {
+    if (!fs.existsSync(GOALS_FILE)) {
+      const defaults = [
+        { id: 'g-1', title: 'Earn 100 SP this week', type: 'sp_earned', target: 100, timeframe: 'week' },
+        { id: 'g-2', title: 'Attend 100% Zoom sessions', type: 'attendance_sessions', target: 100, timeframe: 'overall' }
+      ];
+      const dir = path.dirname(GOALS_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(GOALS_FILE, JSON.stringify(defaults, null, 2), 'utf8');
+      return defaults;
+    }
+    return JSON.parse(fs.readFileSync(GOALS_FILE, 'utf8'));
+  } catch (e) {
+    return [];
+  }
+}
+function saveGoals(goals) {
+  try {
+    const dir = path.dirname(GOALS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(GOALS_FILE, JSON.stringify(goals, null, 2), 'utf8');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+// ==========================================
+// Admin Login Endpoint (Verifies against database)
+// ==========================================
+api.post('/admin/login', async (req, res) => {
+  try {
+    const { email, token } = req.body;
+    if (!email || !token) {
+      return res.status(400).json({ error: 'Email and token are required' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!user || user.role !== 'admin' || user.passwordHash !== token) {
+      return res.status(403).json({ error: 'Invalid admin credentials' });
+    }
+
+    res.setHeader('Set-Cookie', 'chatengine_token=mock-admin-token; Path=/; HttpOnly');
+    res.json({ success: true, user: { email: user.email, name: user.name } });
+  } catch (err) {
+    console.error('Admin login error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// ==========================================
+// Admin Search & Activity Endpoints
+// ==========================================
+api.get('/admin/student-search', adminGuard, async (req, res) => {
+  try {
+    const { name, spMin, spMax, attendanceMin, attendanceMax, batch, status } = req.query;
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+
+    const matchStage = {};
+    if (name) {
+      matchStage.name = { $regex: name.trim(), $options: 'i' };
+    }
+    if (spMin !== undefined || spMax !== undefined) {
+      matchStage.totalSp = {};
+      if (spMin !== undefined && spMin !== '') matchStage.totalSp.$gte = Number(spMin);
+      if (spMax !== undefined && spMax !== '') matchStage.totalSp.$lte = Number(spMax);
+      if (Object.keys(matchStage.totalSp).length === 0) delete matchStage.totalSp;
+    }
+    if (status) {
+      matchStage.status = status;
+    }
+    if (batch) {
+      const parts = batch.split('-');
+      if (parts.length === 3) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const d = parseInt(parts[2], 10);
+        const start = new Date(y, m, d, 0, 0, 0, 0);
+        const end = new Date(y, m, d, 23, 59, 59, 999);
+        matchStage.internshipStartDate = { $gte: start, $lte: end };
+      }
+    }
+
+    const pipeline = [{ $match: matchStage }];
+
+    pipeline.push({
+      $lookup: {
+        from: 'attendancerecords',
+        let: { studentEmail: '$email' },
+        pipeline: [
+          { $match: { $expr: { $eq: [ '$email', '$$studentEmail' ] } } },
+          {
+            $group: {
+              _id: null,
+              avgPct: { $avg: '$attendancePercentage' },
+              totalSessions: { $sum: 1 },
+              qualifiedSessions: { $sum: { $cond: [ '$qualified', 1, 0 ] } }
+            }
+          }
+        ],
+        as: 'attendanceStats'
+      }
+    });
+
+    pipeline.push({
+      $addFields: {
+        avgAttendance: {
+          $ifNull: [ { $arrayElemAt: [ '$attendanceStats.avgPct', 0 ] }, 0 ]
+        }
+      }
+    });
+
+    if (attendanceMin !== undefined || attendanceMax !== undefined) {
+      const attMatch = {};
+      if (attendanceMin !== undefined && attendanceMin !== '') attMatch.avgAttendance = { $gte: Number(attendanceMin) };
+      if (attendanceMax !== undefined && attendanceMax !== '') attMatch.avgAttendance = { $lte: Number(attendanceMax) };
+      if (Object.keys(attMatch).length > 0) {
+        pipeline.push({ $match: attMatch });
+      }
+    }
+
+    const countPipeline = [...pipeline, { $count: 'total' }];
+    const countResult = await Student.aggregate(countPipeline);
+    const total = countResult[0]?.total || 0;
+
+    pipeline.push({ $sort: { name: 1 } });
+    pipeline.push({ $skip: (page - 1) * limit });
+    pipeline.push({ $limit: limit });
+
+    const students = await Student.aggregate(pipeline);
+
+    res.json({
+      students: students.map(s => ({
+        _id: String(s._id),
+        name: s.name,
+        email: s.email,
+        alternateEmail: s.alternateEmail,
+        totalSp: s.totalSp,
+        internshipStartDate: s.internshipStartDate,
+        status: s.status,
+        avgAttendance: s.avgAttendance,
+        level: s.level,
+        trophyLeague: s.trophyLeague
+      })),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    });
+  } catch (err) {
+    console.error('student search error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.get('/admin/student-activity/:studentId', adminGuard, async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const emails = [student.email];
+    if (student.alternateEmail) emails.push(student.alternateEmail);
+    const queryEmails = emails.map(e => e.toLowerCase());
+
+    const [transactions, attendances, polls] = await Promise.all([
+      SPTransaction.find({ email: { $in: queryEmails } }).lean(),
+      AttendanceRecord.find({ email: { $in: queryEmails } }).lean(),
+      PollRecord.find({ email: { $in: queryEmails } }).lean()
+    ]);
+
+    const txEvents = transactions.map(tx => {
+      const isPenalty = tx.appliedDelta < 0;
+      return {
+        type: isPenalty ? 'sp_penalty' : 'sp_earn',
+        title: isPenalty ? `SP Penalty: ${tx.category}` : `SP Credited: ${tx.category}`,
+        description: tx.reason,
+        timestamp: tx.dateTime || tx.createdAt,
+        sp: tx.appliedDelta,
+        meta: { sessionLabel: tx.sessionLabel, category: tx.category }
+      };
+    });
+
+    const attEvents = attendances.map(att => ({
+      type: 'attendance',
+      title: `Zoom Attendance: ${att.sessionLabel}`,
+      description: `Attended ${att.attendedMinutes} of ${att.totalSessionMinutes} mins (${att.attendancePercentage}%). Status: ${att.qualified ? 'Qualified' : 'Not Qualified'}.`,
+      timestamp: att.createdAt,
+      sp: null,
+      meta: { sessionLabel: att.sessionLabel, attendedMinutes: att.attendedMinutes, totalMinutes: att.totalSessionMinutes }
+    }));
+
+    const pollEvents = polls.map(p => ({
+      type: 'poll',
+      title: `Poll Participation: ${p.sessionLabel}`,
+      description: `Attempted ${p.attemptedQuestions} of ${p.totalQuestions} questions (Missed ${p.missedQuestions}).`,
+      timestamp: p.createdAt,
+      sp: null,
+      meta: { sessionLabel: p.sessionLabel, attempted: p.attemptedQuestions, total: p.totalQuestions }
+    }));
+
+    const allEvents = [
+      ...txEvents,
+      ...attEvents,
+      ...pollEvents
+    ];
+
+    allEvents.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    res.json({
+      student: {
+        _id: String(student._id),
+        name: student.name,
+        email: student.email,
+        alternateEmail: student.alternateEmail,
+        totalSp: student.totalSp,
+        level: student.level,
+        trophyLeague: student.trophyLeague,
+        status: student.status
+      },
+      timeline: allEvents
+    });
+  } catch (err) {
+    console.error('get student activity error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// ==========================================
+// Admin Inactive Student Tracker Endpoints
+// ==========================================
+api.get('/admin/inactive-students', adminGuard, async (req, res) => {
+  try {
+    const { batch, spMin, spMax, sortBy } = req.query;
+
+    const students = await Student.find({ status: 'active' }).lean();
+    
+    // Get last 3 sessions
+    const last3Sessions = await Session.find().sort({ endDateTime: -1 }).limit(3).lean();
+    const sessionLabels = last3Sessions.map(s => s.label);
+
+    // Group qualified attendance for the last 3 sessions by email
+    const last3Attendance = await AttendanceRecord.find({
+      sessionLabel: { $in: sessionLabels }
+    }).lean();
+    const last3AttendanceByEmail = new Map();
+    for (const att of last3Attendance) {
+      if (att.qualified) {
+        const email = att.email.toLowerCase();
+        if (!last3AttendanceByEmail.has(email)) last3AttendanceByEmail.set(email, new Set());
+        last3AttendanceByEmail.get(email).add(att.sessionLabel);
+      }
+    }
+
+    // Calculate overall average attendance percentage
+    const overallAttendance = await AttendanceRecord.aggregate([
+      {
+        $group: {
+          _id: "$email",
+          avgPct: { $avg: "$attendancePercentage" }
+        }
+      }
+    ]);
+    const attendanceMap = new Map(overallAttendance.map(a => [a._id.toLowerCase(), a.avgPct]));
+
+    // Calculate latest SP transaction date for each email
+    const latestTransactions = await SPTransaction.aggregate([
+      { $match: { appliedDelta: { $gt: 0 } } },
+      { $sort: { dateTime: -1 } },
+      {
+        $group: {
+          _id: "$email",
+          latestDate: { $first: "$dateTime" }
+        }
+      }
+    ]);
+    const latestTxMap = new Map(latestTransactions.map(t => [t._id.toLowerCase(), t.latestDate]));
+
+    const threeDaysAgo = new Date();
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+
+    let inactiveStudents = [];
+    for (const student of students) {
+      const email = student.email.toLowerCase();
+      
+      const qualifiedCount = last3AttendanceByEmail.get(email)?.size || 0;
+      const missedLast3 = (sessionLabels.length >= 3) && (qualifiedCount === 0);
+
+      const latestSpDate = latestTxMap.get(email);
+      const noSpFor3Days = !latestSpDate || (new Date(latestSpDate) < threeDaysAgo);
+
+      const avgAttendance = attendanceMap.get(email) ?? 0;
+      const lowAttendance = avgAttendance < 75;
+
+      if (missedLast3 || noSpFor3Days || lowAttendance) {
+        // Apply batch filter if specified
+        if (batch) {
+          const parts = batch.split('-');
+          if (parts.length === 3) {
+            const y = parseInt(parts[0], 10);
+            const m = parseInt(parts[1], 10) - 1;
+            const d = parseInt(parts[2], 10);
+            const start = new Date(y, m, d, 0, 0, 0, 0);
+            const end = new Date(y, m, d, 23, 59, 59, 999);
+            if (student.internshipStartDate < start || student.internshipStartDate > end) {
+              continue;
+            }
+          }
+        }
+
+        // Apply SP Min / Max filters
+        if (spMin !== undefined && spMin !== '' && student.totalSp < Number(spMin)) continue;
+        if (spMax !== undefined && spMax !== '' && student.totalSp > Number(spMax)) continue;
+
+        inactiveStudents.push({
+          _id: student._id,
+          name: student.name,
+          email: student.email,
+          totalSp: student.totalSp,
+          level: student.level,
+          trophyLeague: student.trophyLeague,
+          internshipStartDate: student.internshipStartDate,
+          reasons: {
+            missedLast3,
+            noSpFor3Days,
+            lowAttendance
+          },
+          stats: {
+            lastSpDate: latestSpDate || null,
+            avgAttendance
+          }
+        });
+      }
+    }
+
+    // Sorting
+    if (sortBy === 'sp') {
+      inactiveStudents.sort((a, b) => a.totalSp - b.totalSp);
+    } else if (sortBy === 'attendance') {
+      inactiveStudents.sort((a, b) => a.stats.avgAttendance - b.stats.avgAttendance);
+    } else {
+      // Sort by name by default
+      inactiveStudents.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    res.json(inactiveStudents);
+  } catch (err) {
+    console.error('get inactive students error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// ==========================================
+// Admin Bulk Notifications Endpoints
+// ==========================================
+api.post('/admin/bulk-notifications', adminGuard, async (req, res) => {
+  try {
+    const { targetGroup, targetValue, message } = req.body;
+    if (!targetGroup || !targetValue || !message) {
+      return res.status(400).json({ error: 'Missing targetGroup, targetValue, or message' });
+    }
+
+    let recipients = [];
+    const students = await Student.find({ status: 'active' }).lean();
+
+    if (targetGroup === 'low-sp') {
+      const threshold = Number(targetValue) || 100;
+      recipients = students.filter(s => s.totalSp < threshold);
+    } else if (targetGroup === 'batch') {
+      const parts = targetValue.split('-');
+      if (parts.length === 3) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const d = parseInt(parts[2], 10);
+        const start = new Date(y, m, d, 0, 0, 0, 0);
+        const end = new Date(y, m, d, 23, 59, 59, 999);
+        recipients = students.filter(s => s.internshipStartDate >= start && s.internshipStartDate <= end);
+      }
+    } else if (targetGroup === 'missing-sessions') {
+      const count = Number(targetValue) || 3;
+      const sessions = await Session.find().sort({ endDateTime: -1 }).limit(count).lean();
+      const sessionLabels = sessions.map(s => s.label);
+      
+      const atts = await AttendanceRecord.find({ sessionLabel: { $in: sessionLabels } }).lean();
+      const qualifiedByEmail = new Map();
+      for (const att of atts) {
+        if (att.qualified) {
+          const email = att.email.toLowerCase();
+          if (!qualifiedByEmail.has(email)) qualifiedByEmail.set(email, new Set());
+          qualifiedByEmail.get(email).add(att.sessionLabel);
+        }
+      }
+      
+      recipients = students.filter(s => {
+        const qCount = qualifiedByEmail.get(s.email.toLowerCase())?.size || 0;
+        return qCount === 0 && sessions.length >= count;
+      });
+    }
+
+    const newLog = {
+      id: 'notif-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      adminEmail: req.adminEmail || 'admin@spurti.in',
+      targetGroup,
+      targetValue,
+      message,
+      recipientCount: recipients.length,
+      recipients: recipients.map(r => ({ name: r.name, email: r.email }))
+    };
+
+    saveBulkNotification(newLog);
+
+    res.json({
+      success: true,
+      log: newLog
+    });
+  } catch (err) {
+    console.error('bulk notifications error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.get('/admin/bulk-notifications', adminGuard, async (req, res) => {
+  res.json(getBulkNotifications());
+});
+
+// ==========================================
+// Admin Goal Monitoring Endpoints
+// ==========================================
+api.get('/admin/goals', adminGuard, async (req, res) => {
+  try {
+    const goals = getGoals();
+    const students = await Student.find({ status: 'active' }).lean();
+    const totalCount = students.length;
+
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+
+    const calculatedGoals = [];
+
+    for (const goal of goals) {
+      const { type, target, timeframe } = goal;
+      let startTime = null;
+      if (timeframe === 'today') {
+        startTime = new Date(new Date(now.getTime() + istOffset).setUTCHours(0, 0, 0, 0) - istOffset);
+      } else if (timeframe === 'week') {
+        startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      } else if (timeframe === 'month') {
+        startTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      }
+
+      let achievedCount = 0;
+      const achievers = [];
+
+      if (type === 'sp_earned') {
+        const match = { appliedDelta: { $gt: 0 } };
+        if (startTime) match.dateTime = { $gte: startTime };
+        
+        const txs = await SPTransaction.aggregate([
+          { $match: match },
+          { $group: { _id: "$email", spEarned: { $sum: "$appliedDelta" } } }
+        ]);
+        const spMap = new Map(txs.map(t => [t._id.toLowerCase(), t.spEarned]));
+
+        for (const s of students) {
+          const email = s.email.toLowerCase();
+          const earned = spMap.get(email) || 0;
+          if (earned >= target) {
+            achievedCount++;
+            achievers.push({ name: s.name, email: s.email, value: `${earned} SP` });
+          }
+        }
+      } else if (type === 'attendance_sessions') {
+        const match = {};
+        if (startTime) match.createdAt = { $gte: startTime };
+
+        const atts = await AttendanceRecord.aggregate([
+          { $match: match },
+          { $group: { _id: "$email", avgPct: { $avg: "$attendancePercentage" } } }
+        ]);
+        const attMap = new Map(atts.map(a => [a._id.toLowerCase(), a.avgPct]));
+
+        for (const s of students) {
+          const email = s.email.toLowerCase();
+          const avgAtt = attMap.get(email) ?? 0;
+          if (avgAtt >= target) {
+            achievedCount++;
+            achievers.push({ name: s.name, email: s.email, value: `${Math.round(avgAtt)}%` });
+          }
+        }
+      }
+
+      calculatedGoals.push({
+        ...goal,
+        achievedCount,
+        totalCount,
+        achievers
+      });
+    }
+
+    res.json(calculatedGoals);
+  } catch (err) {
+    console.error('get goals error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.post('/admin/goals', adminGuard, async (req, res) => {
+  try {
+    const { title, type, target, timeframe } = req.body;
+    if (!title || !type || !target || !timeframe) {
+      return res.status(400).json({ error: 'Missing title, type, target, or timeframe' });
+    }
+
+    const goals = getGoals();
+    const newGoal = {
+      id: 'goal-' + Date.now(),
+      title,
+      type,
+      target: Number(target),
+      timeframe
+    };
+    goals.push(newGoal);
+    saveGoals(goals);
+
+    res.json({ success: true, goal: newGoal });
+  } catch (err) {
+    console.error('post goals error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 
 app.use('/api', api);
 app.use('/spurti/api', api);

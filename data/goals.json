@@ -1,0 +1,16 @@
+[
+  {
+    "id": "g-1",
+    "title": "Earn 100 SP this week",
+    "type": "sp_earned",
+    "target": 100,
+    "timeframe": "week"
+  },
+  {
+    "id": "g-2",
+    "title": "Attend 100% Zoom sessions",
+    "type": "attendance_sessions",
+    "target": 100,
+    "timeframe": "overall"
+  }
+]
