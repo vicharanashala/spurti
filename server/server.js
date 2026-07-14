@@ -3,16 +3,20 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
-import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
+import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL, SPURTI_AUTH_SECRET, SPURTI_COOKIE_SECURE } from './config.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import Guild from './models/Guild.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import GuildInvite from './models/GuildInvite.js';
+import { computeGuildStandings, computeGuildDetail } from './services/guilds.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -149,8 +153,55 @@ async function studentEmailFromRequest(req) {
   // Samagama's /api/auth/me nests the user as { user: { email, ... } };
   // fall back to a top-level email in case the shape ever flattens.
   const email = data?.user?.email || data?.email;
-  if (!email) return null;
-  return normalizeEmail(email);
+  if (email) return normalizeEmail(email);
+  // Fallback: locally-signed session cookie set by /api/confirm or /api/search
+  // exact-match. Lets search-login students hit authenticated routes without SSO.
+  const verified = verifySessionCookie(cookies.spurti_session);
+  if (verified) return normalizeEmail(verified);
+  return null;
+}
+
+// HMAC-signed session cookie helpers. The cookie value is
+//   `${base64url(email)}.${base64url(hmac)}`
+// where hmac = HMAC_SHA256(secret, base64url(email)). Verification is constant-
+// time to avoid timing attacks. 30-day expiry is enforced on the server via
+// the timestamp embedded in the payload.
+function signSessionCookie(email) {
+  const payload = Buffer.from(JSON.stringify({ e: email, t: Date.now() })).toString('base64url');
+  const sig = crypto.createHmac('sha256', SPURTI_AUTH_SECRET).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifySessionCookie(signed) {
+  if (!signed) return null;
+  const [payload, sig] = String(signed).split('.');
+  if (!payload || !sig) return null;
+  const expected = crypto.createHmac('sha256', SPURTI_AUTH_SECRET).update(payload).digest('base64url');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const obj = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (!obj?.e || !obj?.t) return null;
+    if (Date.now() - obj.t > 30 * 24 * 60 * 60 * 1000) return null; // 30d
+    return String(obj.e);
+  } catch {
+    return null;
+  }
+}
+
+function setSessionCookie(res, email) {
+  const value = signSessionCookie(email);
+  const maxAge = 30 * 24 * 60 * 60; // 30 days in seconds
+  const parts = [
+    `spurti_session=${value}`,
+    'Path=/',
+    `Max-Age=${maxAge}`,
+    'HttpOnly',
+    'SameSite=Lax'
+  ];
+  if (SPURTI_COOKIE_SECURE) parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
 }
 
 async function rankFor(email) {
@@ -267,6 +318,7 @@ api.get('/me', async (req, res) => {
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
+  setSessionCookie(res, student.email);
   res.json({ authenticated: true, profile: await studentPayload(student) });
 });
 
@@ -279,7 +331,10 @@ api.get('/search', async (req, res) => {
     const email = normalizeEmail(q);
     const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
     if (student?.status === 'excused') return res.json(excusedPayload(student));
-    if (student) return res.json({ exact: true, profile: await studentPayload(student) });
+    if (student) {
+      setSessionCookie(res, student.email);
+      return res.json({ exact: true, profile: await studentPayload(student) });
+    }
   }
 
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -304,6 +359,7 @@ api.post('/confirm', async (req, res) => {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
+  setSessionCookie(res, student.email);
   res.json(await studentPayload(student));
 });
 
@@ -616,6 +672,237 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
+
+// POST /api/guilds — create a new guild (student becomes leader)
+api.post('/guilds', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    if (student.guildId) return res.status(409).json({ error: 'You are already in a guild' });
+
+    const name = String(req.body?.name || '').trim();
+    if (name.length < 3) return res.status(400).json({ error: 'Guild name must be at least 3 characters' });
+    const motto = String(req.body?.motto || '').trim();
+    const color = String(req.body?.colorPrimary || req.body?.color || '#176b87').trim();
+    const icon = String(req.body?.emblemIcon || req.body?.icon || '⚔️').trim();
+
+    // Block duplicate names (case-insensitive) against active guilds.
+    // Dissolved guilds are skipped so the name becomes available again.
+    const existing = await Guild.findOne({
+      name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
+      dissolved: { $ne: true }
+    }).lean();
+    if (existing) {
+      return res.status(409).json({ error: 'A guild with that name already exists' });
+    }
+
+    // 6-char invite code
+    const inviteCode = Math.random().toString(36).slice(2, 8);
+
+    const guild = await Guild.create({
+      name,
+      motto,
+      color,
+      icon,
+      inviteCode,
+      ownerEmail: email
+    });
+
+    await Student.updateOne(
+      { email },
+      { $set: { guildId: guild._id, guildRole: 'owner' } }
+    );
+
+    const detail = await computeGuildDetail(guild._id);
+    res.json({ guild: detail, myRole: 'owner' });
+  } catch (err) {
+    console.error('POST /api/guilds failed:', err);
+    res.status(500).json({ error: 'Failed to create guild' });
+  }
+});
+
+// GET /api/guilds — all guild standings
+api.get('/guilds', async (req, res) => {
+  try {
+    const standings = await computeGuildStandings();
+    res.json({ standings });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load guild standings' });
+  }
+});
+
+// GET /api/guilds/mine — authenticated student's guild
+api.get('/guilds/mine', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    if (!student.guildId) return res.json({ guild: null });
+    const detail = await computeGuildDetail(student.guildId);
+    res.json({ guild: detail, myRole: student.guildRole || null });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load your guild' });
+  }
+});
+
+// POST /api/guilds/:id/invite — send a guild invite (leader only)
+api.post('/guilds/:id/invite', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+    if (!student || String(student.guildId) !== String(req.params.id) || student.guildRole !== 'owner') {
+      return res.status(403).json({ error: 'Only the guild leader can send invites' });
+    }
+    const invitedEmail = normalizeEmail(req.body?.email);
+    if (!invitedEmail) return res.status(400).json({ error: 'Email required' });
+    const invitedStudent = await Student.findOne({ $or: [{ email: invitedEmail }, { alternateEmail: invitedEmail }] });
+    if (!invitedStudent) return res.status(404).json({ error: 'No student found with that email' });
+    if (invitedStudent.guildId) return res.status(400).json({ error: 'That student is already in a guild' });
+
+    // Cap check
+    const guild = await Guild.findById(req.params.id).lean();
+    if (guild && guild.maxMembers) {
+      const memberCount = await Student.countDocuments({ guildId: guild._id });
+      if (memberCount >= guild.maxMembers) {
+        return res.status(409).json({ error: `Guild is full (${memberCount}/${guild.maxMembers})` });
+      }
+    }
+
+    const invite = await GuildInvite.findOneAndUpdate(
+      { guildId: student.guildId, invitedEmail, status: 'pending' },
+      { guildId: student.guildId, invitedEmail, invitedByEmail: normalizeEmail(email), status: 'pending' },
+      { upsert: true, new: true }
+    );
+    res.json({ invite });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to send invite' });
+  }
+});
+
+// GET /api/guilds/invites/mine — pending invites for the authenticated student
+api.get('/guilds/invites/mine', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+    const invites = await GuildInvite.find({ invitedEmail: normalizeEmail(email), status: 'pending' })
+      .populate('guildId', 'name emblemIcon colorPrimary')
+      .lean();
+    res.json({ invites });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load invites' });
+  }
+});
+
+// POST /api/guilds/invites/:inviteId/respond — accept or decline a guild invite
+api.post('/guilds/invites/:inviteId/respond', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+    const accept = req.body?.accept === true;
+    const invite = await GuildInvite.findById(req.params.inviteId);
+    if (!invite || invite.invitedEmail !== normalizeEmail(email) || invite.status !== 'pending') {
+      return res.status(404).json({ error: 'Invite not found' });
+    }
+    invite.status = accept ? 'accepted' : 'declined';
+    await invite.save();
+
+    if (accept) {
+      const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+      if (student.guildId) return res.status(400).json({ error: 'You are already in a guild' });
+
+      // Cap check (re-check at accept time in case the guild filled up after the invite was sent)
+      const guild = await Guild.findById(invite.guildId).lean();
+      if (guild && guild.maxMembers) {
+        const memberCount = await Student.countDocuments({ guildId: guild._id });
+        if (memberCount >= guild.maxMembers) {
+          // Roll back the invite status so it doesn't stay in limbo
+          invite.status = 'declined';
+          await invite.save();
+          return res.status(409).json({ error: `Guild is full (${memberCount}/${guild.maxMembers})` });
+        }
+      }
+
+      // updateOne (not save()) — see leave handler for why.
+      await Student.updateOne(
+        { email: student.email },
+        { $set: { guildId: invite.guildId, guildRole: 'member' } }
+      );
+    }
+    res.json({ status: invite.status });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to respond to invite' });
+  }
+});
+
+// POST /api/guilds/leave — leave the authenticated student's guild
+// POST /api/guilds/join/:code — student joins a guild via its invite code
+api.post('/guilds/join/:code', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+    const code = String(req.params.code || '').trim().toLowerCase();
+    if (!code) return res.status(400).json({ error: 'Invite code is required' });
+
+    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    if (student.guildId) return res.status(409).json({ error: 'You are already in a guild. Leave it first.' });
+
+    const guild = await Guild.findOne({ inviteCode: code, dissolved: { $ne: true } }).lean();
+    if (!guild) return res.status(404).json({ error: 'Invalid invite code' });
+
+    // Cap check
+    if (guild.maxMembers) {
+      const memberCount = await Student.countDocuments({ guildId: guild._id });
+      if (memberCount >= guild.maxMembers) {
+        return res.status(409).json({ error: `Guild is full (${memberCount}/${guild.maxMembers})` });
+      }
+    }
+
+    // updateOne (not save()) — see leave handler for why.
+    await Student.updateOne(
+      { email: student.email },
+      { $set: { guildId: guild._id, guildRole: 'member' } }
+    );
+
+    const detail = await computeGuildDetail(guild._id);
+    res.json({ guild: detail, myRole: 'member' });
+  } catch (err) {
+    console.error('POST /api/guilds/join/:code failed:', err);
+    res.status(500).json({ error: 'Failed to join guild' });
+  }
+});
+
+api.post('/guilds/leave', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+    if (!student || !student.guildId) return res.status(400).json({ error: 'You are not in a guild' });
+
+    if (student.guildRole === 'owner') {
+      const otherMembers = await Student.countDocuments({ guildId: student.guildId, email: { $ne: student.email } });
+      if (otherMembers > 0) {
+        return res.status(400).json({ error: 'Transfer leadership before leaving, or remove all other members first' });
+      }
+    }
+
+    // Use updateOne instead of save() to avoid full-document validation
+    // (some legacy student records are missing required fields like
+    // internshipStartDate, which makes save() throw ValidationError).
+    await Student.updateOne(
+      { email: student.email },
+      { $set: { guildId: null, guildRole: null } }
+    );
+    res.json({ left: true });
+  } catch (err) {
+    console.error('POST /api/guilds/leave failed:', err);
+    res.status(500).json({ error: 'Failed to leave guild' });
+  }
+});
 
 app.use('/api', api);
 app.use('/spurti/api', api);

@@ -514,3 +514,68 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+
+/* ── Guilds ──────────────────────────────────────────────── */
+.guilds {
+  animation: guilds-fadein 200ms ease-out;
+}
+@keyframes guilds-fadein {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.guilds-my {
+  border-left: 4px solid var(--guild-color, var(--primary));
+}
+
+.guilds-standings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.guilds-standings-table th {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid var(--line);
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 600;
+}
+.guilds-standings-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.guilds-standings-table tr:last-child td {
+  border-bottom: none;
+}
+
+.guilds-member-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.2rem 0;
+}
+.guilds-invite-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.guilds-invite-card:last-child {
+  border-bottom: none;
+}
+.guilds-empty-state {
+  text-align: center;
+  padding: 40px 24px;
+  color: var(--muted);
+}
+.guilds-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
