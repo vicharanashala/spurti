@@ -514,3 +514,30 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* Momentum Indicators for Rank Velocity */
+.momentum {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-left: 8px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.momentum.up {
+  color: #16a34a;
+  background-color: #f0fdf4;
+}
+.momentum.down {
+  color: #dc2626;
+  background-color: #fef2f2;
+}
+.momentum.neutral {
+  color: #6b7280;
+  background-color: #f3f4f6;
+  padding: 2px 8px;
+}
+

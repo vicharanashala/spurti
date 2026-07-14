@@ -44,6 +44,14 @@ const analyticsSnapshotSchema = new mongoose.Schema({
     delta: { type: Number },
   }],
   redZoneCount: { type: Number, default: 0 },
+  studentRanks: [{
+    email: { type: String, required: true },
+    rank: { type: Number, required: true }
+  }],
+  studentDeltas: [{
+    email: { type: String, required: true },
+    delta: { type: Number, required: true }
+  }],
   snapshotType: { type: String, enum: ['scheduled', 'manual'], default: 'scheduled' }
 }, { timestamps: true });
 
