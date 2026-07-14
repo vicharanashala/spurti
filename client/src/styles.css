@@ -514,3 +514,81 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* Admin Award SP (feature/admin-quick-sp-award) */
+.admin-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  background: #fbfdff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.admin-actions-row .muted { font-size: 12px; }
+
+.award-form {
+  display: grid;
+  gap: 14px;
+}
+.award-field {
+  display: grid;
+  gap: 6px;
+}
+.award-field > span:first-child {
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.award-mode-toggle {
+  display: flex;
+  gap: 8px;
+}
+.award-mode-toggle button {
+  flex: 1;
+  font-size: 13px;
+  padding: 8px 12px;
+}
+.award-field input[type="number"],
+.award-field textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+.award-preview {
+  font-size: 12px;
+  color: var(--primary);
+  font-weight: 800;
+  background: #f1f5f9;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: ui-monospace, monospace;
+}
+.award-note {
+  font-size: 12px;
+  color: var(--muted);
+  background: #fef9ec;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0;
+}
+.award-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.award-actions .error {
+  font-size: 12px;
+  color: var(--red);
+}
