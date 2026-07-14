@@ -12,7 +12,11 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import Mission from './models/Mission.js';
+import DailyMissionSummary from './models/DailyMissionSummary.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { evaluateMission, generateDailyCoachFeedback, calculateSpForQuality, MISSION_SP_RUBRIC } from './services/aiService.js';
+import { getWeeklyInsights, getMonthlyAnalytics } from './services/missionAnalytics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -268,6 +272,539 @@ api.get('/me', async (req, res) => {
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
   res.json({ authenticated: true, profile: await studentPayload(student) });
+});
+
+// --- AI Daily Mission Planner Helpers & Routes --------------------------------
+function getISTDateString(date = new Date()) {
+  const options = { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' };
+  const formatter = new Intl.DateTimeFormat('en-CA', options); // returns YYYY-MM-DD
+  return formatter.format(date);
+}
+
+function isYesterday(prevDateStr, currDateStr) {
+  if (!prevDateStr) return false;
+  const prev = new Date(prevDateStr + 'T12:00:00');
+  const curr = new Date(currDateStr + 'T12:00:00');
+  const diff = curr.getTime() - prev.getTime();
+  return diff === 24 * 60 * 60 * 1000;
+}
+
+function isPreviousWeek(prevWeekStr, currWeekStr) {
+  if (!prevWeekStr || !currWeekStr) return false;
+  const [pYear, pWeek] = prevWeekStr.split('-W').map(Number);
+  const [cYear, cWeek] = currWeekStr.split('-W').map(Number);
+  if (cYear === pYear) return cWeek - pWeek === 1;
+  if (cYear - pYear === 1) {
+    return pWeek >= 52 && cWeek === 1;
+  }
+  return false;
+}
+
+function isPreviousMonth(prevMonthStr, currMonthStr) {
+  if (!prevMonthStr || !currMonthStr) return false;
+  const [pYear, pMonth] = prevMonthStr.split('-').map(Number);
+  const [cYear, cMonth] = currMonthStr.split('-').map(Number);
+  if (cYear === pYear) return cMonth - pMonth === 1;
+  return cYear - pYear === 1 && pMonth === 12 && cMonth === 1;
+}
+
+async function updateDailySummaryCount(email, studentId, date) {
+  const missions = await Mission.find({ studentId, date }).lean();
+  const totalTasks = missions.length;
+  const completedMissions = missions.filter(m => m.completed);
+  const completedTasksCount = completedMissions.length;
+  
+  const qualityScores = missions.map(m => m.qualityScore).filter(s => s !== null);
+  const qualityAverage = qualityScores.length > 0 
+    ? Math.round(qualityScores.reduce((sum, q) => sum + q, 0) / qualityScores.length)
+    : 0;
+
+  const baseSpEarned = completedMissions.reduce((sum, m) => sum + (m.spEarned || 0), 0);
+
+  return await DailyMissionSummary.findOneAndUpdate(
+    { email, date },
+    { 
+      studentId,
+      totalTasks,
+      completedTasks: completedTasksCount,
+      qualityAverage,
+      baseSpEarned
+    },
+    { upsert: true, new: true }
+  );
+}
+
+// REST Endpoints
+api.get('/missions', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const date = req.query.date || getISTDateString();
+  
+  const [missions, summary] = await Promise.all([
+    Mission.find({ studentId: student._id, date }).sort({ order: 1 }),
+    DailyMissionSummary.findOne({ studentId: student._id, date })
+  ]);
+
+  res.json({
+    missions,
+    summary: summary || {
+      email: student.email,
+      studentId: student._id,
+      date,
+      totalTasks: 0,
+      completedTasks: 0,
+      baseSpEarned: 0,
+      bonusSpEarned: 0,
+      qualityAverage: 0,
+      coachFeedback: '',
+      coachFeedbackGeneratedAt: null
+    },
+    streaks: {
+      daily: student.dailyMissionStreak || 0,
+      weekly: student.weeklyMissionStreak || 0,
+      monthly: student.monthlyMissionStreak || 0,
+      longest: student.longestMissionStreak || 0
+    }
+  });
+});
+
+api.post('/missions', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (student.status === 'excused') return res.status(403).json({ error: 'Student account is excused' });
+
+  const { title, description, priority, duration, deadline, category, date } = req.body || {};
+  if (!title || !date) {
+    return res.status(400).json({ error: 'Title and Date are required' });
+  }
+
+  const evalResult = await evaluateMission(title, description, category, Number(duration) || 30);
+  const order = await Mission.countDocuments({ studentId: student._id, date });
+
+  const mission = await Mission.create({
+    email: student.email,
+    studentId: student._id,
+    title,
+    description: description || '',
+    priority: priority || 'medium',
+    duration: Number(duration) || 30,
+    deadline: deadline || '',
+    category: category || 'other',
+    date,
+    order,
+    qualityScore: evalResult.qualityScore,
+    qualityEvaluation: evalResult
+  });
+
+  await updateDailySummaryCount(student.email, student._id, date);
+
+  res.json({ success: true, mission });
+});
+
+api.put('/missions/:id', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (student.status === 'excused') return res.status(403).json({ error: 'Student account is excused' });
+
+  const mission = await Mission.findById(req.params.id);
+  if (!mission) return res.status(404).json({ error: 'Mission not found' });
+  if (String(mission.studentId) !== String(student._id)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const { title, description, priority, duration, deadline, category } = req.body || {};
+  
+  const contentChanged = title !== mission.title || 
+                         description !== mission.description || 
+                         category !== mission.category || 
+                         duration !== mission.duration;
+
+  if (contentChanged) {
+    const evalResult = await evaluateMission(title, description, category, Number(duration) || 30);
+    mission.qualityScore = evalResult.qualityScore;
+    mission.qualityEvaluation = evalResult;
+
+    // Adjust SP if already completed
+    if (mission.completed) {
+      const oldSp = mission.spEarned;
+      const newSp = calculateSpForQuality(evalResult.qualityScore);
+      const spDiff = newSp - oldSp;
+      if (spDiff !== 0) {
+        student.totalSp += spDiff;
+        student.highestSpEver = Math.max(student.highestSpEver, student.totalSp);
+        await student.save();
+
+        await SPTransaction.create({
+          email: student.email,
+          studentId: student._id,
+          category: 'mission',
+          sessionLabel: 'Daily Missions',
+          deltaMode: 'absolute',
+          deltaValue: spDiff,
+          appliedDelta: spDiff,
+          balanceAfter: student.totalSp,
+          reason: `Quality score updated for completed mission: "${title}"`,
+          dateTime: new Date()
+        });
+        
+        mission.spEarned = newSp;
+      }
+    }
+  }
+
+  mission.title = title || mission.title;
+  mission.description = description !== undefined ? description : mission.description;
+  mission.priority = priority || mission.priority;
+  mission.duration = Number(duration) || mission.duration;
+  mission.deadline = deadline !== undefined ? deadline : mission.deadline;
+  mission.category = category || mission.category;
+
+  await mission.save();
+  await updateDailySummaryCount(student.email, student._id, mission.date);
+
+  res.json({ success: true, mission });
+});
+
+api.delete('/missions/:id', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (student.status === 'excused') return res.status(403).json({ error: 'Student account is excused' });
+
+  const mission = await Mission.findById(req.params.id);
+  if (!mission) return res.status(404).json({ error: 'Mission not found' });
+  if (String(mission.studentId) !== String(student._id)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const { date, completed, spEarned } = mission;
+
+  if (completed) {
+    student.totalSp -= spEarned;
+    await student.save();
+
+    await SPTransaction.create({
+      email: student.email,
+      studentId: student._id,
+      category: 'mission',
+      sessionLabel: 'Daily Missions',
+      deltaMode: 'absolute',
+      deltaValue: -spEarned,
+      appliedDelta: -spEarned,
+      balanceAfter: student.totalSp,
+      reason: `Deleted completed mission: "${mission.title}"`,
+      dateTime: new Date()
+    });
+
+    // Check if bonus needs to be reverted
+    const summary = await DailyMissionSummary.findOne({ studentId: student._id, date });
+    if (summary && summary.bonusSpEarned > 0) {
+      student.totalSp -= summary.bonusSpEarned;
+      
+      // Revert streak if today is broken
+      if (student.lastCompletedAllMissionsDate === date) {
+        student.dailyMissionStreak = Math.max(0, student.dailyMissionStreak - 1);
+        student.lastCompletedAllMissionsDate = '';
+      }
+      
+      await student.save();
+
+      await SPTransaction.create({
+        email: student.email,
+        studentId: student._id,
+        category: 'mission_bonus',
+        sessionLabel: 'Daily Missions',
+        deltaMode: 'absolute',
+        deltaValue: -summary.bonusSpEarned,
+        appliedDelta: -summary.bonusSpEarned,
+        balanceAfter: student.totalSp,
+        reason: `Reverted completion bonus (task deleted)`,
+        dateTime: new Date()
+      });
+
+      summary.bonusSpEarned = 0;
+      await summary.save();
+    }
+  }
+
+  await Mission.deleteOne({ _id: mission._id });
+  await updateDailySummaryCount(student.email, student._id, date);
+
+  res.json({ success: true });
+});
+
+api.post('/missions/:id/toggle', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (student.status === 'excused') return res.status(403).json({ error: 'Student account is excused' });
+
+  const mission = await Mission.findById(req.params.id);
+  if (!mission) return res.status(404).json({ error: 'Mission not found' });
+  if (String(mission.studentId) !== String(student._id)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const date = mission.date;
+  const wasCompleted = mission.completed;
+  mission.completed = !wasCompleted;
+  mission.completedAt = mission.completed ? new Date() : null;
+
+  if (mission.completed) {
+    const sp = calculateSpForQuality(mission.qualityScore);
+    mission.spEarned = sp;
+
+    student.totalSp += sp;
+    student.highestSpEver = Math.max(student.highestSpEver, student.totalSp);
+    await student.save();
+
+    await SPTransaction.create({
+      email: student.email,
+      studentId: student._id,
+      category: 'mission',
+      sessionLabel: 'Daily Missions',
+      deltaMode: 'absolute',
+      deltaValue: sp,
+      appliedDelta: sp,
+      balanceAfter: student.totalSp,
+      reason: `Completed daily mission: "${mission.title}" (Quality: ${mission.qualityScore})`,
+      dateTime: new Date()
+    });
+
+    await mission.save();
+    const summary = await updateDailySummaryCount(student.email, student._id, date);
+
+    // Check if ALL missions of today are completed
+    const totalMissions = await Mission.countDocuments({ studentId: student._id, date });
+    const completedMissions = await Mission.countDocuments({ studentId: student._id, date, completed: true });
+
+    if (totalMissions > 0 && totalMissions === completedMissions) {
+      // Calculate completion bonus
+      const dailyCompletedMissions = await Mission.find({ studentId: student._id, date, completed: true }).lean();
+      const baseSp = dailyCompletedMissions.reduce((sum, m) => sum + (m.spEarned || 0), 0);
+      const bonusSp = Math.round(baseSp * MISSION_SP_RUBRIC.completionBonusPct);
+
+      if (bonusSp > 0) {
+        student.totalSp += bonusSp;
+        student.highestSpEver = Math.max(student.highestSpEver, student.totalSp);
+        
+        await SPTransaction.create({
+          email: student.email,
+          studentId: student._id,
+          category: 'mission_bonus',
+          sessionLabel: 'Daily Missions',
+          deltaMode: 'absolute',
+          deltaValue: bonusSp,
+          appliedDelta: bonusSp,
+          balanceAfter: student.totalSp,
+          reason: `Completed all daily missions! 20% completion bonus applied`,
+          dateTime: new Date()
+        });
+
+        summary.bonusSpEarned = bonusSp;
+        await summary.save();
+      }
+
+      // Update Streaks
+      if (student.lastCompletedAllMissionsDate !== date) {
+        if (isYesterday(student.lastCompletedAllMissionsDate, date)) {
+          student.dailyMissionStreak += 1;
+        } else {
+          student.dailyMissionStreak = 1;
+        }
+        student.longestMissionStreak = Math.max(student.longestMissionStreak, student.dailyMissionStreak);
+        student.lastCompletedAllMissionsDate = date;
+
+        // Weekly Streak
+        const currentWeek = getWeekLabel(new Date(date));
+        if (student.lastCompletedAllMissionsWeek !== currentWeek) {
+          if (isPreviousWeek(student.lastCompletedAllMissionsWeek, currentWeek)) {
+            student.weeklyMissionStreak += 1;
+          } else {
+            student.weeklyMissionStreak = 1;
+          }
+          student.lastCompletedAllMissionsWeek = currentWeek;
+        }
+
+        // Monthly Streak
+        const currentMonth = date.slice(0, 7); // YYYY-MM
+        if (student.lastCompletedAllMissionsMonth !== currentMonth) {
+          if (isPreviousMonth(student.lastCompletedAllMissionsMonth, currentMonth)) {
+            student.monthlyMissionStreak += 1;
+          } else {
+            student.monthlyMissionStreak = 1;
+          }
+          student.lastCompletedAllMissionsMonth = currentMonth;
+        }
+      }
+      await student.save();
+    }
+  } else {
+    // Reverting completion
+    const sp = mission.spEarned;
+    student.totalSp -= sp;
+    await student.save();
+
+    await SPTransaction.create({
+      email: student.email,
+      studentId: student._id,
+      category: 'mission',
+      sessionLabel: 'Daily Missions',
+      deltaMode: 'absolute',
+      deltaValue: -sp,
+      appliedDelta: -sp,
+      balanceAfter: student.totalSp,
+      reason: `Reverted completion: "${mission.title}"`,
+      dateTime: new Date()
+    });
+
+    mission.spEarned = 0;
+    await mission.save();
+    const summary = await updateDailySummaryCount(student.email, student._id, date);
+
+    // Revert completion bonus if applied
+    if (summary.bonusSpEarned > 0) {
+      student.totalSp -= summary.bonusSpEarned;
+      
+      // Revert streak
+      if (student.lastCompletedAllMissionsDate === date) {
+        student.dailyMissionStreak = Math.max(0, student.dailyMissionStreak - 1);
+        student.lastCompletedAllMissionsDate = '';
+      }
+
+      await student.save();
+
+      await SPTransaction.create({
+        email: student.email,
+        studentId: student._id,
+        category: 'mission_bonus',
+        sessionLabel: 'Daily Missions',
+        deltaMode: 'absolute',
+        deltaValue: -summary.bonusSpEarned,
+        appliedDelta: -summary.bonusSpEarned,
+        balanceAfter: student.totalSp,
+        reason: `Reverted completion bonus (task unchecked)`,
+        dateTime: new Date()
+      });
+
+      summary.bonusSpEarned = 0;
+      await summary.save();
+    }
+  }
+
+  const updatedSummary = await DailyMissionSummary.findOne({ studentId: student._id, date });
+  res.json({
+    success: true,
+    mission,
+    summary: updatedSummary,
+    streaks: {
+      daily: student.dailyMissionStreak,
+      weekly: student.weeklyMissionStreak,
+      monthly: student.monthlyMissionStreak,
+      longest: student.longestMissionStreak
+    }
+  });
+});
+
+api.post('/missions/reorder', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const { orders } = req.body || {};
+  if (!Array.isArray(orders)) {
+    return res.status(400).json({ error: 'Orders array is required' });
+  }
+
+  const ops = orders.map(item => ({
+    updateOne: {
+      filter: { _id: item.id, studentId: student._id },
+      update: { $set: { order: item.order } }
+    }
+  }));
+
+  await Mission.bulkWrite(ops);
+  res.json({ success: true });
+});
+
+api.get('/missions/coach-feedback', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const date = req.query.date || getISTDateString();
+  let summary = await DailyMissionSummary.findOne({ studentId: student._id, date });
+
+  if (!summary) {
+    summary = await DailyMissionSummary.create({
+      email: student.email,
+      studentId: student._id,
+      date,
+      totalTasks: 0,
+      completedTasks: 0,
+      baseSpEarned: 0,
+      bonusSpEarned: 0,
+      qualityAverage: 0,
+      coachFeedback: '',
+      coachFeedbackGeneratedAt: null
+    });
+  }
+
+  if (!summary.coachFeedback) {
+    const [completedMissions, pendingMissions] = await Promise.all([
+      Mission.find({ studentId: student._id, date, completed: true }).lean(),
+      Mission.find({ studentId: student._id, date, completed: false }).lean()
+    ]);
+    
+    const feedback = await generateDailyCoachFeedback(student.name, completedMissions, pendingMissions);
+    summary.coachFeedback = feedback;
+    summary.coachFeedbackGeneratedAt = new Date();
+    await summary.save();
+  }
+
+  res.json({ coachFeedback: summary.coachFeedback });
+});
+
+api.get('/missions/weekly-insights', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const date = req.query.date || getISTDateString();
+  const insights = await getWeeklyInsights(student._id, student.email, date);
+  res.json(insights);
+});
+
+api.get('/missions/monthly-analytics', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const date = req.query.date || getISTDateString();
+  const analytics = await getMonthlyAnalytics(student._id, student.email, date);
+  res.json(analytics);
 });
 
 api.get('/search', async (req, res) => {
