@@ -281,6 +281,51 @@ input {
 .next-list { margin: 0; padding-left: 18px; color: #334155; line-height: 1.6; }
 .empty { color: var(--muted); }
 
+.bank-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.bank-filter select, .bank-filter input {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  color: var(--text);
+  background: #fff;
+  font-family: inherit;
+  font-size: 13px;
+}
+.bank-filter select { min-width: 140px; }
+.bank-filter input { flex: 1; min-width: 160px; }
+.bank-filter input::placeholder { color: var(--muted); }
+.bank-count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.bank-empty { padding: 24px 12px; text-align: center; }
+.bank-filter-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.bank-filter-date input { width: auto; min-width: 0; padding: 6px 8px; font-size: 12px; }
+.bank-sort { min-width: 140px; }
+.bank-summary {
+  display: flex;
+  gap: 16px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: #fbfdff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+.bank-summary b { color: var(--text); font-size: 14px; }
+.bank-summary .positive b { color: var(--green); }
+.bank-summary .negative b { color: var(--red); }
 .bank { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .bank-header, .bank-row {
   display: grid;

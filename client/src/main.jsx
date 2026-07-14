@@ -433,12 +433,82 @@ function Tabs({ tab, setTab, tabs }) {
 }
 
 function SpBank({ transactions }) {
+  const [category, setCategory] = useState('all');
+  const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sortBy, setSortBy] = useState('date_desc');
+  const filtered = transactions.filter(tx => {
+    if (category !== 'all' && tx.category !== category) return false;
+    if (search && !tx.sessionLabel?.toLowerCase().includes(search.toLowerCase())) return false;
+    if (dateFrom) {
+      const d = new Date(tx.dateTime);
+      if (d < new Date(dateFrom)) return false;
+    }
+    if (dateTo) {
+      const d = new Date(tx.dateTime);
+      const to = new Date(dateTo);
+      to.setHours(23, 59, 59, 999);
+      if (d > to) return false;
+    }
+    return true;
+  });
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortBy === 'date_asc') return new Date(a.dateTime) - new Date(b.dateTime);
+    if (sortBy === 'date_desc') return new Date(b.dateTime) - new Date(a.dateTime);
+    if (sortBy === 'amount_asc') return (a.appliedDelta || 0) - (b.appliedDelta || 0);
+    if (sortBy === 'amount_desc') return (b.appliedDelta || 0) - (a.appliedDelta || 0);
+    return 0;
+  });
+  const summary = sorted.reduce((acc, tx) => {
+    if (tx.appliedDelta > 0) { acc.credits += tx.appliedDelta; acc.creditCount++; }
+    if (tx.appliedDelta < 0) { acc.debits += tx.appliedDelta; acc.debitCount++; }
+    return acc;
+  }, { credits: 0, debits: 0, creditCount: 0, debitCount: 0 });
   return (
     <section className="panel">
-      <h2>SP Bank Statement</h2>
+      <div className="bank-filter">
+        <select value={category} onChange={e => setCategory(e.target.value)} aria-label="Filter by category">
+          <option value="all">All categories</option>
+          <option value="attendance">Attendance</option>
+          <option value="poll">Poll</option>
+          <option value="initial">Initial</option>
+          <option value="manual">Manual</option>
+        </select>
+        <input
+          type="text"
+          placeholder="Search session label..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          aria-label="Filter by session label"
+        />
+        <label className="bank-filter-date">
+          From <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} aria-label="Filter from date" />
+        </label>
+        <label className="bank-filter-date">
+          To <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} aria-label="Filter to date" />
+        </label>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Sort order" className="bank-sort">
+          <option value="date_desc">Newest first</option>
+          <option value="date_asc">Oldest first</option>
+          <option value="amount_desc">Highest amount</option>
+          <option value="amount_asc">Lowest amount</option>
+        </select>
+        {sorted.length !== transactions.length && (
+          <span className="bank-count">{sorted.length} of {transactions.length}</span>
+        )}
+      </div>
+      {sorted.length > 0 && sorted.length < transactions.length && (
+        <div className="bank-summary">
+          <span><b>+{summary.credits}</b> SP ({summary.creditCount} credits)</span>
+          <span><b>{summary.debits}</b> SP ({summary.debitCount} debits)</span>
+          <span>Net: <b>{summary.credits + summary.debits}</b> SP</span>
+        </div>
+      )}
       <div className="bank">
         <div className="bank-header"><span>Date & time</span><span>Credit</span><span>Debit</span><span>Balance</span><span>Reason</span></div>
-        {transactions.map(tx => (
+        {sorted.length === 0 && <p className="muted bank-empty">No transactions match your filter.</p>}
+        {sorted.map(tx => (
           <div className="bank-row" key={tx._id}>
             <span>{new Date(tx.dateTime).toLocaleString()}</span>
             <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
