@@ -281,7 +281,7 @@ function StudentView({ profile, onBack }) {
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
-      {tab === 'polls' && <Polls polls={profile.polls} />}
+      {tab === 'polls' && <Polls polls={profile.polls} transactions={profile.transactions} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
   );
@@ -473,21 +473,38 @@ function pollSortKey(label = '') {
   return ((m * 100 + day) * 10) + tod;
 }
 
-function Polls({ polls }) {
+function Polls({ polls, transactions = [] }) {
+  const deltaBySession = useMemo(() => {
+    const m = new Map();
+    for (const t of transactions) {
+      if (t.category === 'poll' && t.sessionLabel) {
+        m.set(t.sessionLabel, (m.get(t.sessionLabel) || 0) + Number(t.appliedDelta || 0));
+      }
+    }
+    return m;
+  }, [transactions]);
   if (!polls.length) return <section className="panel empty">No poll records found.</section>;
   const sorted = [...polls].sort((a, b) => pollSortKey(b.sessionLabel) - pollSortKey(a.sessionLabel));
   return (
     <section className="panel">
       <h2>Polls</h2>
       <div className="cards">
-        {sorted.map(poll => (
-          <article className="card" key={poll._id}>
-            <div className="card-head static">
-              <strong>{poll.sessionLabel}</strong>
-              <span>{poll.attemptedQuestions}/{poll.totalQuestions} attempted</span>
-            </div>
-          </article>
-        ))}
+        {sorted.map(poll => {
+          const delta = deltaBySession.get(poll.sessionLabel) || 0;
+          const cls = delta > 0 ? 'poll-delta positive' : delta < 0 ? 'poll-delta negative' : 'poll-delta neutral';
+          const label = delta > 0 ? `+${delta} SP earned`
+            : delta < 0 ? `${delta} SP applied`
+            : '0 SP (below 50%)';
+          return (
+            <article className="card" key={poll._id}>
+              <div className="card-head static">
+                <strong>{poll.sessionLabel}</strong>
+                <span>{poll.attemptedQuestions}/{poll.totalQuestions} attempted</span>
+              </div>
+              <em className={cls} title="SP change applied by the scoring rubric">{label}</em>
+            </article>
+          );
+        })}
       </div>
     </section>
   );

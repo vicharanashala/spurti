@@ -314,6 +314,17 @@ input {
   text-align: left;
 }
 .card-head.static { cursor: default; }
+.poll-delta {
+  display: block;
+  margin-top: 6px;
+  font-style: normal;
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+.poll-delta.positive { color: var(--green); }
+.poll-delta.negative { color: var(--red); }
+.poll-delta.neutral { color: var(--muted); }
 .positive { color: var(--green); }
 .negative { color: var(--red); }
 .neutral { color: var(--amber); }
