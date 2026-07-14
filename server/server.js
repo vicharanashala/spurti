@@ -13,6 +13,11 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import Challenge from './models/Challenge.js';
+import ChallengeParticipant from './models/ChallengeParticipant.js';
+import ChallengeProgress from './models/ChallengeProgress.js';
+import ChallengeLeaderboard from './models/ChallengeLeaderboard.js';
+import ChallengeReward from './models/ChallengeReward.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -177,15 +182,22 @@ function excusedPayload(student) {
 
 async function studentPayload(student) {
   const email = student.email;
+  
+  // Authoritative check and reward for any recently expired challenges
+  await lazyCheckChallenges();
+
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents, challengeRewards, unseenRewards] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
+    ChallengeReward.find({ email, type: 'badge' }).lean(),
+    ChallengeReward.find({ email, isAcknowledged: false }).populate('challengeId', 'name colorTheme banner').lean()
   ]);
+
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
@@ -238,8 +250,147 @@ async function studentPayload(student) {
       pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
     },
     leaderboard: leaderboard.map(mapRow),
-    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
+    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow),
+    challengeBadges: challengeRewards.map(r => r.badge).filter(Boolean),
+    unseenRewards
   };
+}
+
+async function rewardChallengeWinners(challengeId) {
+  const challenge = await Challenge.findById(challengeId);
+  if (!challenge || challenge.isRewarded) return;
+
+  // Mark as rewarded immediately to prevent duplicate runs
+  challenge.isRewarded = true;
+  challenge.status = 'completed';
+  await challenge.save();
+
+  // Find all completions sorted by completedAt (earliest first)
+  const completions = await ChallengeParticipant.find({ challengeId, status: 'completed' })
+    .sort({ completedAt: 1, joinedAt: 1 })
+    .lean();
+
+  let topParticipants = [...completions];
+
+  // If we don't have enough completions, get in-progress ones sorted by progressPct desc, lastUpdated asc
+  if (topParticipants.length < 3) {
+    const incomplete = await ChallengeParticipant.find({ challengeId, status: 'joined' }).lean();
+    const progressList = await ChallengeProgress.find({ challengeId }).lean();
+    const progressMap = new Map(progressList.map(p => [String(p.studentId), p]));
+
+    const incompleteRanked = incomplete.map(p => {
+      const prog = progressMap.get(String(p.studentId));
+      return {
+        ...p,
+        completedTasks: prog?.completedTasks || 0,
+        progressPct: prog?.progressPct || 0,
+        lastUpdated: prog?.lastUpdated || p.joinedAt
+      };
+    });
+
+    incompleteRanked.sort((a, b) => {
+      if (b.progressPct !== a.progressPct) return b.progressPct - a.progressPct;
+      return new Date(a.lastUpdated) - new Date(b.lastUpdated);
+    });
+
+    topParticipants = [...topParticipants, ...incompleteRanked];
+  }
+
+  const rewardBonus = async (participant, type, spPoints) => {
+    if (!participant || spPoints <= 0) return;
+    const student = await Student.findById(participant.studentId);
+    if (!student) return;
+
+    const sessionLabel = challenge.name;
+    const reason = `Challenge ${type === 'winner' ? 'Winner' : type === 'runner_up' ? 'Runner-Up' : 'Third Place'} Bonus: +${spPoints} SP for "${challenge.name}"`;
+
+    const balanceAfter = student.totalSp + spPoints;
+    await SPTransaction.create({
+      email: student.email,
+      studentId: student._id,
+      category: 'challenge',
+      sessionLabel,
+      deltaMode: 'absolute',
+      deltaValue: spPoints,
+      appliedDelta: spPoints,
+      balanceAfter,
+      reason,
+      dateTime: new Date()
+    });
+
+    student.totalSp = balanceAfter;
+    if (balanceAfter > student.highestSpEver) {
+      student.highestSpEver = balanceAfter;
+    }
+    await student.save();
+
+    await ChallengeReward.create({
+      challengeId,
+      studentId: student._id,
+      email: student.email,
+      type,
+      spPoints,
+      isAcknowledged: false
+    });
+  };
+
+  if (topParticipants[0]) await rewardBonus(topParticipants[0], 'winner', challenge.winnerBonus);
+  if (topParticipants[1]) await rewardBonus(topParticipants[1], 'runner_up', challenge.runnerUpBonus);
+  if (topParticipants[2]) await rewardBonus(topParticipants[2], 'third', challenge.thirdBonus);
+
+  // Write to ChallengeLeaderboard
+  await ChallengeLeaderboard.deleteMany({ challengeId });
+  const standings = [];
+  for (let i = 0; i < topParticipants.length; i++) {
+    const p = topParticipants[i];
+    const student = await Student.findById(p.studentId).lean();
+    if (!student) continue;
+
+    let spEarned = p.status === 'completed' ? challenge.spPoints : 0;
+    if (i === 0 && challenge.winnerBonus > 0) spEarned += challenge.winnerBonus;
+    if (i === 1 && challenge.runnerUpBonus > 0) spEarned += challenge.runnerUpBonus;
+    if (i === 2 && challenge.thirdBonus > 0) spEarned += challenge.thirdBonus;
+
+    standings.push({
+      challengeId,
+      studentId: p.studentId,
+      email: p.email,
+      name: student.name,
+      progressPct: p.progressPct ?? (p.status === 'completed' ? 100 : 0),
+      completionPct: p.status === 'completed' ? 100 : (p.progressPct ?? 0),
+      spEarned,
+      rank: i + 1,
+      lastUpdated: new Date()
+    });
+  }
+
+  if (standings.length > 0) {
+    await ChallengeLeaderboard.insertMany(standings);
+  }
+}
+
+async function lazyCheckChallenges() {
+  try {
+    const now = new Date();
+    // Auto-activate upcoming challenges
+    await Challenge.updateMany(
+      { status: 'upcoming', startDate: { $lte: now } },
+      { $set: { status: 'active' } }
+    );
+    
+    // Process expired active challenges
+    const expired = await Challenge.find({
+      status: 'active',
+      endDate: { $lte: now },
+      isRewarded: false
+    });
+
+    for (const ch of expired) {
+      await rewardChallengeWinners(ch._id);
+    }
+  } catch (err) {
+    console.error('lazyCheckChallenges failed:', err?.message);
+  }
 }
 
 function isAdmin(req) {
@@ -557,7 +708,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     };
   });
 
-  const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
+  const categoryTotals = ['initial', 'attendance', 'poll', 'manual', 'challenge'].map(category => {
     const rows = activeTransactions.filter(t => t.category === category);
     return {
       category,
@@ -616,6 +767,645 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
+
+// --- Challenge Student APIs ---
+
+// 1. Get active and upcoming challenges
+api.get('/challenges', authenticateStudent, async (req, res) => {
+  try {
+    await lazyCheckChallenges();
+    const challenges = await Challenge.find({ status: { $ne: 'completed' } }).sort({ startDate: 1 }).lean();
+    
+    const participations = await ChallengeParticipant.find({
+      studentId: req.student._id,
+      challengeId: { $in: challenges.map(c => c._id) }
+    }).lean();
+    
+    const partMap = new Map(participations.map(p => [String(p.challengeId), p]));
+    
+    const progressList = await ChallengeProgress.find({
+      studentId: req.student._id,
+      challengeId: { $in: challenges.map(c => c._id) }
+    }).lean();
+    const progMap = new Map(progressList.map(p => [String(p.challengeId), p]));
+
+    const results = challenges.map(ch => {
+      const part = partMap.get(String(ch._id));
+      const prog = progMap.get(String(ch._id));
+      return {
+        ...ch,
+        enrollmentStatus: part ? part.status : 'not_joined',
+        completedTasks: prog ? prog.completedTasks : 0,
+        progressPct: prog ? prog.progressPct : 0
+      };
+    });
+
+    res.json({ challenges: results });
+  } catch (error) {
+    console.error('Failed to get challenges:', error);
+    res.status(500).json({ error: 'Failed to fetch challenges' });
+  }
+});
+
+// 2. Get completed challenges for history view
+api.get('/challenges/completed', authenticateStudent, async (req, res) => {
+  try {
+    await lazyCheckChallenges();
+    const participations = await ChallengeParticipant.find({
+      studentId: req.student._id,
+      status: 'completed'
+    }).populate('challengeId').sort({ completedAt: -1 }).lean();
+
+    const rewards = await ChallengeReward.find({
+      studentId: req.student._id,
+      challengeId: { $in: participations.map(p => p.challengeId?._id).filter(Boolean) }
+    }).lean();
+    
+    const rewardsMap = new Map();
+    for (const r of rewards) {
+      const key = `${r.challengeId}|${r.type}`;
+      rewardsMap.set(key, r);
+    }
+
+    const results = participations.map(p => {
+      const ch = p.challengeId || {};
+      const winReward = rewardsMap.get(`${ch._id}|winner`);
+      const ruReward = rewardsMap.get(`${ch._id}|runner_up`);
+      const tReward = rewardsMap.get(`${ch._id}|third`);
+      
+      let badgeAwarded = ch.rewardBadge || '';
+      let bonusSp = 0;
+      let placement = 'Participant';
+
+      if (winReward) { placement = 'Winner 🥇'; bonusSp = winReward.spPoints; }
+      else if (ruReward) { placement = 'Runner-up 🥈'; bonusSp = ruReward.spPoints; }
+      else if (tReward) { placement = 'Third Place 🥉'; bonusSp = tReward.spPoints; }
+
+      return {
+        _id: p._id,
+        challengeId: ch._id,
+        name: ch.name,
+        type: ch.type,
+        banner: ch.banner,
+        completedAt: p.completedAt,
+        spEarned: ch.spPoints + bonusSp,
+        badgeAwarded,
+        placement,
+        colorTheme: ch.colorTheme
+      };
+    });
+
+    res.json({ completedChallenges: results });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch completed challenges' });
+  }
+});
+
+// 3. Get specific challenge details, leaderboard, and progress
+api.get('/challenges/:id', authenticateStudent, async (req, res) => {
+  try {
+    const challenge = await Challenge.findById(req.params.id).lean();
+    if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+
+    const [participant, progress, totalParticipants] = await Promise.all([
+      ChallengeParticipant.findOne({ challengeId: challenge._id, studentId: req.student._id }).lean(),
+      ChallengeProgress.findOne({ challengeId: challenge._id, studentId: req.student._id }).lean(),
+      ChallengeParticipant.countDocuments({ challengeId: challenge._id, status: { $ne: 'left' } })
+    ]);
+
+    let leaderboard = [];
+    if (challenge.status === 'completed') {
+      leaderboard = await ChallengeLeaderboard.find({ challengeId: challenge._id }).sort({ rank: 1 }).lean();
+    } else {
+      const allParts = await ChallengeParticipant.find({ challengeId: challenge._id, status: { $ne: 'left' } }).lean();
+      const allProgress = await ChallengeProgress.find({ challengeId: challenge._id }).lean();
+      const progMap = new Map(allProgress.map(p => [String(p.studentId), p]));
+      
+      const students = await Student.find({ _id: { $in: allParts.map(p => p.studentId) } }).lean();
+      const studentMap = new Map(students.map(s => [String(s._id), s]));
+
+      const ranked = allParts.map(p => {
+        const prog = progMap.get(String(p.studentId));
+        const student = studentMap.get(String(p.studentId));
+        return {
+          studentId: p.studentId,
+          email: p.email,
+          name: student ? student.name : 'Unknown Student',
+          progressPct: prog ? prog.progressPct : 0,
+          completionPct: p.status === 'completed' ? 100 : (prog ? prog.progressPct : 0),
+          lastUpdated: prog ? prog.lastUpdated : p.joinedAt,
+          joinedAt: p.joinedAt,
+          status: p.status
+        };
+      });
+
+      const completedMap = new Map(allParts.map(p => [String(p.studentId), p.completedAt]));
+      
+      ranked.sort((a, b) => {
+        const aComp = a.status === 'completed';
+        const bComp = b.status === 'completed';
+        if (aComp && !bComp) return -1;
+        if (!aComp && bComp) return 1;
+        if (aComp && bComp) {
+          const aTime = completedMap.get(String(a.studentId)) || a.joinedAt;
+          const bTime = completedMap.get(String(b.studentId)) || b.joinedAt;
+          return new Date(aTime) - new Date(bTime);
+        }
+        if (b.progressPct !== a.progressPct) return b.progressPct - a.progressPct;
+        return new Date(a.lastUpdated) - new Date(b.lastUpdated);
+      });
+
+      leaderboard = ranked.map((r, i) => ({
+        studentId: r.studentId,
+        email: r.email,
+        name: r.name,
+        progressPct: r.progressPct,
+        completionPct: r.completionPct,
+        spEarned: r.status === 'completed' ? challenge.spPoints : 0,
+        rank: i + 1
+      }));
+    }
+
+    const feed = [];
+    const allProgressLogs = await ChallengeProgress.find({ challengeId: challenge._id })
+      .populate('studentId', 'name')
+      .lean();
+    
+    for (const p of allProgressLogs) {
+      const studentName = p.studentId?.name || 'A student';
+      for (const log of (p.history || [])) {
+        let actionMsg = 'completed a task';
+        if (log.action === 'quiz_complete') actionMsg = 'completed a quiz';
+        else if (log.action === 'assignment_submit') actionMsg = 'submitted an assignment';
+        else if (log.action === 'attendance_mark') actionMsg = 'marked attendance';
+        else if (log.action === 'study_goal_complete') actionMsg = 'completed a study goal';
+        else if (log.action === 'weekly_goal_complete') actionMsg = 'completed weekly goal';
+        else if (log.action === 'study_session_finish') actionMsg = 'finished a study session';
+        else if (log.action === 'reflection_upload') actionMsg = 'uploaded a reflection';
+
+        feed.push({
+          name: studentName,
+          message: actionMsg,
+          timestamp: log.timestamp || p.updatedAt
+        });
+      }
+    }
+
+    const joins = await ChallengeParticipant.find({ challengeId: challenge._id, status: { $ne: 'left' } })
+      .populate('studentId', 'name')
+      .limit(20)
+      .lean();
+    for (const j of joins) {
+      feed.push({
+        name: j.studentId?.name || 'A student',
+        message: 'joined the challenge',
+        timestamp: j.joinedAt
+      });
+    }
+
+    feed.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    const recentFeed = feed.slice(0, 25);
+
+    res.json({
+      challenge,
+      enrollmentStatus: participant ? participant.status : 'not_joined',
+      progress: progress ? {
+        completedTasks: progress.completedTasks,
+        targetTasks: progress.targetTasks,
+        progressPct: progress.progressPct,
+        history: progress.history
+      } : null,
+      totalParticipants,
+      leaderboard: leaderboard.slice(0, 50),
+      myRank: leaderboard.find(x => String(x.studentId) === String(req.student._id))?.rank || null,
+      activityFeed: recentFeed
+    });
+  } catch (error) {
+    console.error('Challenge details failed:', error);
+    res.status(500).json({ error: 'Failed to fetch challenge details' });
+  }
+});
+
+// 4. Join a challenge
+api.post('/challenges/:id/join', authenticateStudent, async (req, res) => {
+  try {
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+    
+    if (challenge.status === 'completed' || challenge.endDate < new Date()) {
+      return res.status(400).json({ error: 'This challenge has already completed.' });
+    }
+    if (challenge.status === 'paused') {
+      return res.status(400).json({ error: 'This challenge is paused by administrator.' });
+    }
+
+    if (challenge.maxParticipants) {
+      const activeCount = await ChallengeParticipant.countDocuments({ challengeId: challenge._id, status: 'joined' });
+      if (activeCount >= challenge.maxParticipants) {
+        return res.status(400).json({ error: 'Challenge is full. Maximum participant limit reached.' });
+      }
+    }
+
+    let participant = await ChallengeParticipant.findOne({
+      challengeId: challenge._id,
+      studentId: req.student._id
+    });
+
+    if (participant) {
+      if (participant.status === 'joined' || participant.status === 'completed') {
+        return res.status(400).json({ error: 'You are already in this challenge.' });
+      }
+      participant.status = 'joined';
+      participant.joinedAt = new Date();
+      participant.leftAt = null;
+      await participant.save();
+    } else {
+      participant = await ChallengeParticipant.create({
+        challengeId: challenge._id,
+        studentId: req.student._id,
+        email: req.student.email,
+        status: 'joined',
+        joinedAt: new Date()
+      });
+    }
+
+    await ChallengeProgress.findOneAndUpdate(
+      { challengeId: challenge._id, studentId: req.student._id },
+      {
+        email: req.student.email,
+        completedTasks: 0,
+        targetTasks: challenge.tasksRequired,
+        progressPct: 0,
+        history: [],
+        lastUpdated: new Date()
+      },
+      { upsert: true, new: true }
+    );
+
+    res.json({ success: true, participant });
+  } catch (error) {
+    console.error('Join challenge failed:', error);
+    res.status(500).json({ error: 'Failed to join challenge' });
+  }
+});
+
+// 5. Leave a challenge (only if not started yet)
+api.post('/challenges/:id/leave', authenticateStudent, async (req, res) => {
+  try {
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+
+    if (challenge.startDate <= new Date()) {
+      return res.status(400).json({ error: 'You cannot leave a challenge that has already started.' });
+    }
+
+    const participant = await ChallengeParticipant.findOne({
+      challengeId: challenge._id,
+      studentId: req.student._id
+    });
+
+    if (!participant || participant.status === 'left') {
+      return res.status(400).json({ error: 'You are not enrolled in this challenge.' });
+    }
+
+    participant.status = 'left';
+    participant.leftAt = new Date();
+    await participant.save();
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to leave challenge' });
+  }
+});
+
+// 6. Acknowledge reward (confirms celebration is seen)
+api.post('/challenges/rewards/:rewardId/ack', authenticateStudent, async (req, res) => {
+  try {
+    const reward = await ChallengeReward.findOne({
+      _id: req.params.rewardId,
+      studentId: req.student._id
+    });
+    if (!reward) return res.status(404).json({ error: 'Reward not found or unauthorized' });
+
+    reward.isAcknowledged = true;
+    await reward.save();
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to acknowledge reward' });
+  }
+});
+
+// 7. Activity Trigger API (Simulation Tool for Automatic Progress Updates)
+api.post('/activities/trigger', authenticateStudent, async (req, res) => {
+  try {
+    const { eventType } = req.body || {};
+    const validEvents = ['quiz_complete', 'assignment_submit', 'attendance_mark', 'study_goal_complete', 'weekly_goal_complete', 'study_session_finish', 'reflection_upload'];
+    if (!eventType || !validEvents.includes(eventType)) {
+      return res.status(400).json({ error: 'Invalid event type' });
+    }
+
+    const now = new Date();
+    const joined = await ChallengeParticipant.find({
+      studentId: req.student._id,
+      status: 'joined'
+    }).lean();
+
+    const challengeIds = joined.map(p => p.challengeId);
+    
+    const activeChallenges = await Challenge.find({
+      _id: { $in: challengeIds },
+      status: 'active',
+      startDate: { $lte: now },
+      endDate: { $gte: now },
+      'completionCriteria.eventType': eventType
+    });
+
+    const updates = [];
+
+    for (const ch of activeChallenges) {
+      const progress = await ChallengeProgress.findOne({
+        challengeId: ch._id,
+        studentId: req.student._id
+      });
+      if (!progress || progress.completedTasks >= ch.tasksRequired) continue;
+
+      progress.completedTasks += 1;
+      progress.progressPct = Math.min(100, Math.round((progress.completedTasks / ch.tasksRequired) * 100));
+      progress.history.push({
+        action: eventType,
+        value: 1,
+        timestamp: new Date()
+      });
+      progress.lastUpdated = new Date();
+      await progress.save();
+
+      updates.push({
+        challengeName: ch.name,
+        completedTasks: progress.completedTasks,
+        targetTasks: ch.tasksRequired,
+        progressPct: progress.progressPct
+      });
+
+      if (progress.completedTasks === ch.tasksRequired) {
+        await ChallengeParticipant.updateOne(
+          { challengeId: ch._id, studentId: req.student._id },
+          { $set: { status: 'completed', completedAt: new Date() } }
+        );
+
+        if (ch.spPoints > 0) {
+          const sessionLabel = ch.name;
+          const reason = `Challenge Completion: +${ch.spPoints} SP for completing "${ch.name}"`;
+          const balanceAfter = req.student.totalSp + ch.spPoints;
+
+          await SPTransaction.create({
+            email: req.student.email,
+            studentId: req.student._id,
+            category: 'challenge',
+            sessionLabel,
+            deltaMode: 'absolute',
+            deltaValue: ch.spPoints,
+            appliedDelta: ch.spPoints,
+            balanceAfter,
+            reason,
+            dateTime: new Date()
+          });
+
+          await ChallengeReward.create({
+            challengeId: ch._id,
+            studentId: req.student._id,
+            email: req.student.email,
+            type: 'completion',
+            spPoints: ch.spPoints,
+            isAcknowledged: false
+          });
+
+          req.student.totalSp = balanceAfter;
+          if (balanceAfter > req.student.highestSpEver) {
+            req.student.highestSpEver = balanceAfter;
+          }
+          await req.student.save();
+        }
+
+        if (ch.rewardBadge) {
+          await ChallengeReward.create({
+            challengeId: ch._id,
+            studentId: req.student._id,
+            email: req.student.email,
+            type: 'badge',
+            badge: ch.rewardBadge,
+            isAcknowledged: false
+          });
+        }
+      }
+    }
+
+    res.json({ success: true, updates });
+  } catch (error) {
+    console.error('Failed to trigger activity event:', error);
+    res.status(500).json({ error: 'Failed to process activity event' });
+  }
+});
+
+// --- Challenge Admin APIs ---
+
+// 1. Create challenge (Admin only)
+api.post('/challenges', adminGuard, async (req, res) => {
+  try {
+    const {
+      name, description, banner, type, startDate, endDate, maxParticipants,
+      eligibilityRules, difficulty, tasksRequired, completionCriteria, rewardBadge,
+      spPoints, winnerBonus, runnerUpBonus, thirdBonus, colorTheme
+    } = req.body || {};
+
+    if (!name || !type || !startDate || !endDate || !completionCriteria?.eventType) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const challenge = await Challenge.create({
+      name,
+      description: description || '',
+      banner: banner || '🏆',
+      type,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      maxParticipants: maxParticipants ? Number(maxParticipants) : null,
+      eligibilityRules: eligibilityRules || '',
+      difficulty: difficulty || 'Easy',
+      tasksRequired: tasksRequired ? Number(tasksRequired) : 1,
+      completionCriteria,
+      rewardBadge: rewardBadge || '',
+      spPoints: spPoints ? Number(spPoints) : 0,
+      winnerBonus: winnerBonus ? Number(winnerBonus) : 0,
+      runnerUpBonus: runnerUpBonus ? Number(runnerUpBonus) : 0,
+      thirdBonus: thirdBonus ? Number(thirdBonus) : 0,
+      colorTheme: colorTheme || 'linear-gradient(135deg, #176b87, #0f4d62)',
+      status: 'upcoming',
+      isRewarded: false
+    });
+
+    res.json({ success: true, challenge });
+  } catch (error) {
+    console.error('Create challenge error:', error);
+    res.status(500).json({ error: 'Failed to create challenge' });
+  }
+});
+
+// 2. Update/Edit challenge details (Admin only)
+api.put('/challenges/:id', adminGuard, async (req, res) => {
+  try {
+    const challenge = await Challenge.findById(req.params.id);
+    if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+
+    const fields = [
+      'name', 'description', 'banner', 'type', 'startDate', 'endDate', 'maxParticipants',
+      'eligibilityRules', 'difficulty', 'tasksRequired', 'completionCriteria', 'rewardBadge',
+      'spPoints', 'winnerBonus', 'runnerUpBonus', 'thirdBonus', 'colorTheme', 'status'
+    ];
+
+    for (const f of fields) {
+      if (req.body[f] !== undefined) {
+        if (f === 'startDate' || f === 'endDate') challenge[f] = new Date(req.body[f]);
+        else challenge[f] = req.body[f];
+      }
+    }
+
+    await challenge.save();
+    res.json({ success: true, challenge });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update challenge' });
+  }
+});
+
+// 3. Delete challenge (Admin only)
+api.delete('/challenges/:id', adminGuard, async (req, res) => {
+  try {
+    const challengeId = req.params.id;
+    const challenge = await Challenge.findById(challengeId);
+    if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+
+    await Promise.all([
+      Challenge.deleteOne({ _id: challengeId }),
+      ChallengeParticipant.deleteMany({ challengeId }),
+      ChallengeProgress.deleteMany({ challengeId }),
+      ChallengeLeaderboard.deleteMany({ challengeId }),
+      ChallengeReward.deleteMany({ challengeId })
+    ]);
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete challenge' });
+  }
+});
+
+// 4. Force Reward Winners (Admin only)
+api.post('/challenges/:id/reward', adminGuard, async (req, res) => {
+  try {
+    const challengeId = req.params.id;
+    const challenge = await Challenge.findById(challengeId);
+    if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+
+    if (challenge.isRewarded) {
+      return res.status(400).json({ error: 'This challenge has already been rewarded.' });
+    }
+
+    await rewardChallengeWinners(challengeId);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Manual reward winners failed:', error);
+    res.status(500).json({ error: 'Failed to reward winners' });
+  }
+});
+
+// 5. View Participants and Progress (Admin only)
+api.get('/admin/challenges/:id/participants', adminGuard, async (req, res) => {
+  try {
+    const challengeId = req.params.id;
+    const participants = await ChallengeParticipant.find({ challengeId, status: { $ne: 'left' } }).lean();
+    const progressList = await ChallengeProgress.find({ challengeId }).lean();
+    const progressMap = new Map(progressList.map(p => [String(p.studentId), p]));
+    
+    const students = await Student.find({ _id: { $in: participants.map(p => p.studentId) } }).lean();
+    const studentMap = new Map(students.map(s => [String(s._id), s]));
+
+    const result = participants.map(p => {
+      const prog = progressMap.get(String(p.studentId));
+      const student = studentMap.get(String(p.studentId));
+      return {
+        _id: p._id,
+        studentId: p.studentId,
+        email: p.email,
+        name: student ? student.name : 'Unknown student',
+        status: p.status,
+        joinedAt: p.joinedAt,
+        completedAt: p.completedAt,
+        completedTasks: prog ? prog.completedTasks : 0,
+        progressPct: prog ? prog.progressPct : 0
+      };
+    });
+
+    res.json({ participants: result });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch challenge participants' });
+  }
+});
+
+// 6. View Challenge Analytics (Admin only)
+api.get('/admin/challenges/analytics', adminGuard, async (req, res) => {
+  try {
+    const [challenges, participants, progressLogs, rewards, studentsCount] = await Promise.all([
+      Challenge.find().lean(),
+      ChallengeParticipant.find({ status: { $ne: 'left' } }).lean(),
+      ChallengeProgress.find().lean(),
+      ChallengeReward.find().lean(),
+      Student.countDocuments({ status: 'active' })
+    ]);
+
+    const activeChallenges = challenges.filter(c => c.status === 'active').length;
+    const totalCompletions = participants.filter(p => p.status === 'completed').length;
+    const totalParticipationCount = participants.length;
+
+    const participationRate = studentsCount > 0 ? Math.round((totalParticipationCount / studentsCount) * 100) : 0;
+    
+    const totalProgPct = progressLogs.reduce((sum, p) => sum + p.progressPct, 0);
+    const averageProgress = totalParticipationCount > 0 ? Math.round(totalProgPct / totalParticipationCount) : 0;
+
+    const challengeCounts = {};
+    for (const p of participants) {
+      challengeCounts[p.challengeId] = (challengeCounts[p.challengeId] || 0) + 1;
+    }
+    let mostPopularId = null;
+    let maxCount = 0;
+    for (const [id, count] of Object.entries(challengeCounts)) {
+      if (count > maxCount) {
+        maxCount = count;
+        mostPopularId = id;
+      }
+    }
+    const mostPopular = mostPopularId ? challenges.find(c => String(c._id) === mostPopularId)?.name : 'None';
+
+    const totalSpAwarded = rewards.reduce((sum, r) => sum + r.spPoints, 0);
+    const standardRewards = rewards.filter(r => r.type === 'completion').reduce((sum, r) => sum + r.spPoints, 0);
+    const bonusRewards = rewards.filter(r => ['winner', 'runner_up', 'third'].includes(r.type)).reduce((sum, r) => sum + r.spPoints, 0);
+
+    res.json({
+      activeChallenges,
+      totalCompletions,
+      participationRate,
+      completionRate: totalParticipationCount > 0 ? Math.round((totalCompletions / totalParticipationCount) * 100) : 0,
+      averageProgress,
+      mostPopularChallenge: mostPopular,
+      rewardDistribution: {
+        totalSpAwarded,
+        standardRewards,
+        bonusRewards
+      }
+    });
+  } catch (error) {
+    console.error('Analytics aggregation failed:', error);
+    res.status(500).json({ error: 'Failed to fetch challenge analytics' });
+  }
+});
 
 app.use('/api', api);
 app.use('/spurti/api', api);

@@ -514,3 +514,278 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+/* ==========================================
+   STUDY CHALLENGES SYSTEM STYLES
+   ========================================== */
+
+.challenges-tab-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: fadeIn 0.3s ease;
+}
+
+.challenges-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.challenge-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.challenge-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 35px rgba(23, 32, 51, 0.16);
+}
+
+.challenge-card-header {
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--line);
+}
+
+.challenge-emoji {
+  font-size: 28px;
+}
+
+.challenge-card-badge-row {
+  display: flex;
+  gap: 6px;
+}
+
+.challenge-badge {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.challenge-badge.diff-easy { background: #dcfce7; color: #15803d; }
+.challenge-badge.diff-medium { background: #fef3c7; color: #b45309; }
+.challenge-badge.diff-hard { background: #fee2e2; color: #b91c1c; }
+.challenge-badge.type { background: #e0f2fe; color: #0369a1; }
+.challenge-badge.completed { background: #dcfce7; color: #15803d; }
+
+.challenge-card-content {
+  padding: 18px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.challenge-card-content h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text);
+}
+
+.challenge-desc {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+  flex: 1;
+}
+
+.challenge-dates-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px solid #f1f5f9;
+  padding-top: 10px;
+}
+
+.challenge-rewards-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.challenge-rewards-summary span {
+  background: #f1f5f9;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.challenge-rewards-summary .winner-tag {
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.challenge-rewards-summary .badge-tag {
+  background: #f5f3ff;
+  color: #6d28d9;
+  border: 1px solid #ddd6fe;
+}
+
+.challenge-card-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.progress-track {
+  height: 6px;
+  background: #e2e8f0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.challenge-card-actions {
+  padding: 16px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.challenge-card.completed {
+  border-top: none !important;
+}
+
+.placement-label {
+  font-size: 13px;
+  margin: 8px 0;
+}
+
+.sp-earned-tag {
+  background: #ecfdf5 !important;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+
+.celebration-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.celebration-panel {
+  transform: scale(0.9);
+  animation: scaleUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.celebration-trophy-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.celebration-trophy {
+  animation: trophyFloat 3s ease-in-out infinite, trophyGlow 2s ease-in-out infinite alternate;
+}
+
+.sparkle {
+  transform-origin: center;
+  animation: sparkleAnim 1.5s linear infinite;
+}
+
+.sparkle.s2 { animation-delay: 0.5s; }
+.sparkle.s3 { animation-delay: 1s; }
+
+.challenge-status-badge {
+  font-size: 11px;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: capitalize;
+}
+
+.challenge-status-badge.upcoming { background: #eff6ff; color: #2563eb; }
+.challenge-status-badge.active { background: #ecfdf5; color: #059669; }
+.challenge-status-badge.paused { background: #fff7ed; color: #ea580c; }
+.challenge-status-badge.completed { background: #f1f5f9; color: #475569; }
+.challenge-status-badge.joined { background: #ecfdf5; color: #059669; }
+
+.challenge-dashboard-modal {
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.35);
+  animation: modalSlideIn 0.3s ease;
+}
+
+@keyframes scaleUp {
+  to { transform: scale(1); }
+}
+
+@keyframes trophyFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes trophyGlow {
+  from { filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.4)); }
+  to { filter: drop-shadow(0 0 16px rgba(245, 158, 11, 0.8)); }
+}
+
+@keyframes sparkleAnim {
+  0%, 100% { transform: scale(0); opacity: 0; }
+  50% { transform: scale(1.2); opacity: 1; }
+}
+
+@keyframes modalSlideIn {
+  from { transform: translateY(40px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.gold-text { color: #d97706 !important; font-weight: bold; }
+.silver-text { color: #475569 !important; font-weight: bold; }
+.bronze-text { color: #b45309 !important; font-weight: bold; }
+
+.developer-sim-panel {
+  border: 1px dashed var(--amber) !important;
+  background: #fffbeb !important;
+}
+
+.developer-sim-panel button {
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.developer-sim-panel button:hover {
+  background: #fffbeb;
+  border-color: var(--amber);
+}
+
+.admin-actions-cell button {
+  min-height: auto;
+}
