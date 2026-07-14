@@ -279,8 +279,9 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['heatmap','Heatmap'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
+      {tab === 'heatmap' && <SpHeatmap transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
@@ -447,6 +448,129 @@ function SpBank({ transactions }) {
             <p>{tx.reason}</p>
           </div>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function SpHeatmap({ transactions }) {
+  const CELL_SIZE = 14;
+  const CELL_GAP = 3;
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  const txByDate = {};
+  transactions.forEach(tx => {
+    const d = new Date(tx.dateTime);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    if (!txByDate[key]) txByDate[key] = { credits: 0, debits: 0, count: 0 };
+    if (tx.appliedDelta > 0) txByDate[key].credits += tx.appliedDelta;
+    else if (tx.appliedDelta < 0) txByDate[key].debits += Math.abs(tx.appliedDelta);
+    txByDate[key].count++;
+  });
+
+  const allDates = Object.keys(txByDate);
+  if (allDates.length === 0) {
+    return (
+      <section className="panel">
+        <h2>SP Activity Heatmap</h2>
+        <p className="muted">No activity recorded yet.</p>
+      </section>
+    );
+  }
+
+  const sortedDates = allDates.sort();
+  const startDate = new Date(sortedDates[0]);
+  const endDate = new Date(sortedDates[sortedDates.length - 1]);
+  const today = new Date();
+
+  const totalDays = Math.ceil((Math.max(endDate, today).getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  const weekCount = Math.ceil(totalDays / 7);
+
+  const maxCredit = Math.max(...Object.values(txByDate).map(v => v.credits), 1);
+  const levelColor = (credits) => {
+    if (credits === 0) return 'var(--line)';
+    const intensity = Math.min(credits / maxCredit, 1);
+    if (intensity < 0.25) return '#b3e5d1';
+    if (intensity < 0.5) return '#69d4a8';
+    if (intensity < 0.75) return '#29c07b';
+    return '#12805c';
+  };
+
+  const weeks = [];
+  let cur = new Date(startDate);
+  cur.setDate(cur.getDate() - cur.getDay());
+  for (let w = 0; w < weekCount; w++) {
+    const week = [];
+    for (let d = 0; d < 7; d++) {
+      const dateStr = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`;
+      const data = txByDate[dateStr] || null;
+      const isFuture = cur > today;
+      const isEmpty = !data || (data.credits === 0 && data.debits === 0);
+      week.push({
+        date: new Date(cur),
+        dateStr,
+        data,
+        isFuture,
+        isEmpty,
+        color: isFuture ? 'transparent' : isEmpty ? 'var(--line)' : levelColor(data.credits)
+      });
+      cur.setDate(cur.getDate() + 1);
+    }
+    weeks.push(week);
+  }
+
+  const totalCredits = transactions.filter(tx => tx.appliedDelta > 0).reduce((s, tx) => s + tx.appliedDelta, 0);
+  const totalDebits = transactions.filter(tx => tx.appliedDelta < 0).reduce((s, tx) => s + Math.abs(tx.appliedDelta), 0);
+  const activeDays = Object.values(txByDate).filter(v => v.credits > 0 || v.debits > 0).length;
+
+  return (
+    <section className="panel">
+      <h2>SP Activity Heatmap</h2>
+      <div className="heatmap-summary">
+        <span><strong className="positive">{totalCredits}</strong> total credits</span>
+        <span><strong className="negative">{totalDebits}</strong> total debits</span>
+        <span><strong>{activeDays}</strong> active days</span>
+      </div>
+      <div className="heatmap-wrap">
+        <div className="heatmap-labels">
+          {DAYS.map(d => <span key={d}>{d}</span>)}
+        </div>
+        <div className="heatmap-grid">
+          {weeks.map((week, wi) => (
+            <div key={wi} className="heatmap-week">
+              {week.map((day, di) => (
+                <div
+                  key={di}
+                  className={`heatmap-cell${day.isFuture ? ' future' : ''}`}
+                  style={{ background: day.color }}
+                  title={day.isFuture ? 'Future' : day.data ? `${day.dateStr}: +${day.data.credits} / -${day.data.debits} SP (${day.data.count} txns)` : `${day.dateStr}: No activity`}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="heatmap-months">
+        {(() => {
+          const monthLabels = [];
+          let lastMonth = -1;
+          weeks.forEach((week, wi) => {
+            const m = week[0].date.getMonth();
+            if (m !== lastMonth) {
+              monthLabels.push(<span key={wi} style={{ gridColumn: wi + 1 }}>{MONTHS[m]}</span>);
+              lastMonth = m;
+            }
+          });
+          return monthLabels;
+        })()}
+      </div>
+      <div className="heatmap-legend">
+        <span>Less</span>
+        {[levelColor(0), levelColor(maxCredit * 0.125), levelColor(maxCredit * 0.375), levelColor(maxCredit * 0.625), levelColor(maxCredit * 0.875), levelColor(maxCredit)].map((c, i) => (
+          <div key={i} className="heatmap-cell" style={{ background: c }} />
+        ))}
+        <span>More</span>
       </div>
     </section>
   );
