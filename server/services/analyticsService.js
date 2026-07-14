@@ -100,6 +100,49 @@ export async function computeSnapshot() {
     s.totalSp !== undefined && s.totalSp < 100
   ).length;
 
+  // Compute rankings & deltas
+  const sortedActive = [...activeStudents].sort((a, b) => {
+    const spA = Number(a.totalSp) || 0;
+    const spB = Number(b.totalSp) || 0;
+    if (spB !== spA) return spB - spA;
+    return a.name.localeCompare(b.name);
+  });
+
+  const prevRankMap = {};
+  if (lastSnapshot && lastSnapshot.studentRanks) {
+    if (Array.isArray(lastSnapshot.studentRanks)) {
+      for (const r of lastSnapshot.studentRanks) {
+        if (r && r.email) {
+          prevRankMap[r.email.toLowerCase()] = r.rank;
+        }
+      }
+    } else if (lastSnapshot.studentRanks instanceof Map) {
+      for (const [email, r] of lastSnapshot.studentRanks.entries()) {
+        prevRankMap[email.toLowerCase()] = r;
+      }
+    } else {
+      for (const [email, r] of Object.entries(lastSnapshot.studentRanks)) {
+        prevRankMap[email.toLowerCase()] = r;
+      }
+    }
+  }
+
+  const studentRanks = [];
+  const studentDeltas = [];
+
+  sortedActive.forEach((s, index) => {
+    const emailKey = s.email.toLowerCase();
+    const currentRank = index + 1;
+    studentRanks.push({ email: emailKey, rank: currentRank });
+
+    let delta = 0;
+    const prevRank = prevRankMap[emailKey];
+    if (prevRank !== undefined && prevRank !== null) {
+      delta = prevRank - currentRank;
+    }
+    studentDeltas.push({ email: emailKey, delta });
+  });
+
   const snapshot = new AnalyticsSnapshot({
     timestamp: now,
     activeStudents: activeStudents.length,
@@ -121,11 +164,53 @@ export async function computeSnapshot() {
     topGainersLast30min: topGainers,
     topLosersLast30min: topLosers,
     redZoneCount,
+    studentRanks,
+    studentDeltas,
     snapshotType: 'scheduled',
   });
 
   await snapshot.save();
+
+  // Invalidate delta cache upon new snapshot creation
+  cachedDeltas = null;
+  lastCacheTime = 0;
+
   return snapshot;
+}
+
+let cachedDeltas = null;
+let lastCacheTime = 0;
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache
+
+export async function getRankDeltas() {
+  const now = Date.now();
+  if (cachedDeltas && (now - lastCacheTime < CACHE_TTL)) {
+    return cachedDeltas;
+  }
+
+  const lastSnapshot = await AnalyticsSnapshot.findOne({}).sort({ timestamp: -1 }).lean();
+  const deltas = {};
+  if (lastSnapshot && lastSnapshot.studentDeltas) {
+    const rawDeltas = lastSnapshot.studentDeltas;
+    if (Array.isArray(rawDeltas)) {
+      for (const entry of rawDeltas) {
+        if (entry && entry.email) {
+          deltas[entry.email.toLowerCase()] = entry.delta;
+        }
+      }
+    } else if (rawDeltas instanceof Map) {
+      for (const [email, val] of rawDeltas.entries()) {
+        deltas[email.toLowerCase()] = val;
+      }
+    } else {
+      for (const [email, val] of Object.entries(rawDeltas)) {
+        deltas[email.toLowerCase()] = val;
+      }
+    }
+  }
+  cachedDeltas = deltas;
+  lastCacheTime = now;
+  return deltas;
 }
 
 export async function getRecentSnapshots(hours = 24) {

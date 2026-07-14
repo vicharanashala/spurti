@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import { StudentCorrectionForm } from './components/StudentCorrectionForm.jsx';
+import { AdminCorrectionQueue } from './components/AdminCorrectionQueue.jsx';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -279,10 +281,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['corrections','Report Correction']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'corrections' && <StudentCorrectionForm />}
     </main>
   );
 }
@@ -339,7 +342,13 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
         <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
         <tbody>{rows.map(row => (
           <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
-            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
+            <td>
+              {row.rank}
+              {row.rankDelta > 0 && <span className="momentum up">▲ +{row.rankDelta}</span>}
+              {row.rankDelta < 0 && <span className="momentum down">▼ {row.rankDelta}</span>}
+              {(row.rankDelta === 0 || row.rankDelta === undefined) && <span className="momentum neutral">-</span>}
+            </td>
+            <td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
           </tr>
         ))}</tbody>
       </table>
@@ -357,7 +366,12 @@ function StudentPulse({ profile, badges, nextActions }) {
     <section className="pulse-grid">
       <div className="pulse-card progress-card">
         <span>Standing</span>
-        <strong>Rank {student.rank}</strong>
+        <strong>
+          Rank {student.rank}
+          {student.rankDelta > 0 && <span className="momentum up" style={{ fontSize: '0.9rem', verticalAlign: 'middle' }}>▲ +{student.rankDelta}</span>}
+          {student.rankDelta < 0 && <span className="momentum down" style={{ fontSize: '0.9rem', verticalAlign: 'middle' }}>▼ {student.rankDelta}</span>}
+          {(student.rankDelta === 0 || student.rankDelta === undefined) && <span className="momentum neutral" style={{ fontSize: '0.9rem', verticalAlign: 'middle' }}>-</span>}
+        </strong>
         <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP needed to enter Top 50.`}</p>
         <p>{cohort.pointsToNextRank === 0 ? 'You are leading your comparison group.' : `${cohort.pointsToNextRank} SP needed for next rank.`}</p>
       </div>
@@ -573,7 +587,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students'], ['corrections','Corrections']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -593,6 +607,7 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
+      {tab === 'corrections' && <AdminCorrectionQueue auth={auth} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
   );
