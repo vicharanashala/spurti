@@ -264,12 +264,37 @@ function SearchModal({ onClose, onStudent }) {
 
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  const topbarRef = useRef(null);
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+
+  useEffect(() => {
+    const target = topbarRef.current;
+    if (!target) return;
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver(([entry]) => {
+        setShowBackToTop(!entry.isIntersecting);
+      }, { threshold: 0 });
+      observer.observe(target);
+      return () => observer.disconnect();
+    }
+
+    const onScroll = () => setShowBackToTop(window.scrollY > 240);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   return (
     <main className="page compact">
-      <header className="topbar">
+      <header className="topbar" ref={topbarRef}>
         {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
         <div>
           <p className="eyebrow">Student Spurti Bank</p>
@@ -283,6 +308,15 @@ function StudentView({ profile, onBack }) {
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      <button
+        className={`back-to-top ${showBackToTop ? 'visible' : ''}`}
+        onClick={scrollToTop}
+        aria-label="Back to top"
+        title="Back to top"
+        type="button"
+      >
+        ↑
+      </button>
     </main>
   );
 }
