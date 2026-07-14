@@ -264,9 +264,17 @@ function SearchModal({ onClose, onStudent }) {
 
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
+  const [torchData, setTorchData] = useState(undefined);
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+
+  useEffect(() => {
+    fetch(`${API}/torch`)
+      .then(res => res.json())
+      .then(data => setTorchData(data))
+      .catch(() => setTorchData(null));
+  }, []);
   return (
     <main className="page compact">
       <header className="topbar">
@@ -278,7 +286,7 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
+      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} torchData={torchData} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
@@ -337,18 +345,25 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
         <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
       <table className="table">
         <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
-        <tbody>{rows.map(row => (
+        <tbody>{rows.map(row => {
+          return (
           <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
-            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
+            <td>{row.rank}</td>
+            <td>
+              {row.name}
+              {row.isTorchHolder && <em className="torch-badge">Torch Holder</em>}
+            </td>
+            <td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
           </tr>
-        ))}</tbody>
+          );
+        })}</tbody>
       </table>
     </section>
   );
 }
 
-function StudentPulse({ profile, badges, nextActions }) {
-  const { student, cohort, attendance, polls, transactions } = profile;
+function StudentPulse({ profile, badges, nextActions, torchData }) {
+  const { student, cohort, attendance, polls, transactions, weeklyPulse } = profile;
   const qualified = attendance.filter(a => a.qualified).length;
   const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
   const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
@@ -389,6 +404,8 @@ function StudentPulse({ profile, badges, nextActions }) {
         <span>What to do next</span>
         <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
       </div>
+      <WeeklyPulseCard weeklyPulse={weeklyPulse} />
+      <WeeklyTorchCard torchData={torchData} />
     </section>
   );
 }
@@ -403,6 +420,88 @@ function Sparkline({ points }) {
         const pct = max === min ? 50 : ((point.value - min) / (max - min)) * 100;
         return <i key={`${point.label}-${index}`} title={`${point.label}: ${point.value} SP`} style={{ height: `${Math.max(6, pct)}%` }} />;
       })}
+    </div>
+  );
+}
+
+function WeeklyPulseCard({ weeklyPulse }) {
+  if (!weeklyPulse) {
+    return (
+      <div className="pulse-card wide-pulse weekly-pulse-card">
+        <span>Weekly SP Pulse</span>
+        <p className="muted">Loading pulse...</p>
+      </div>
+    );
+  }
+
+  const { netSp, gained, lost, byCategory, topLossReasons } = weeklyPulse;
+
+  return (
+    <div className="pulse-card wide-pulse weekly-pulse-card">
+      <span>Weekly SP Pulse</span>
+      <div className="weekly-pulse-content">
+        {gained === 0 && lost === 0 ? (
+          <p className="pulse-good-news">No SP activity recorded yet this week.</p>
+        ) : lost === 0 || topLossReasons.length === 0 ? (
+          <p className="pulse-good-news">You gained {netSp} SP this week — no losses. Nice run.</p>
+        ) : (
+          <div className="pulse-losses">
+            <p>You lost {lost} SP this week</p>
+            <ul className="loss-list">
+              {topLossReasons.map((item, idx) => (
+                <li key={idx}><strong>-{item.amount}</strong> <em>{item.reason} ({item.sessionLabel})</em></li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="compare-list category-breakdown">
+          {Object.entries(byCategory).map(([cat, data]) => (
+            <b key={cat}>{cat}: {data.netSp > 0 ? '+' : ''}{data.netSp} SP</b>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WeeklyTorchCard({ torchData }) {
+  if (torchData === undefined) {
+    return (
+      <div className="pulse-card wide-pulse torch-card">
+        <span>Weekly Torch</span>
+        <p className="muted">Loading torch data...</p>
+      </div>
+    );
+  }
+
+  const torch = torchData?.torch;
+
+  if (!torch) {
+    return (
+      <div className="pulse-card wide-pulse torch-card">
+        <span>Weekly Torch</span>
+        <p className="muted">No one has gained SP yet this week.</p>
+      </div>
+    );
+  }
+
+  const isHolder = torch.isCurrentUser;
+
+  return (
+    <div className={`pulse-card wide-pulse torch-card ${isHolder ? 'torch-holder' : ''}`}>
+      <span>Weekly Torch</span>
+      {isHolder ? (
+        <div className="torch-content">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="torch-icon">
+             <path d="M12 2C8 6 8 10 12 14c4-4 4-8 0-12z" />
+             <path d="M12 14v8" />
+             <path d="M10 22h4" />
+          </svg>
+          <p>You're holding the torch this week! (+{torch.netSp} SP)</p>
+        </div>
+      ) : (
+        <p><strong>{torch.name}</strong> holds the torch this week (+{torch.netSp} SP).</p>
+      )}
     </div>
   );
 }
