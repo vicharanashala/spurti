@@ -12,7 +12,11 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import NotificationPreference from './models/NotificationPreference.js';
+import Notification from './models/Notification.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { getOrCreatePreferences, notify } from './services/notifications.js';
+import { computeStreak } from './services/streaks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -186,6 +190,7 @@ async function studentPayload(student) {
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
+  const streak = computeStreak(attendance);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
@@ -230,6 +235,7 @@ async function studentPayload(student) {
     transactions,
     polls,
     attendance,
+    streak,
     cohort: {
       averageSp,
       top10Cutoff,
@@ -266,8 +272,99 @@ api.get('/me', async (req, res) => {
   if (!email) return res.status(401).json({ authenticated: false });
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
+  
+  await getOrCreatePreferences(email);
+
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
-  res.json({ authenticated: true, profile: await studentPayload(student) });
+  
+  const profile = await studentPayload(student);
+  const { streak } = profile;
+  
+  if (!streak.isActive && streak.streakBrokenAt) {
+    const claimed = await Student.findOneAndUpdate(
+      { _id: student._id, lastNotifiedStreakBreak: { $ne: streak.streakBrokenAt } },
+      { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }
+    );
+    if (claimed) {
+      notify(email, 'streakReminders', {
+        title: 'Streak broken',
+        message: `Your attendance streak ended after session ${streak.streakBrokenAt}. Time for a comeback!`
+      }).catch(() => {});
+    }
+  }
+
+  res.json({ authenticated: true, profile });
+});
+
+api.get('/notifications/preferences', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const prefs = await getOrCreatePreferences(email);
+  res.json(prefs);
+});
+
+api.put('/notifications/preferences', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  
+  const { categories } = req.body;
+  if (!categories || typeof categories !== 'object') return res.status(400).json({ error: 'Invalid payload' });
+
+  const allowedCategories = ['weeklyDigest', 'streakReminders', 'peerActivity', 'announcements'];
+  const updateQuery = { $set: {} };
+
+  for (const cat of allowedCategories) {
+    if (categories[cat]) {
+      if (typeof categories[cat].inApp === 'boolean') {
+        updateQuery.$set[`categories.${cat}.inApp`] = categories[cat].inApp;
+      }
+      if (typeof categories[cat].email === 'boolean') {
+        updateQuery.$set[`categories.${cat}.email`] = categories[cat].email;
+      }
+    }
+  }
+
+  if (Object.keys(updateQuery.$set).length === 0) return res.status(400).json({ error: 'No valid preferences to update' });
+
+  const prefs = await NotificationPreference.findOneAndUpdate(
+    { email },
+    updateQuery,
+    { new: true }
+  );
+  res.json(prefs);
+});
+
+api.get('/notifications', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  
+  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  const filter = { email };
+  if (req.query.before) filter.createdAt = { $lt: new Date(req.query.before) };
+
+  const notifications = await Notification.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
+  res.json(notifications);
+});
+
+api.post('/notifications/:id/read', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const notif = await Notification.findOneAndUpdate(
+    { _id: req.params.id, email },
+    { $set: { read: true } },
+    { new: true }
+  );
+  if (!notif) return res.status(404).json({ error: 'Notification not found' });
+  res.json(notif);
+});
+
+api.post('/notifications/read-all', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  await Notification.updateMany({ email, read: false }, { $set: { read: true } });
+  res.json({ ok: true });
 });
 
 api.get('/search', async (req, res) => {
