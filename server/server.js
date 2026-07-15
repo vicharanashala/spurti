@@ -12,6 +12,11 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import ChatSPReview from './models/ChatSPReview.js';
+import contestRouter from './routes/contest.js';
+import aiConfigRouter from './routes/aiConfig.js';
+import missionsRouter from './routes/missions.js';
+import { recalculateStudentSp } from './scripts/lib/ingestion.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -152,6 +157,21 @@ async function studentEmailFromRequest(req) {
   if (!email) return null;
   return normalizeEmail(email);
 }
+
+// Populate req.spurtiStudent from the Samagama auth session on every request so
+// downstream routers (contest, missions, future modules) can
+// authenticate without each one re-parsing cookies.
+app.use(async (req, _res, next) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (email) {
+      req.spurtiStudent = { email };
+    }
+  } catch (err) {
+    console.error('Error resolving student session:', err?.message);
+  }
+  next();
+});
 
 async function rankFor(email) {
   const student = await Student.findOne({ email }).lean();
@@ -619,6 +639,12 @@ function last24Hours(now) {
 
 app.use('/api', api);
 app.use('/spurti/api', api);
+app.use('/spurti/api/contest', contestRouter);
+app.use('/api/contest', contestRouter);
+app.use('/spurti/api/ai-config', aiConfigRouter);
+app.use('/api/ai-config', aiConfigRouter);
+app.use('/spurti/api/missions', missionsRouter);
+app.use('/api/missions', missionsRouter);
 
 if (fs.existsSync(clientDist)) {
   app.use('/spurti', express.static(clientDist));

@@ -9,15 +9,19 @@
     "add-students": "node server/scripts/addStudents.js",
     "sync-students": "node server/scripts/syncStudents.js",
     "ingest-session": "node server/scripts/ingestSession.js",
-    "setup": "npm install && npm --prefix client install && npm run rebuild && npm run build",
+    "test": "node tests/contest_balance.test.mjs && node tests/contest_smoke.test.mjs",
+    "setup": "node scripts/setup.mjs",
     "build": "npm --prefix client run build",
-    "start": "node server/server.js",
-    "dev": "node server/server.js"
+    "dev": "node scripts/dev.mjs",
+    "server": "node server/server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
     "mongoose": "^8.8.4"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^11.2.0"
   }
 }
