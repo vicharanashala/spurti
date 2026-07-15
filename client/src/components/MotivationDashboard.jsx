@@ -187,9 +187,6 @@ export default function MotivationDashboard({ student, onRefreshProfile }) {
 
                 {/* Streak and Payout Badges */}
                 <div className="streak-badges-row" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '4px 0 8px 0' }}>
-                  <span className="streak-badge" style={{ background: '#fff1f2', color: '#e11d48', padding: '3px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                    🔥 Streak: {treeData.streak || 0} {treeData.streak === 1 ? 'Day' : 'Days'}
-                  </span>
                   {treeData.bonusesAwarded > 0 && (
                     <span className="bonus-badge" style={{ background: '#ecfdf5', color: '#059669', padding: '3px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
                       🎉 {treeData.bonusesAwarded}x Perfect Week
