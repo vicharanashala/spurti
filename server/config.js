@@ -63,3 +63,15 @@ export const SESSION_THRESHOLDS_MINUTES = {
 };
 
 export const SESSION_THRESHOLDS_PCT = 0.75; // default % of session duration to qualify
+
+// --- SP Investment Vault --------------------------------------------------
+// Configurable plans. Adding a new plan = add a key here, no code changes.
+// attendanceRequirement is a fraction (1.0 = 100% of sessions in the window
+// must be attended). durationDays and bonusRate are captured at start time so
+// changing a plan mid-flight doesn't affect in-progress investments.
+export const INVESTMENT_PLANS = {
+  safe:   { label: 'Safe',    durationDays: 7,  bonusRate: 0.05, attendanceRequirement: 1.0 },
+  growth: { label: 'Growth',  durationDays: 15, bonusRate: 0.15, attendanceRequirement: 1.0 },
+  diamond:{ label: 'Diamond', durationDays: 30, bonusRate: 0.30, attendanceRequirement: 1.0 }
+};
+export const INVESTMENT_MIN_PRINCIPAL = 10;

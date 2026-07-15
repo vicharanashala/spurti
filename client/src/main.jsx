@@ -17,6 +17,7 @@ function App() {
   useEffect(() => {
     if (!profile?.student) return;
     const send = () => fetch(`${API}/ping`, {
+      credentials: 'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -35,13 +36,13 @@ function App() {
     let active = true;
     async function bootstrap() {
       try {
-        const configRes = await fetch(`${API}/config`);
+        const configRes = await fetch(`${API}/config`, { credentials: 'include' });
         const nextConfig = configRes.ok ? await configRes.json() : { allowStudentSearch: true };
         if (!active) return;
         setConfig(nextConfig);
 
         if (view !== 'admin-login') {
-          const meRes = await fetch(`${API}/me`);
+          const meRes = await fetch(`${API}/me`, { credentials: 'include' });
           if (meRes.ok) {
             const data = await meRes.json();
             if (data.authenticated && data.profile && active) {
@@ -149,7 +150,7 @@ function AdminLogin({ onAdmin, onBack }) {
     setError('');
     try {
       const auth = { email, token };
-      const res = await fetch(`${API}/admin/stats`, { headers: adminHeaders(auth) });
+      const res = await fetch(`${API}/admin/stats`, { credentials: 'include', headers: adminHeaders(auth) });
       if (!res.ok) throw new Error('Forbidden');
       onAdmin(await res.json(), auth);
     } catch {
@@ -208,7 +209,7 @@ function SearchModal({ onClose, onStudent }) {
 
   const search = async () => {
     if (query.trim().length < 2) return setMessage('Type at least 2 characters.');
-    const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
+    const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`, { credentials: 'include' });
     const data = await res.json();
     if (data.excused) return onStudent(data);
     if (data.exact) return onStudent(data.profile);
@@ -218,6 +219,7 @@ function SearchModal({ onClose, onStudent }) {
 
   const confirm = async () => {
     const res = await fetch(`${API}/confirm`, {
+      credentials: 'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ studentId: selected?._id, email: confirmEmail })
@@ -279,10 +281,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['vault','Vault']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'vault' && <Vault student={student} />}
     </main>
   );
 }
@@ -505,6 +508,267 @@ function Leaderboard({ rows }) {
   );
 }
 
+function formatDate(date) {
+  return new Date(date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+const PLAN_DESCRIPTIONS = {
+  safe: 'Recommended for short-term commitment.',
+  growth: 'Balanced reward and commitment.',
+  diamond: 'Highest reward for committed students.'
+};
+
+function Vault({ student }) {
+  const [plans, setPlans] = useState([]);
+  const [investments, setInvestments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [planKey, setPlanKey] = useState('');
+  const [principal, setPrincipal] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [confirming, setConfirming] = useState(false);
+
+  const loadData = async () => {
+    try {
+      const [plansRes, mineRes] = await Promise.all([
+        fetch(`${API}/investments/plans`, { credentials: 'include' }),
+        fetch(`${API}/investments/mine`, { credentials: 'include' })
+      ]);
+      if (plansRes.ok) {
+        const data = await plansRes.json();
+        setPlans(data.plans || []);
+        if (!planKey && data.plans?.length) setPlanKey(data.plans[0].key);
+      }
+      if (mineRes.ok) {
+        const data = await mineRes.json();
+        setInvestments(data.investments || []);
+      }
+    } catch {
+      setError('Failed to load vault data.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadData(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const actuallySubmit = async () => {
+    setError('');
+    setSuccess('');
+    setSubmitting(true);
+    setConfirming(false);
+    try {
+      const res = await fetch(`${API}/investments`, {
+        credentials: 'include',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planKey, principal: Number(principal) })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const message = ({
+          INSUFFICIENT_BALANCE_OR_INACTIVE: 'Insufficient SP balance.',
+          ALREADY_ACTIVE: 'You already have an active investment.',
+          INVALID_PLAN: 'Please select an investment plan.',
+          BELOW_MIN_PRINCIPAL: `Minimum investment is ${minPrincipal} SP.`
+        })[data.error] || data.error || 'Failed to create investment. Please try again.';
+        setError(message);
+        return;
+      }
+      setSuccess(`Investment created successfully. ${data.investment.principal} SP locked in the ${planKey} vault.`);
+      setPrincipal('');
+      await loadData();
+    } catch {
+      setError('Network error — please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onInvestClick = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (submitting) return;
+    if (!principalValid || !selectedPlan) return;
+    setConfirming(true);
+  };
+
+  if (loading) return <section className="panel empty">Loading vault…</section>;
+
+  const active = investments.find(i => i.status === 'active');
+  const history = investments.filter(i => i.status !== 'active');
+  const selectedPlan = plans.find(p => p.key === planKey);
+  const minPrincipal = selectedPlan?.minPrincipal ?? plans[0]?.minPrincipal ?? 10;
+  const principalNum = Number(principal);
+  const principalValid = Number.isFinite(principalNum) && principalNum >= minPrincipal && principalNum <= student.totalSp;
+  const expectedProfit = (selectedPlan && principalValid)
+    ? Math.round(principalNum * selectedPlan.bonusRate)
+    : 0;
+  const expectedReturn = principalValid ? principalNum + expectedProfit : 0;
+
+  return (
+    <section className="panel">
+      <h2>SP Investment Vault</h2>
+      <p className="muted">Lock your Spurti Points to earn a bonus — but only if you attend every session during the lock period. If attendance slips, the invested SP is forfeited.</p>
+
+      {active && (
+        <div className="vault-active">
+          <div>
+            <span className="eyebrow">Active Investment</span>
+            <strong className="vault-active-plan">{active.planKey.charAt(0).toUpperCase() + active.planKey.slice(1)} Plan</strong>
+            <div className="vault-active-details">
+              <span>{active.principal} SP locked</span>
+              <span>Bonus: +{Math.round(active.bonusRate * 100)}%</span>
+              <span>Expected Return: {Math.round(active.principal * active.bonusRate) + active.principal} SP</span>
+              <span>Matures: {formatDate(active.endDate)}</span>
+            </div>
+          </div>
+          <em className="vault-status vault-status-active">active</em>
+        </div>
+      )}
+
+      {!active && (
+        <form className="vault-form" onSubmit={onInvestClick}>
+          <div className="vault-plans">
+            {plans.map(plan => (
+              <label key={plan.key} className={`vault-card ${planKey === plan.key ? 'selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="plan"
+                  value={plan.key}
+                  checked={planKey === plan.key}
+                  onChange={() => setPlanKey(plan.key)}
+                />
+                <strong>{plan.label} Plan</strong>
+                <p className="vault-card-meta">{plan.durationDays} Days · +{Math.round(plan.bonusRate * 100)}% Bonus</p>
+                <p className="vault-card-desc">{PLAN_DESCRIPTIONS[plan.key] || ''}</p>
+                <p className="vault-card-req">100% Attendance Required.</p>
+              </label>
+            ))}
+          </div>
+          <div className="search-row vault-amount-row">
+            <input
+              type="number"
+              min={minPrincipal}
+              max={student.totalSp}
+              value={principal}
+              onChange={e => setPrincipal(e.target.value)}
+              placeholder={`Amount in SP (min ${minPrincipal}, you have ${student.totalSp})`}
+            />
+            <button className="primary" type="submit" disabled={submitting || !principalValid}>
+              {submitting ? 'Investing…' : 'INVEST NOW'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {!active && selectedPlan && principalValid && (
+        <div className="vault-summary card">
+          <h3>SP Investment Calculator</h3>
+          <div className="vault-summary-rows">
+            <div><span>Selected Plan</span><strong>{selectedPlan.label}</strong></div>
+            <div><span>Investment Amount</span><strong>{principalNum} SP</strong></div>
+            <div><span>Duration</span><strong>{selectedPlan.durationDays} Days</strong></div>
+            <div><span>Attendance Requirement</span><strong>{Math.round(selectedPlan.attendanceRequirement * 100)}%</strong></div>
+            <div><span>Bonus Percentage</span><strong>{Math.round(selectedPlan.bonusRate * 100)}%</strong></div>
+            <div><span>Expected Profit</span><strong className="positive">+{expectedProfit} SP</strong></div>
+            <div><span>Expected Return</span><strong>{expectedReturn} SP</strong></div>
+          </div>
+          <p className="muted">
+            If you successfully maintain the required attendance during the investment period, you will receive <strong>{expectedReturn} SP</strong> when your investment matures.
+          </p>
+        </div>
+      )}
+
+      {confirming && selectedPlan && (
+        <VaultConfirmModal
+          plan={selectedPlan}
+          principal={principalNum}
+          expectedProfit={expectedProfit}
+          expectedReturn={expectedReturn}
+          submitting={submitting}
+          onCancel={() => setConfirming(false)}
+          onConfirm={actuallySubmit}
+        />
+      )}
+
+      {error && <p className="error">{error}</p>}
+      {success && <p className="vault-success">{success}</p>}
+
+      {investments.length > 0 && (
+        <div className="cards vault-history">
+          {history.length > 0 && <h3>History</h3>}
+          {history.map(inv => {
+            const planLabel = plans.find(p => p.key === inv.planKey)?.label || inv.planKey;
+            return (
+              <article className="card vault-history-card" key={inv._id}>
+                <div className="vault-history-head">
+                  <strong className="vault-history-plan">{planLabel.toUpperCase()} PLAN</strong>
+                  <span className={`vault-status vault-status-${inv.status}`}>{inv.status.toUpperCase()}</span>
+                </div>
+                <div className="vault-history-details">
+                  <div><span>Invested:</span> <strong>{inv.principal} SP</strong></div>
+                  {inv.status === 'completed' && (
+                    <>
+                      <div><span>Bonus Earned:</span> <strong className="positive">+{inv.bonus} SP</strong></div>
+                      <div><span>Received:</span> <strong>{inv.totalReturn} SP</strong></div>
+                      <div><span>Matured on:</span> <strong>{formatDate(inv.endDate)}</strong></div>
+                    </>
+                  )}
+                  {inv.status === 'failed' && (
+                    <div><span>Reason:</span> <strong className="negative">Attendance requirement not met.</strong></div>
+                  )}
+                  {inv.status === 'cancelled' && (
+                    <div><span>Status:</span> <strong className="neutral">Cancelled</strong></div>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+          {active && history.length === 0 && (
+            <p className="muted">No completed investments yet.</p>
+          )}
+        </div>
+      )}
+      <p className="muted vault-note">Note: Investments are automatically resolved when you visit the Vault after the maturity date. If you meet the attendance requirements, your invested SP and eligible bonus will be credited to your SP balance automatically.</p>
+    </section>
+  );
+}
+
+function VaultConfirmModal({ plan, principal, expectedProfit, expectedReturn, submitting, onCancel, onConfirm }) {
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && !submitting && onCancel()}>
+      <section className="modal vault-confirm-modal">
+        <div className="modal-head">
+          <h2>Confirm Your Investment</h2>
+          <button className="icon" onClick={onCancel} disabled={submitting} aria-label="Close">×</button>
+        </div>
+        <p className="muted" style={{ margin: 0 }}>You are about to invest:</p>
+        <p className="vault-confirm-amount"><strong>{principal} SP</strong></p>
+        <div className="vault-summary-rows">
+          <div><span>Selected Plan</span><strong>{plan.label}</strong></div>
+          <div><span>Duration</span><strong>{plan.durationDays} Days</strong></div>
+          <div><span>Attendance Requirement</span><strong>{Math.round(plan.attendanceRequirement * 100)}%</strong></div>
+          <div><span>Bonus Percentage</span><strong>{Math.round(plan.bonusRate * 100)}%</strong></div>
+          <div><span>Expected Profit</span><strong className="positive">+{expectedProfit} SP</strong></div>
+          <div><span>Expected Return</span><strong>{expectedReturn} SP</strong></div>
+        </div>
+        <div className="vault-confirm-notice">
+          <p>
+            <strong>Important Notice:</strong> Your SP will remain locked until the investment matures. If you fail to maintain the required attendance during the investment period, your investment may fail and you may lose the invested SP.
+          </p>
+        </div>
+        <div className="vault-confirm-actions">
+          <button className="secondary" type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
+          <button className="primary" type="button" onClick={onConfirm} disabled={submitting}>
+            {submitting ? 'Investing…' : 'Confirm Investment'}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AdminView({ admin, auth, onBack }) {
   const [tab, setTab] = useState('leaderboard');
   const [leaderLimit, setLeaderLimit] = useState(50);
@@ -521,6 +785,7 @@ function AdminView({ admin, auth, onBack }) {
   useEffect(() => {
     if (!auth?.email) return;
     const doPing = (page) => fetch(`${API}/ping`, {
+      credentials: 'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: auth.email, name: auth.email, page })
@@ -530,29 +795,29 @@ function AdminView({ admin, auth, onBack }) {
     return () => clearInterval(id);
   }, [admin]);
   const loadLeaderboard = async (limit = leaderLimit) => {
-    const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers });
+    const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { credentials: 'include', headers });
     setLeaderboard(await res.json());
   };
   const loadAttendance = async () => {
-    const res = await fetch(`${API}/admin/attendance`, { headers });
+    const res = await fetch(`${API}/admin/attendance`, { credentials: 'include', headers });
     setAttendance(await res.json());
   };
   const loadStudent = async (id) => {
-    const res = await fetch(`${API}/admin/student/${id}`, { headers });
+    const res = await fetch(`${API}/admin/student/${id}`, { credentials: 'include', headers });
     setStudentProfile(await res.json());
   };
   const loadActive = async () => {
-    const res = await fetch(`${API}/admin/active`, { headers });
+    const res = await fetch(`${API}/admin/active`, { credentials: 'include', headers });
     setActive(await res.json());
   };
   const loadAnalytics = async () => {
-    const res = await fetch(`${API}/admin/analytics`, { headers });
+    const res = await fetch(`${API}/admin/analytics`, { credentials: 'include', headers });
     setAnalytics(await res.json());
   };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
   const fetchStats = async () => {
-    const r = await fetch(`${API}/admin/stats`, headers);
+    const r = await fetch(`${API}/admin/stats`, { ...headers, credentials: 'include' });
     if (r.ok) setStats(await r.json());
   };
   useEffect(() => {
@@ -744,7 +1009,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   const loadList = async (status) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/admin/students-by-status?status=${status}&limit=200`, headers);
+      const res = await fetch(`${API}/admin/students-by-status?status=${status}&limit=200`, { ...headers, credentials: 'include' });
       if (res.ok) setList(await res.json());
     } finally {
       setLoading(false);
@@ -789,7 +1054,7 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
     if (done.current) return;
     if (showNote) { setChecking(true); setNote(''); }
     try {
-      const r = await fetch(`${API}${statusPath}`);
+      const r = await fetch(`${API}${statusPath}`, { credentials: 'include' });
       if (r.ok && (await r.json()).completed) { done.current = true; onDone(); return; }
       if (showNote) setNote("We haven't received your response yet. Please make sure you pressed Submit in the form above — this window closes on its own once your response is recorded (it can take a few seconds).");
     } catch {
