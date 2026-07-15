@@ -1305,6 +1305,13 @@ function ChallengesView({ studentEmail, profile }) {
               <p className="muted" style={{ fontSize: "0.9em", marginBottom: 0 }}>
                 {invites.length > 0 ? "Accept an invite above or create your own squad to unlock squad challenges!" : "Create or join a squad to unlock squad challenges!"}
               </p>
+              <button
+                className="primary"
+                style={{ width: "100%", marginTop: 12 }}
+                onClick={() => setShowCreate(true)}
+              >
+                Create Squad
+              </button>
             </div>
           )}
           {error && (
