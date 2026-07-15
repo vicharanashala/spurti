@@ -463,6 +463,158 @@ input {
   .search-row { grid-template-columns: 1fr; }
 }
 
+/* --- SP Investment Vault ----------------------------------------------- */
+.vault-form { display: grid; gap: 14px; margin: 16px 0 8px; }
+.vault-plans {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.vault-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdff;
+  cursor: pointer;
+}
+.vault-card.selected {
+  border-color: var(--primary);
+  background: #edf8fb;
+  box-shadow: 0 0 0 1px var(--primary);
+}
+.vault-card > strong { font-size: 16px; color: var(--primary); }
+.vault-card-meta { margin: 0; color: var(--text); font-weight: 700; font-size: 13px; }
+.vault-card-desc { margin: 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.vault-card-req { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.vault-card input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
+.vault-amount-row { margin-top: 6px; }
+.vault-active {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  background: #edf8fb;
+  margin: 16px 0;
+}
+.vault-active .eyebrow { margin: 0 0 4px; }
+.vault-active strong { display: block; font-size: 18px; color: var(--primary); }
+.vault-active-plan { margin-bottom: 6px; }
+.vault-active-details { display: grid; gap: 3px; margin-top: 4px; }
+.vault-active-details span { color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.5; }
+.vault-status {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-style: normal;
+}
+.vault-status-active { background: var(--primary); color: #fff; }
+.vault-status-completed { background: var(--green); color: #fff; }
+.vault-status-failed { background: var(--red); color: #fff; }
+.vault-status-cancelled { background: #94a3b8; color: #fff; }
+.vault-success {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #e9f7ee;
+  color: var(--green);
+  font-weight: 700;
+}
+.vault-history { margin-top: 20px; }
+.vault-history > h3 { margin: 0 0 8px; }
+.vault-history-card { padding: 16px; }
+.vault-history-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  gap: 12px;
+}
+.vault-history-plan { font-size: 15px; color: var(--primary); letter-spacing: 0.02em; }
+.vault-history-details {
+  display: grid;
+  gap: 6px;
+}
+.vault-history-details > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.vault-history-details > div > span { color: var(--muted); font-size: 13px; }
+.vault-history-details > div > strong { font-size: 14px; }
+.vault-summary { margin-top: 16px; }
+.vault-summary > h3 { margin: 0 0 12px; font-size: 18px; }
+.vault-summary-rows {
+  display: grid;
+  gap: 0;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fbfdff;
+}
+.vault-summary-rows > div {
+  display: grid;
+  grid-template-columns: minmax(180px, max-content) 1fr;
+  gap: 16px;
+  align-items: baseline;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.vault-summary-rows > div:last-child { border-bottom: none; }
+.vault-summary-rows > div > span {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 800;
+}
+.vault-summary-rows > div > strong {
+  text-align: right;
+  color: var(--text);
+  font-size: 15px;
+}
+.vault-confirm-modal { width: min(560px, 100%); }
+.vault-confirm-amount { text-align: center; margin: 4px 0 18px; }
+.vault-confirm-amount strong {
+  display: block;
+  font-size: 38px;
+  color: var(--primary);
+  font-weight: 850;
+}
+.vault-confirm-notice {
+  background: #fff8e6;
+  border: 1px solid #f3d785;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 16px 0;
+}
+.vault-confirm-notice p {
+  margin: 0;
+  color: #8a5a00;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.vault-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+.vault-note { margin: 18px 0 0; font-size: 12px; line-height: 1.5; }
+@media (max-width: 720px) {
+  .vault-plans { grid-template-columns: 1fr; }
+}
+
 /* --- Mandatory survey pop-up ------------------------------------------- */
 .survey-overlay {
   position: fixed;

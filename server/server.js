@@ -3,6 +3,7 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
@@ -13,6 +14,14 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import {
+  getInvestmentPlans,
+  startInvestment,
+  resolveDueInvestmentsForStudent,
+  resolveAllDueInvestments,
+  getStudentInvestments,
+  getAllInvestments
+} from './services/investmentService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -153,6 +162,91 @@ async function studentEmailFromRequest(req) {
   return normalizeEmail(email);
 }
 
+// --- Search-session cookie (local-dev + admin fallback) -------------------
+// Issued by /api/confirm on successful email-match verification. The cookie
+// is HMAC-signed with SPURTI_AUTH_SECRET, httpOnly, and short-lived (8h).
+// It is NOT a primary auth path — primary is still Samagama. It exists only
+// so the search-confirm flow can support write endpoints (e.g. Vault) in
+// deployments where Samagama is unavailable. In production
+// (ALLOW_STUDENT_SEARCH=false) this cookie is never issued, so no student can
+// reach Vault through this path; they still go through Samagama.
+const SEARCH_SESSION_COOKIE = 'spurti_search_session';
+const SEARCH_SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000;
+
+function getSearchSessionSecret() {
+  return process.env.SPURTI_AUTH_SECRET || '';
+}
+
+function makeSearchSessionToken(email, expiresAt) {
+  const secret = getSearchSessionSecret();
+  if (!secret) return null; // refuse to sign without a configured secret
+  const payload = `${normalizeEmail(email)}|${expiresAt}`;
+  const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  return Buffer.from(payload).toString('base64url') + '.' + sig;
+}
+
+function verifySearchSessionToken(token) {
+  if (!token) return null;
+  const secret = getSearchSessionSecret();
+  if (!secret) return null;
+  const dotIndex = token.indexOf('.');
+  if (dotIndex < 0) return null;
+  const encoded = token.slice(0, dotIndex);
+  const sig = token.slice(dotIndex + 1);
+  let payload;
+  try {
+    payload = Buffer.from(encoded, 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+  const expected = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  // Constant-time signature comparison
+  if (sig.length !== expected.length) return null;
+  let mismatch = 0;
+  for (let i = 0; i < sig.length; i++) {
+    mismatch |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  if (mismatch !== 0) return null;
+  const [email, expiresAtStr] = payload.split('|');
+  const expiresAt = Number(expiresAtStr);
+  if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) return null;
+  return normalizeEmail(email);
+}
+
+function setSearchSessionCookie(res, email) {
+  const token = makeSearchSessionToken(email, Date.now() + SEARCH_SESSION_MAX_AGE_MS);
+  if (!token) return; // no SPURTI_AUTH_SECRET configured — skip silently
+  const secure = String(process.env.SPURTI_COOKIE_SECURE || '').toLowerCase() === 'true';
+  res.cookie(SEARCH_SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: SEARCH_SESSION_MAX_AGE_MS
+  });
+}
+
+function clearSearchSessionCookie(res) {
+  const secure = String(process.env.SPURTI_COOKIE_SECURE || '').toLowerCase() === 'true';
+  res.cookie(SEARCH_SESSION_COOKIE, '', {
+    httpOnly: true,
+    secure,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 0
+  });
+}
+
+// Auth resolution for write endpoints: tries Samagama first, then the signed
+// search-session cookie. Production paths still go through Samagama (the cookie
+// is never issued when ALLOW_STUDENT_SEARCH=false).
+async function resolveStudentEmail(req) {
+  const fromSamagama = await studentEmailFromRequest(req);
+  if (fromSamagama) return fromSamagama;
+  const cookies = parseCookies(req.headers.cookie || '');
+  return verifySearchSessionToken(cookies[SEARCH_SESSION_COOKIE]);
+}
+
 async function rankFor(email) {
   const student = await Student.findOne({ email }).lean();
   if (!student || student.status === 'excused') return null;
@@ -278,8 +372,8 @@ api.get('/search', async (req, res) => {
   if (q.includes('@')) {
     const email = normalizeEmail(q);
     const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
-    if (student?.status === 'excused') return res.json(excusedPayload(student));
-    if (student) return res.json({ exact: true, profile: await studentPayload(student) });
+    if (student?.status === 'excused') { setSearchSessionCookie(res, student.email); return res.json(excusedPayload(student)); }
+    if (student) { setSearchSessionCookie(res, student.email); return res.json({ exact: true, profile: await studentPayload(student) }); }
   }
 
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -303,6 +397,7 @@ api.post('/confirm', async (req, res) => {
   if (typed !== normalizeEmail(student.email) && typed !== normalizeEmail(student.alternateEmail)) {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
+  setSearchSessionCookie(res, student.email);
   if (student.status === 'excused') return res.json(excusedPayload(student));
   res.json(await studentPayload(student));
 });
@@ -611,6 +706,52 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
       topDrops
     }
   });
+});
+
+// --- SP Investment Vault --------------------------------------------------
+// Public — list available plans.
+api.get('/investments/plans', (_req, res) => {
+  res.json({ plans: getInvestmentPlans() });
+});
+
+// Session-authenticated — start an investment.
+api.post('/investments', async (req, res) => {
+  const email = await resolveStudentEmail(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  const { planKey, principal } = req.body || {};
+  const result = await startInvestment(email, planKey, principal);
+  if (result.error) {
+    const status = result.error === 'INVALID_PLAN' || result.error === 'BELOW_MIN_PRINCIPAL' ? 400 : 409;
+    return res.status(status).json(result);
+  }
+  res.json(result);
+});
+
+// Session-authenticated — list the caller's investments. Resolves any due
+// investments first so the student always sees the current state.
+api.get('/investments/mine', async (req, res) => {
+  const email = await resolveStudentEmail(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  await resolveDueInvestmentsForStudent(email);
+  const investments = await getStudentInvestments(email);
+  res.json({ investments });
+});
+
+// Session-authenticated — explicit resolve trigger (idempotent).
+api.post('/investments/resolve', async (req, res) => {
+  const email = await resolveStudentEmail(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  const resolved = await resolveDueInvestmentsForStudent(email);
+  res.json({ resolved });
+});
+
+// Admin — list all investments AND resolve any due investments so the admin
+// never sees stale `active` records past their `endDate`. Closes the
+// admin-view staleness gap: resolution is triggered by read.
+api.get('/admin/investments', adminGuard, async (_req, res) => {
+  await resolveAllDueInvestments();
+  const investments = await getAllInvestments();
+  res.json(investments);
 });
 
 function last24Hours(now) {
