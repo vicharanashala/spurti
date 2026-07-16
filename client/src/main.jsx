@@ -115,6 +115,7 @@ function Landing({ config, onStudent }) {
   return (
     <main className="page">
       <section className="hero">
+      <CohortPulseTicker />
         <div className="hero-copy">
           <p className="eyebrow">Spurti Motivation Engine</p>
           <h1>Spurti Points track participation energy.</h1>
@@ -390,6 +391,62 @@ function StudentPulse({ profile, badges, nextActions }) {
         <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
       </div>
     </section>
+  );
+}
+function CohortPulseTicker() {
+  const [pulse, setPulse] = useState(null);
+  const [prevScore, setPrevScore] = useState(null);
+  const [spike, setSpike] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    async function loadPulse() {
+      try {
+        const res = await fetch(`${API}/cohort-pulse`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!active) return;
+        setPulse(prev => {
+          if (prev && data.pulseScore > prev.pulseScore + 4) {
+            setSpike(true);
+            setTimeout(() => setSpike(false), 2500);
+          }
+          return data;
+        });
+      } catch {
+        // silent — the ticker just won't update this cycle
+      }
+    }
+    loadPulse();
+    const id = setInterval(loadPulse, 15000);
+    return () => { active = false; clearInterval(id); };
+  }, []);
+
+  if (!pulse) return null;
+
+  const score = pulse.pulseScore;
+  const mood = score >= 70 ? 'high' : score >= 40 ? 'medium' : 'low';
+  const moodLabel = score >= 70 ? 'Buzzing' : score >= 40 ? 'Active' : 'Quiet';
+
+  return (
+    <div className={`cohort-pulse ${spike ? 'pulse-spike' : ''} pulse-${mood}`}>
+      <div className="pulse-ticker-row">
+        <span className="pulse-dot" />
+        <span className="pulse-label">Cohort Pulse</span>
+        <span className="pulse-score">{score}%</span>
+        <span className="pulse-mood">{moodLabel}</span>
+      </div>
+      <div className="pulse-meter">
+        <div className="pulse-meter-fill" style={{ width: `${score}%` }} />
+      </div>
+      <div className="pulse-substats">
+        <span>{pulse.signals.activeNow} active now</span>
+        <span>·</span>
+        <span>{pulse.signals.spEarnedToday} SP earned today</span>
+        <span>·</span>
+        <span>{pulse.signals.participatingToday}/{pulse.signals.cohortSize} participating</span>
+      </div>
+    </div>
   );
 }
 

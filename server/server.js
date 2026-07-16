@@ -321,6 +321,49 @@ api.get('/leaderboard', async (req, res) => {
     trophyLeague: leagueBand(s.totalSp)
   })));
 });
+api.get('/cohort-pulse', async (_req, res) => {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  const [activeStudents, todaysTransactions, todaysEvents] = await Promise.all([
+    Student.find({ status: 'active' }).select('email').lean(),
+    SPTransaction.find({ dateTime: { $gte: todayStart } }).lean(),
+    SessionEvent.find({ timestamp: { $gte: todayStart } }).select('email').lean()
+  ]);
+
+  const activeEmails = new Set(activeStudents.map(s => s.email));
+  const cohortSize = activeEmails.size || 1;
+
+  // Signal 1: live check-ins right now (last 60 seconds)
+  let activeNow = 0;
+  for (const [email, data] of liveViewers.entries()) {
+    if (activeEmails.has(email) && now.getTime() - data.lastSeen.getTime() <= 60_000) activeNow++;
+  }
+  const checkinSignal = Math.min(1, activeNow / Math.max(1, cohortSize * 0.1));
+
+  // Signal 2: total SP earned today, cohort-wide (positive credits only)
+  const spEarnedToday = todaysTransactions
+    .filter(tx => activeEmails.has(tx.email) && tx.appliedDelta > 0)
+    .reduce((sum, tx) => sum + tx.appliedDelta, 0);
+  const spSignal = Math.min(1, spEarnedToday / (cohortSize * 5));
+
+  // Signal 3: % of cohort with any activity today
+  const participatingEmails = new Set(todaysEvents.filter(e => activeEmails.has(e.email)).map(e => e.email));
+  const participationSignal = Math.min(1, participatingEmails.size / cohortSize);
+
+  const pulseScore = Math.round(((checkinSignal * 0.3) + (spSignal * 0.4) + (participationSignal * 0.3)) * 100);
+
+  res.json({
+    pulseScore,
+    generatedAt: now,
+    signals: {
+      activeNow,
+      cohortSize,
+      spEarnedToday,
+      participatingToday: participatingEmails.size
+    }
+  });
+});
 
 api.post('/ping', async (req, res) => {
   const { email, name, page } = req.body || {};
