@@ -127,20 +127,47 @@ function parseCookies(header = '') {
   }).filter(Boolean));
 }
 
+// Samagama /api/auth/me response cache + per-token upstream rate limit.
+// See server/services/samagamaCache.js for the security model (per-identity
+// key, minimal projection, explicit invalidation, negative caching, rate
+// cap, 60s TTL rationale).
+import {
+  cacheGet as _samagamaCacheGet,
+  cacheSet as _samagamaCacheSet,
+  invalidateSamagamaCache,
+  isRateLimited as _samagamaIsRateLimited,
+  cacheStats as _samagamaStatsSnapshot,
+  cacheStatsReset as _samagamaStatsReset,
+  projectAuthPayload,
+  SAMAGAMA_CACHE_TTL_MS
+} from './services/samagamaCache.js';
+
 // Validate the student's Samagama session by forwarding their chatengine_token
-// cookie to Samagama's internal auth endpoint. Returns the email on success.
+// cookie to Samagama's internal auth endpoint. Caches the MINIMAL projection
+// (only { email, name }) — never the full response body. Rate-limits the
+// upstream call per token. On 401/timeout, caches null (negative cache).
 async function getSamagamaUser(chatengineToken) {
   if (!chatengineToken) return null;
+  const cached = _samagamaCacheGet(chatengineToken);
+  if (cached !== undefined) return cached;
+  if (_samagamaIsRateLimited(chatengineToken)) {
+    // Token is over the per-minute upstream-call cap. Return null (the
+    // safest fallback) and let the next legitimate token miss retry.
+    return null;
+  }
+  let raw = null;
   try {
     const res = await fetch(SAMAGAMA_AUTH_URL, {
       headers: { cookie: `chatengine_token=${chatengineToken}` },
       signal: AbortSignal.timeout(5000)
     });
-    if (!res.ok) return null;
-    return await res.json();
+    if (res.ok) raw = await res.json();
   } catch {
-    return null;
+    // network / timeout / non-JSON body -> cache null (negative cache)
   }
+  const projected = projectAuthPayload(raw); // strips to { email, name } only
+  _samagamaCacheSet(chatengineToken, projected);
+  return projected;
 }
 
 async function studentEmailFromRequest(req) {
@@ -484,6 +511,30 @@ api.get('/admin/active', adminGuard, (_req, res) => {
     }
   }
   res.json(viewers);
+});
+
+// Observability for the Samagama auth cache. Returns hit/miss/set/eviction
+// counters + size + oldest entry age so admins can quantify the perf win
+// in production. Use ?reset=1 to zero the counters.
+api.get('/admin/cache-stats', adminGuard, (_req, res) => {
+  if (_req.query.reset === '1') _samagamaStatsReset();
+  const s = _samagamaStatsSnapshot();
+  const total = s.hits + s.misses;
+  res.json({
+    hits: s.hits,
+    misses: s.misses,
+    negativeHits: s.negativeHits,
+    sets: s.sets,
+    evictions: s.evictions,
+    rateLimited: s.rateLimited,
+    hitRate: total ? s.hits / total : 0,
+    entries: s.entries,
+    ttlMs: s.ttlMs,
+    oldestAgeMs: s.oldestAgeMs,
+    newestAgeMs: s.newestAgeMs,
+    uptimeMs: s.uptimeMs,
+    sinceReset: s.lastResetAt
+  });
 });
 
 api.get('/admin/analytics', adminGuard, async (_req, res) => {
