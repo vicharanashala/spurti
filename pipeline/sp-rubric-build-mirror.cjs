@@ -65,6 +65,14 @@ const APPLY = process.env.APPLY === '1';
 
 // 09:05 IST = 03:35 UTC. wEnd = min(first-instance-end, 11:00 IST). Per-day end overrides (IST) take precedence.
 const WINDOW_END_OVERRIDE_IST = { '2026-05-22': '11:00' };
+// From EVENING_CUTOVER the daily standup moved from the morning (09:05-11:00 IST)
+// to the evening. On/after this date, score presence in [EVENING_WSTART_IST,
+// EVENING_WEND_IST] IST (5-min join grace, mirroring the old morning window) and
+// pick the mandatory meeting that overlaps THAT window (an all-day/leftover
+// morning room must not steal the slot). Dates before the cutover are unchanged.
+const EVENING_CUTOVER = '2026-07-16';
+const EVENING_WSTART_IST = '20:05';
+const EVENING_WEND_IST = '21:00';
 const GRACE_DATE = '2026-06-06'; // exceptional: 1 min join = full att + full poll
 const STAFF = new Set([
   'dled@iitrpr.ac.in', 'prakash.hegade@gmail.com',
@@ -116,10 +124,26 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   const byDate = {}; for (const m of meetings) (byDate[m.date] = byDate[m.date] || []).push(m);
   const sessions = [];
   for (const date of Object.keys(byDate).sort()) {
-    const first = byDate[date].filter((m) => isMandatory(m.topic) && (m.participantsCount || 0) >= 10).sort((a, b) => new Date(a.startTime) - new Date(b.startTime))[0];
-    if (!first) continue;
-    const wStart = utcFromISTDate(date, '09:05');
-    const wEnd = WINDOW_END_OVERRIDE_IST[date] ? utcFromISTDate(date, WINDOW_END_OVERRIDE_IST[date]) : Math.min(new Date(first.endTime).getTime(), utcFromISTDate(date, '11:00'));
+    const mandatory = byDate[date].filter((m) => isMandatory(m.topic) && (m.participantsCount || 0) >= 10);
+    if (!mandatory.length) continue;
+    let first, wStart, wEnd;
+    if (date >= EVENING_CUTOVER) {
+      // evening standup: fixed [20:05, 21:00] IST window; pick the mandatory meeting
+      // that overlaps it most so a leftover all-day/morning room can't steal the slot.
+      wStart = utcFromISTDate(date, EVENING_WSTART_IST);
+      const wCap = utcFromISTDate(date, EVENING_WEND_IST);
+      const scored = mandatory.map((m) => {
+        const ms = new Date(m.startTime).getTime(), me = new Date(m.endTime).getTime();
+        return { m, ov: Math.max(0, Math.min(me, wCap) - Math.max(ms, wStart)) };
+      }).sort((a, b) => b.ov - a.ov)[0];
+      if (!scored || scored.ov <= 0) continue; // no mandatory meeting overlaps the evening window
+      first = scored.m;
+      wEnd = Math.min(new Date(first.endTime).getTime(), wCap);
+    } else {
+      first = mandatory.sort((a, b) => new Date(a.startTime) - new Date(b.startTime))[0];
+      wStart = utcFromISTDate(date, '09:05');
+      wEnd = WINDOW_END_OVERRIDE_IST[date] ? utcFromISTDate(date, WINDOW_END_OVERRIDE_IST[date]) : Math.min(new Date(first.endTime).getTime(), utcFromISTDate(date, '11:00'));
+    }
     sessions.push({ date, uuid: first._id, topic: first.topic, wStart, wEnd, label: dayLabel(first.topic) });
   }
 
