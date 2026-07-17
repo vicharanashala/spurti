@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import Squad from './models/Squad.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -153,6 +154,28 @@ async function studentEmailFromRequest(req) {
   return normalizeEmail(email);
 }
 
+// Squad endpoints fallback: accept studentId+email from request body/query
+// so the squad tab works on localhost without Samagama.
+// Verifies the pair against the DB (same security model as /api/confirm).
+async function squadAuthFallback(req) {
+  const body = req.body || {};
+  const query = req.query || {};
+  // senderStudentId/senderEmail is the auth user (used by invite endpoint
+  // where studentId means the invite target). Prefer sender fields.
+  let studentId = body.senderStudentId || query.senderStudentId || body.studentId || query.studentId;
+  let email = body.senderEmail || query.senderEmail || body.email || query.email;
+  if (!studentId || !email) return null;
+  const student = await Student.findById(studentId).lean();
+  if (!student) return null;
+  const typed = normalizeEmail(email);
+  if (typed !== normalizeEmail(student.email) && typed !== normalizeEmail(student.alternateEmail)) return null;
+  return typed;
+}
+
+async function squadEmail(req) {
+  return await studentEmailFromRequest(req) || await squadAuthFallback(req);
+}
+
 async function rankFor(email) {
   const student = await Student.findOne({ email }).lean();
   if (!student || student.status === 'excused') return null;
@@ -240,6 +263,16 @@ async function studentPayload(student) {
     leaderboard: leaderboard.map(mapRow),
     groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
   };
+}
+
+function nextMonday() {
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun, 1=Mon
+  const daysUntilMonday = day === 0 ? 1 : 8 - day;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + daysUntilMonday);
+  monday.setHours(0, 0, 0, 0);
+  return monday;
 }
 
 function isAdmin(req) {
@@ -612,6 +645,489 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     }
   });
 });
+
+// ── Challenges API ───────────────────────────────────────────────────────
+
+api.get('/challenges/progress', async (req, res) => {
+  const email = await squadEmail(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ email }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - daysSinceMonday);
+  weekStart.setHours(0, 0, 0, 0);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  weekEnd.setHours(23, 59, 59, 999);
+
+  const currentWeekSessions = await Session.find({
+    startDateTime: { $gte: weekStart, $lte: weekEnd }
+  }).sort({ startDateTime: 1 }).lean();
+
+  const sessionLabels = currentWeekSessions.map(s => s.label);
+
+  const myAttendance = await AttendanceRecord.find({
+    email,
+    sessionLabel: { $in: sessionLabels }
+  }).lean();
+
+  const attendanceMap = {};
+  for (const a of myAttendance) {
+    attendanceMap[a.sessionLabel] = {
+      qualified: a.qualified,
+      attendedMinutes: a.attendedMinutes,
+      attendancePercentage: a.attendancePercentage
+    };
+  }
+
+  const completedSessions = [];
+  const missedSessions = [];
+  for (const s of currentWeekSessions) {
+    if (attendanceMap[s.label]?.qualified) {
+      completedSessions.push(s.label);
+    } else {
+      missedSessions.push(s.label);
+    }
+  }
+
+  const allAttendance = await AttendanceRecord.find({ email }).lean();
+  const allSessionLabels = [...new Set(allAttendance.map(a => a.sessionLabel))];
+  const allSessions = await Session.find({
+    label: { $in: allSessionLabels }
+  }).sort({ startDateTime: 1 }).lean();
+
+  const sessionOrder = {};
+  allSessions.forEach((s, i) => { sessionOrder[s.label] = i; });
+
+  const sortedAttendance = [...allAttendance].sort((a, b) =>
+    (sessionOrder[a.sessionLabel] || 0) - (sessionOrder[b.sessionLabel] || 0)
+  );
+
+  let currentStreak = 0;
+  for (let i = sortedAttendance.length - 1; i >= 0; i--) {
+    if (sortedAttendance[i].qualified) currentStreak++;
+    else break;
+  }
+
+  let longestStreak = 0;
+  let tempStreak = 0;
+  for (const a of sortedAttendance) {
+    if (a.qualified) { tempStreak++; longestStreak = Math.max(longestStreak, tempStreak); }
+    else tempStreak = 0;
+  }
+
+  res.json({
+    currentWeekSessions: currentWeekSessions.map(s => ({
+      label: s.label,
+      startDateTime: s.startDateTime,
+      type: s.type
+    })),
+    myAttendance: attendanceMap,
+    individualPerfectWeek: {
+      attended: completedSessions.length,
+      total: currentWeekSessions.length,
+      completedSessions,
+      missedSessions,
+      allQualified: currentWeekSessions.length > 0 && missedSessions.length === 0
+    },
+    attendanceStreak: {
+      current: currentStreak,
+      longest: longestStreak
+    }
+  });
+});
+
+// ── Squad API ────────────────────────────────────────────────────────────
+
+api.get('/squad/my', async (req, res) => {
+  const email = await squadEmail(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ email }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const pendingInviteCount = await Squad.countDocuments({ 'pendingInvites.email': email });
+
+  if (!student.squadId) {
+    return res.json({ squad: null, pendingInviteCount });
+  }
+
+  const squad = await Squad.findById(student.squadId).lean();
+  if (!squad) {
+    return res.json({ squad: null, pendingInviteCount });
+  }
+
+  const memberIds = squad.members.map(m => m.studentId);
+  const memberDocs = await Student.find({ _id: { $in: memberIds } }).lean();
+  const memberMap = new Map(memberDocs.map(s => [String(s._id), s]));
+
+  const members = squad.members.map(m => {
+    const doc = memberMap.get(String(m.studentId));
+    return {
+      name: doc?.name || 'Unknown',
+      maskedEmail: maskEmail(m.email),
+      totalSp: doc?.totalSp || 0,
+      isCurrentUser: m.email === email,
+      joinedAt: m.joinedAt
+    };
+  });
+
+  const squadLevel = members.length
+    ? Math.round(members.reduce((sum, m) => sum + m.totalSp, 0) / members.length)
+    : 0;
+
+  let challengeStatus = null;
+  const now = new Date();
+  if (squad.challengeLockedUntil && squad.challengeLockedUntil > now) {
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    weekStart.setHours(0, 0, 0, 0);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+
+    const sessions = await Session.find({
+      startDateTime: { $gte: weekStart, $lte: weekEnd }
+    }).lean();
+    const sessionLabels = sessions.map(s => s.label);
+
+    const attendance = await AttendanceRecord.find({
+      studentId: { $in: memberIds },
+      sessionLabel: { $in: sessionLabels }
+    }).lean();
+
+    const attendanceMap = {};
+    for (const a of attendance) {
+      const sid = String(a.studentId);
+      if (!attendanceMap[sid]) attendanceMap[sid] = {};
+      attendanceMap[sid][a.sessionLabel] = a.qualified;
+    }
+
+    challengeStatus = {
+      lockedUntil: squad.challengeLockedUntil,
+      sessions: sessions.map(s => ({
+        label: s.label,
+        date: s.startDateTime,
+        memberAttendance: members.map(m => {
+          const memberId = squad.members.find(mem => mem.email === m.email)?.studentId;
+          return {
+            name: m.name,
+            qualified: memberId ? (attendanceMap[String(memberId)]?.[s.label] ?? null) : null
+          };
+        })
+      }))
+    };
+  }
+
+  const currentUserName = student.name;
+  const sentInvites = squad.pendingInvites
+    .filter(i => i.invitedBy === currentUserName)
+    .map(i => ({ email: i.email, invitedAt: i.invitedAt }));
+
+  res.json({
+    squad: {
+      id: squad._id,
+      name: squad.name,
+      createdBy: String(squad.createdBy),
+      members,
+      squadLevel,
+      challengeLockedUntil: squad.challengeLockedUntil,
+      challengeHistory: squad.challengeHistory,
+      challengeStatus,
+      sentInvites
+    },
+    pendingInviteCount
+  });
+});
+
+api.post('/squad/create', async (req, res) => {
+  const email = await squadEmail(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ email });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (student.squadId) return res.status(400).json({ error: 'Already in a squad' });
+
+  const { name } = req.body || {};
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'Squad name is required' });
+  }
+
+  const squad = await Squad.create({
+    name: name.trim(),
+    createdBy: student._id,
+    members: [{ studentId: student._id, email: student.email }],
+    challengeLockedUntil: nextMonday()
+  });
+
+  student.squadId = squad._id;
+  await student.save();
+
+  res.json({
+    squad: {
+      id: squad._id,
+      name: squad.name,
+      createdBy: String(squad.createdBy),
+      members: [{ name: student.name, maskedEmail: maskEmail(student.email), totalSp: student.totalSp, isCurrentUser: true, joinedAt: squad.members[0].joinedAt }],
+      squadLevel: student.totalSp,
+      challengeLockedUntil: squad.challengeLockedUntil,
+      challengeHistory: []
+    }
+  });
+});
+
+api.post('/squad/invite', async (req, res) => {
+  const email = await squadEmail(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const sender = await Student.findOne({ email });
+  if (!sender) return res.status(404).json({ error: 'Student not found' });
+  if (!sender.squadId) return res.status(400).json({ error: 'Not in a squad' });
+
+  const squad = await Squad.findById(sender.squadId);
+  if (!squad) return res.status(404).json({ error: 'Squad not found' });
+  if (squad.members.length >= 5) return res.status(400).json({ error: 'Squad is full (max 5)' });
+
+  let targetEmail;
+  if (req.body.studentId) {
+    const target = await Student.findById(req.body.studentId).lean();
+    if (!target) return res.status(404).json({ error: 'Student not found' });
+    targetEmail = target.email;
+  } else {
+    targetEmail = normalizeEmail(req.body.email || '');
+  }
+
+  if (!targetEmail) return res.status(400).json({ error: 'Email is required' });
+
+  const target = await Student.findOne({ $or: [{ email: targetEmail }, { alternateEmail: targetEmail }] });
+  if (!target) return res.status(404).json({ error: 'Student not found' });
+  if (targetEmail === normalizeEmail(sender.email)) return res.status(400).json({ error: 'Cannot invite yourself' });
+  if (target.squadId) return res.status(400).json({ error: 'Student is already in a squad' });
+
+  const alreadyInvited = squad.pendingInvites.some(i => normalizeEmail(i.email) === targetEmail);
+  if (alreadyInvited) return res.status(400).json({ error: 'Already invited' });
+
+  squad.pendingInvites.push({ email: targetEmail, invitedBy: sender.name });
+  await squad.save();
+
+  res.json({ ok: true });
+});
+
+api.get('/squad/invites', async (req, res) => {
+  const email = await squadEmail(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const squads = await Squad.find({ 'pendingInvites.email': email }).lean();
+  const invites = [];
+  for (const squad of squads) {
+    for (const inv of squad.pendingInvites) {
+      if (normalizeEmail(inv.email) === email) {
+        invites.push({
+          squadId: squad._id,
+          squadName: squad.name,
+          invitedByName: inv.invitedBy,
+          invitedAt: inv.invitedAt
+        });
+      }
+    }
+  }
+
+  res.json({ invites });
+});
+
+api.post('/squad/invites/:squadId/respond', async (req, res) => {
+  const email = await squadEmail(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ email });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const { squadId } = req.params;
+  const { action } = req.body || {};
+  if (!['accept', 'reject'].includes(action)) {
+    return res.status(400).json({ error: 'action must be "accept" or "reject"' });
+  }
+
+  const squad = await Squad.findById(squadId);
+  if (!squad) return res.status(404).json({ error: 'Squad not found' });
+
+  const inviteIndex = squad.pendingInvites.findIndex(i => normalizeEmail(i.email) === email);
+  if (inviteIndex === -1) return res.status(404).json({ error: 'No pending invite found' });
+
+  if (action === 'reject') {
+    squad.pendingInvites.splice(inviteIndex, 1);
+    await squad.save();
+    return res.json({ ok: true });
+  }
+
+  if (squad.members.length >= 5) return res.status(400).json({ error: 'Squad is full' });
+
+  squad.pendingInvites.splice(inviteIndex, 1);
+  squad.members.push({ studentId: student._id, email: student.email });
+  if (!squad.challengeLockedUntil || squad.challengeLockedUntil <= new Date()) {
+    squad.challengeLockedUntil = nextMonday();
+  }
+  await squad.save();
+
+  student.squadId = squad._id;
+  await student.save();
+
+  res.json({ ok: true });
+});
+
+api.post('/squad/leave', async (req, res) => {
+  const email = await squadEmail(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ email });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (!student.squadId) return res.status(400).json({ error: 'Not in a squad' });
+
+  const squad = await Squad.findById(student.squadId);
+  if (!squad) return res.status(400).json({ error: 'Squad not found' });
+
+  const wasCreator = String(squad.createdBy) === String(student._id);
+  squad.members = squad.members.filter(m => m.email !== email);
+  student.squadId = null;
+  await student.save();
+
+  if (squad.members.length === 0) {
+    await Squad.deleteOne({ _id: squad._id });
+  } else {
+    if (wasCreator) {
+      squad.createdBy = squad.members[0].studentId;
+    }
+    await squad.save();
+  }
+
+  res.json({ ok: true });
+});
+
+// Cancel a pending invite (any squad member)
+api.post('/squad/invites/:squadId/cancel', async (req, res) => {
+  const email = await squadEmail(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const { squadId } = req.params;
+  const { email: targetEmail } = req.body || {};
+  if (!targetEmail) return res.status(400).json({ error: 'Email is required' });
+  const squad = await Squad.findById(squadId);
+  if (!squad) return res.status(404).json({ error: 'Squad not found' });
+  const student = await Student.findOne({ email }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const isMember = squad.members.some(m => m.studentId.toString() === String(student._id));
+  if (!isMember) return res.status(403).json({ error: 'Not a squad member' });
+  const inviteIndex = squad.pendingInvites.findIndex(i => normalizeEmail(i.email) === normalizeEmail(targetEmail));
+  if (inviteIndex === -1) return res.status(404).json({ error: 'Invite not found' });
+  squad.pendingInvites.splice(inviteIndex, 1);
+  await squad.save();
+  res.json({ ok: true });
+});
+
+// Rename squad (any member)
+api.post('/squad/rename', async (req, res) => {
+  const email = await squadEmail(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const { squadId, name } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required' });
+  const squad = await Squad.findById(squadId);
+  if (!squad) return res.status(404).json({ error: 'Squad not found' });
+  const student = await Student.findOne({ email }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const isMember = squad.members.some(m => m.studentId.toString() === String(student._id));
+  if (!isMember) return res.status(403).json({ error: 'Not a squad member' });
+  squad.name = name.trim();
+  await squad.save();
+  res.json({ ok: true, name: squad.name });
+});
+
+api.post('/squad/resolve-challenges', async (req, res) => {
+  const email = await squadEmail(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon
+  // Last Monday (start of previous completed week)
+  const daysSinceLastMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const lastMonday = new Date(now);
+  lastMonday.setDate(now.getDate() - daysSinceLastMonday - 7);
+  lastMonday.setHours(0, 0, 0, 0);
+  const lastSunday = new Date(lastMonday);
+  lastSunday.setDate(lastMonday.getDate() + 6);
+  lastSunday.setHours(23, 59, 59, 999);
+
+  const sessions = await Session.find({ startDateTime: { $gte: lastMonday, $lte: lastSunday } }).lean();
+  if (!sessions.length) return res.json({ resolved: 0, message: 'No sessions in the previous week' });
+
+  // Find squads with an expired challengeLockedUntil (was locked for the previous week, now expired)
+  const squads = await Squad.find({
+    challengeLockedUntil: { $ne: null, $lte: now },
+    // Only resolve squads that haven't already been resolved for last week
+    'challengeHistory.weekStart': { $not: { $eq: lastMonday } }
+  });
+  const results = [];
+
+  for (const squad of squads) {
+    const memberIds = squad.members.map(m => m.studentId);
+    let allQualified = true;
+
+    for (const session of sessions) {
+      for (const studentId of memberIds) {
+        const rec = await AttendanceRecord.findOne({ studentId, sessionLabel: session.label, qualified: true }).lean();
+        if (!rec) { allQualified = false; break; }
+      }
+      if (!allQualified) break;
+    }
+
+    const challengeEntry = {
+      weekStart: lastMonday,
+      weekEnd: lastSunday,
+      status: allQualified ? 'completed' : 'failed',
+      completedAt: new Date()
+    };
+
+    if (allQualified) {
+      for (const member of squad.members) {
+        const studentDoc = await Student.findById(member.studentId);
+        if (!studentDoc) continue;
+        const delta = Math.floor(studentDoc.totalSp * 0.1);
+        if (delta > 0) {
+          const newTotalSp = studentDoc.totalSp + delta;
+          await SPTransaction.create({
+            email: studentDoc.email,
+            studentId: studentDoc._id,
+            category: 'squad_bonus',
+            sessionLabel: 'weekly_challenge',
+            deltaMode: 'absolute',
+            deltaValue: delta,
+            appliedDelta: delta,
+            balanceAfter: newTotalSp,
+            reason: 'Squad weekly challenge completed - 1.1x SP boost',
+            dateTime: new Date()
+          });
+          await Student.updateOne({ _id: studentDoc._id }, { $inc: { totalSp: delta } });
+        }
+      }
+    }
+
+    const nextMonday = new Date(now);
+    const daysToNextMonday = now.getDay() === 0 ? 1 : 8 - now.getDay();
+    nextMonday.setDate(now.getDate() + daysToNextMonday);
+    nextMonday.setHours(0, 0, 0, 0);
+    squad.challengeLockedUntil = nextMonday;
+    squad.challengeHistory.push(challengeEntry);
+    await squad.save();
+
+    results.push({
+      squadId: squad._id,
+      squadName: squad.name,
+      status: allQualified ? 'completed' : 'failed',
+      memberCount: squad.members.length
+    });
+  }
+
+  res.json({ resolved: results.length, results });
+});
+
+// ── End Squad API ────────────────────────────────────────────────────────
 
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);

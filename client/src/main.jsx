@@ -279,10 +279,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['challenges','Challenges']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'challenges' && <ChallengesView studentEmail={student.email} profile={profile} />}
     </main>
   );
 }
@@ -846,5 +847,524 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
+
+function ChallengesView({ studentEmail, profile }) {
+  const [squad, setSquad] = useState(null);
+  const [invites, setInvites] = useState([]);
+  const [sentInvites, setSentInvites] = useState([]);
+  const [challengeProgress, setChallengeProgress] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [squadName, setSquadName] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const [leaveError, setLeaveError] = useState("");
+  const [editingName, setEditingName] = useState(false);
+  const [newSquadName, setNewSquadName] = useState("");
+  const [showInviteSearch, setShowInviteSearch] = useState(false);
+  const lastSearchQuery = useRef("");
+
+
+  const API = `${window.location.pathname.startsWith("/spurti") ? "/spurti" : ""}/api`;
+
+  async function loadSquad() {
+    try {
+      const sid = profile?.student?._id;
+      const em = profile?.student?.email;
+      const qs = sid && em ? `?studentId=${encodeURIComponent(sid)}&email=${encodeURIComponent(em)}` : '';
+      const res = await fetch(`${API}/squad/my${qs}`, { credentials: 'same-origin' });
+      const data = await res.json();
+      setSquad(data.squad);
+      setSentInvites(data.squad?.sentInvites || []);
+    } catch (e) { console.error("Failed to load squad", e); }
+  }
+
+  async function loadInvites() {
+    try {
+      const sid = profile?.student?._id;
+      const em = profile?.student?.email;
+      const qs = sid && em ? `?studentId=${encodeURIComponent(sid)}&email=${encodeURIComponent(em)}` : '';
+      const res = await fetch(`${API}/squad/invites${qs}`, { credentials: 'same-origin' });
+      const data = await res.json();
+      setInvites(data.invites || []);
+    } catch (e) { console.error("Failed to load invites", e); }
+  }
+
+  async function loadChallengeProgress() {
+    try {
+      const sid = profile?.student?._id;
+      const em = profile?.student?.email;
+      const qs = sid && em ? `?studentId=${encodeURIComponent(sid)}&email=${encodeURIComponent(em)}` : '';
+      const res = await fetch(`${API}/challenges/progress${qs}`, { credentials: 'same-origin' });
+      if (res.ok) {
+        const data = await res.json();
+        setChallengeProgress(data);
+      }
+    } catch (e) { console.error("Failed to load challenge progress", e); }
+  }
+
+  useEffect(() => {
+    async function load() {
+      await Promise.all([loadSquad(), loadInvites(), loadChallengeProgress()]);
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  async function handleCreate() {
+    if (!squadName.trim()) return;
+    setError("");
+    try {
+      const body = { name: squadName.trim() };
+      const sid = profile?.student?._id;
+      const em = profile?.student?.email;
+      if (sid && em) { body.studentId = sid; body.email = em; }
+      const res = await fetch(`${API}/squad/create`, {
+        method: "POST", credentials: 'same-origin',
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error); return; }
+      setSquad(data.squad);
+      setShowCreate(false);
+      setSquadName("");
+      setSuccess("Squad created!");
+      loadChallengeProgress();
+      setTimeout(() => setSuccess(""), 3000);
+    } catch (e) { setError("Network error"); }
+  }
+
+  async function handleLeave() {
+    setLeaveError("");
+    try {
+      const body = {};
+      const sid = profile?.student?._id;
+      const em = profile?.student?.email;
+      if (sid && em) { body.studentId = sid; body.email = em; }
+      const res = await fetch(`${API}/squad/leave`, { method: "POST", credentials: 'same-origin', headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) { setLeaveError(data.error); return; }
+      setSquad(null);
+      setConfirmLeave(false);
+      setSuccess("Left squad");
+      setTimeout(() => setSuccess(""), 3000);
+    } catch (e) { setLeaveError("Network error"); }
+  }
+
+  async function handleSearch() {
+    const q = searchQuery.trim();
+    if (q.length < 2) { setSearchResults([]); return; }
+    lastSearchQuery.current = q;
+    setSearching(true);
+    try {
+      const res = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
+      if (lastSearchQuery.current !== q) return; // stale response
+      const data = await res.json();
+      if (lastSearchQuery.current !== q) return;
+      setSearchResults(data.matches || []);
+    } catch (e) { /* ignore */ } finally {
+      if (lastSearchQuery.current === q) setSearching(false);
+    }
+  }
+
+  async function handleInvite(item) {
+    setError("");
+    try {
+      const body = { studentId: item._id };
+      const sid = profile?.student?._id;
+      const em = profile?.student?.email;
+      if (sid && em) { body.senderStudentId = sid; body.senderEmail = em; }
+      const res = await fetch(`${API}/squad/invite`, {
+        method: "POST", credentials: 'same-origin',
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error); return; }
+      setSuccess("Invite sent!");
+      setSearchQuery("");
+      setSearchResults([]);
+      loadSquad();
+      setTimeout(() => setSuccess(""), 3000);
+    } catch (e) { setError("Network error"); }
+  }
+
+  async function handleRespond(squadId, action) {
+    setError("");
+    try {
+      const body = { action };
+      const sid = profile?.student?._id;
+      const em = profile?.student?.email;
+      if (sid && em) { body.studentId = sid; body.email = em; }
+      const res = await fetch(`${API}/squad/invites/${squadId}/respond`, {
+        method: "POST", credentials: 'same-origin',
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error); return; }
+      if (action === "accept") {
+        setSuccess("Joined squad!");
+        setSquad(data.squad);
+        loadSquad();
+        loadChallengeProgress();
+      } else {
+        loadInvites();
+      }
+      setTimeout(() => setSuccess(""), 3000);
+    } catch (e) { setError("Network error"); }
+  }
+
+  async function handleCancelInvite(targetEmail) {
+    setError("");
+    try {
+      const sid = profile?.student?._id;
+      const em = profile?.student?.email;
+      const body = { squadId: squad.id, email: targetEmail };
+      if (sid && em) { body.senderStudentId = sid; body.senderEmail = em; }
+      const res = await fetch(`${API}/squad/invites/${squad.id}/cancel`, {
+        method: "POST", credentials: 'same-origin',
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error); return; }
+      setSuccess("Invite cancelled");
+      setSentInvites(prev => prev.filter(i => i.email !== targetEmail));
+      setTimeout(() => setSuccess(""), 3000);
+    } catch (e) { setError("Network error"); }
+  }
+
+  async function handleRenameSave() {
+    const trimmed = newSquadName.trim();
+    if (!trimmed || trimmed === squad.name) {
+      setEditingName(false);
+      setNewSquadName(squad.name);
+      return;
+    }
+    setError("");
+    try {
+      const sid = profile?.student?._id;
+      const em = profile?.student?.email;
+      const body = { squadId: squad.id, name: trimmed };
+      if (sid && em) { body.studentId = sid; body.email = em; }
+      const res = await fetch(`${API}/squad/rename`, {
+        method: "POST", credentials: 'same-origin',
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error); return; }
+      setSquad(prev => ({ ...prev, name: trimmed }));
+      setEditingName(false);
+      setSuccess("Squad renamed");
+      setTimeout(() => setSuccess(""), 3000);
+    } catch (e) { setError("Network error"); }
+  }
+
+
+  const maxMembers = 5;
+  const spotsLeft = squad ? maxMembers - squad.members.length : 0;
+  const cp = challengeProgress;
+
+  function ProgressBar({ pct, colorClass = "progress-green" }) {
+    return (
+      <div className="progress-bar">
+        <div className={colorClass} style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
+      </div>
+    );
+  }
+
+  function ChallengeCard({ title, subtitle, badge, badgeVariant, action, children }) {
+    return (
+      <div className="challenge-card">
+        <div className="challenge-card-content">
+          <div className="challenge-card-header">
+            <h3>{title}</h3>
+            {subtitle && <p className="muted">{subtitle}</p>}
+          </div>
+          <div className="challenge-card-body">
+            {children}
+          </div>
+          <div className="challenge-card-footer">
+            {badge && <span className={`badge badge-${badgeVariant || 'inactive'}`}>{badge}</span>}
+            {action}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) return <section className="panel"><p className="muted">Loading challenges...</p></section>;
+
+  return (
+    <section className="panel">
+      <div className="challenges-grid">
+        <div className="challenge-cards">
+
+          {/* ── Squad Perfect Week Card ── */}
+          <ChallengeCard
+            title="Squad Perfect Week"
+            subtitle="All squad members must attend every session this week for a 1.1x SP boost for everyone."
+            badge={squad ? "Enrolled" : "Not Enrolled"}
+            badgeVariant={squad ? "active" : "inactive"}
+            action={
+              <button
+                className="primary"
+                onClick={() => !squad && setShowCreate(true)}
+                disabled={!!squad}
+              >
+                {squad ? "JOINED" : "JOIN"}
+              </button>
+            }
+          >
+            {squad ? (
+              squad.challengeStatus && squad.challengeStatus.sessions.length > 0 ? (
+                <div className="challenge-progress-list">
+                  {squad.challengeStatus.sessions.map(s => (
+                    <div key={s.label} className="challenge-progress-item">
+                      <span>{s.label}</span>
+                      <span>{s.memberAttendance.filter(m => m.qualified === true).length}/{s.memberAttendance.length} qualified</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">No sessions scheduled this week. The challenge will activate when sessions begin.</p>
+              )
+            ) : (
+              <p className="muted">Create or join a squad to participate in the weekly challenge.</p>
+            )}
+          </ChallengeCard>
+
+          {/* ── Individual Perfect Week Card ── */}
+          <ChallengeCard
+            title="Perfect Week"
+            subtitle="Attend every session this week. Consistency pays off!"
+            badge="Active"
+            badgeVariant="active"
+            action={<button className="primary">JOIN</button>}
+          >
+            {cp && cp.individualPerfectWeek.total > 0 ? (
+              <div>
+                <div className="challenge-progress-summary">
+                  <span>{cp.individualPerfectWeek.attended}/{cp.individualPerfectWeek.total} sessions</span>
+                  <span>{Math.round(cp.individualPerfectWeek.attended / cp.individualPerfectWeek.total * 100)}%</span>
+                </div>
+                <ProgressBar pct={(cp.individualPerfectWeek.attended / cp.individualPerfectWeek.total) * 100} color="#555" />
+              </div>
+            ) : (
+              <p className="muted">No sessions scheduled this week. Check back when sessions start!</p>
+            )}
+          </ChallengeCard>
+        </div>
+
+        {/* ── SIDEBAR ── */}
+        <aside className="squad-panel">
+          {squad ? (
+            <div className="subpanel">
+              {/* Squad Header */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {editingName ? (
+                    <input
+                      type="text"
+                      value={newSquadName}
+                      onChange={e => setNewSquadName(e.target.value)}
+                      onBlur={handleRenameSave}
+                      onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setEditingName(false); setNewSquadName(squad.name); } }}
+                      autoFocus
+                      style={{ width: "100%", boxSizing: "border-box", padding: "4px 8px", borderRadius: 4, border: "1px solid var(--line)", fontSize: "0.9em" }}
+                    />
+                  ) : (
+                    <>
+                      <h3 style={{ margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{squad.name}</h3>
+                      <p className="muted" style={{ margin: 0, fontSize: "0.85em" }}>Level: {squad.squadLevel} SP avg</p>
+                    </>
+                  )}
+                </div>
+                {!editingName && (
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button className="secondary" style={{ fontSize: "0.8em", padding: "2px 8px" }} onClick={() => { setEditingName(true); setNewSquadName(squad.name); }}>Edit</button>
+                    <button className="secondary" style={{ fontSize: "0.8em", padding: "2px 8px", background: "#fef2f2", color: "var(--red)", borderColor: "var(--red)" }} onClick={() => setConfirmLeave(true)}>Leave</button>
+                  </div>
+                )}
+              </div>
+
+              {/* Members */}
+              <div style={{ marginBottom: 12 }}>
+                <p style={{ fontWeight: 600, fontSize: "0.85em", marginBottom: 4, color: "var(--muted)" }}>Members ({squad.members.length}/{maxMembers})</p>
+                {squad.members.map((m, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: "0.88em", borderBottom: i < squad.members.length - 1 ? "1px solid var(--line)" : "none" }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 26, height: 26, borderRadius: "50%", background: "var(--primary)", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "0.75em", fontWeight: 700, flexShrink: 0 }}>{m.name.charAt(0).toUpperCase()}</span>
+                      {m.name}{m.isCurrentUser ? " (you)" : ""}
+                    </span>
+                    <span style={{ fontWeight: 600, fontSize: "0.9em" }}>{m.totalSp} SP</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Sent Invites */}
+              {sentInvites.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <p style={{ fontWeight: 600, fontSize: "0.85em", marginBottom: 4, color: "var(--muted)" }}>Sent Invites</p>
+                  {sentInvites.map(inv => (
+                    <div key={inv.email} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", fontSize: "0.85em" }}>
+                      <span style={{ color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{inv.email}</span>
+                      <button className="secondary" style={{ fontSize: "0.75em", padding: "1px 6px", color: "var(--red)", borderColor: "var(--red)", flexShrink: 0 }} onClick={() => handleCancelInvite(inv.email)}>Cancel</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Invite / Search */}
+              {spotsLeft > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  {showInviteSearch ? (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <p style={{ fontWeight: 600, fontSize: "0.85em", margin: 0, color: "var(--muted)" }}>Invite ({spotsLeft} spot{spotsLeft > 1 ? "s" : ""} left)</p>
+                        <button className="secondary" style={{ fontSize: "0.75em", padding: "1px 6px" }} onClick={() => { setShowInviteSearch(false); setSearchQuery(""); setSearchResults([]); }}>Close</button>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Search by name or email..."
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleSearch()}
+                        autoFocus
+                        style={{ width: "100%", boxSizing: "border-box", padding: "6px 8px", fontSize: "0.85em", border: "1px solid var(--line)", borderRadius: 6 }}
+                      />
+                      {searching && <p className="muted" style={{ fontSize: "0.8em", marginTop: 4 }}>Searching...</p>}
+                      <div className={`squad-search-results${searchResults.length > 0 ? ' open' : ''}`} style={{ marginTop: 6 }}>
+                        <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                          {searchResults.filter(s => {
+                            const inSquad = squad?.members?.some(m => m.maskedEmail === s.maskedEmail);
+                            const isSelf = profile?.student?.maskedEmail === s.maskedEmail;
+                            return !inSquad && !isSelf;
+                          }).map(s => (
+                            <div key={s._id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", fontSize: "0.82em", borderBottom: "1px solid var(--line)" }}>
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                                {s.name} — {s.maskedEmail}
+                              </span>
+                              <button className="primary" style={{ fontSize: "0.75em", padding: "2px 8px", minHeight: "unset", lineHeight: "24px", flexShrink: 0 }} onClick={() => handleInvite(s)}>Invite</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <button className="primary" style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontWeight: 600 }} onClick={() => { setShowInviteSearch(true); setSearchQuery(""); setSearchResults([]); }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="8" r="4"/><path d="M2 20c0-4 3.6-7 8-7s8 3 8 7"/><path d="M18 11v6"/><path d="M21 14h-6"/></svg>
+                      Invite
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Challenge History */}
+              {squad.challengeHistory && squad.challengeHistory.length > 0 && (
+                <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+                  <p style={{ fontWeight: 600, fontSize: "0.85em", marginBottom: 6, color: "var(--muted)" }}>Challenge History</p>
+                  {squad.challengeHistory.slice(-5).reverse().map((c, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: "0.85em" }}>
+                      <span>{new Date(c.weekStart).toLocaleDateString()}</span>
+                      <span style={{ color: c.status === "completed" ? "var(--green)" : "var(--red)" }}>
+                        {c.status === "completed" ? "\u2705" : "\u274C"} {c.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="subpanel">
+              <h3 style={{ margin: 0, marginBottom: 8 }}>My Squad</h3>
+              {invites.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <p style={{ fontWeight: 600, fontSize: "0.85em", marginBottom: 6, color: "var(--muted)" }}>Pending Invites</p>
+                  {invites.map(inv => (
+                    <div key={inv.squadId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontWeight: 600, fontSize: "0.9em", margin: 0 }}>{inv.squadName}</p>
+                        <p className="muted" style={{ margin: 0, fontSize: "0.8em" }}>by {inv.invitedByName}</p>
+                      </div>
+                      <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                        <button className="primary" style={{ fontSize: "0.8em", padding: "3px 8px" }} onClick={() => handleRespond(inv.squadId, "accept")}>Accept</button>
+                        <button className="secondary" style={{ fontSize: "0.8em", padding: "3px 8px" }} onClick={() => handleRespond(inv.squadId, "reject")}>Reject</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="muted" style={{ fontSize: "0.9em", marginBottom: 0 }}>
+                {invites.length > 0 ? "Accept an invite above or create your own squad to unlock squad challenges!" : "Create or join a squad to unlock squad challenges!"}
+              </p>
+              <button
+                className="primary"
+                style={{ width: "100%", marginTop: 12 }}
+                onClick={() => setShowCreate(true)}
+              >
+                Create Squad
+              </button>
+            </div>
+          )}
+          {error && (
+            <div style={{ background: "#ffebee", color: "#c62828", border: "1px solid #ef9a9a", padding: "10px 14px", borderRadius: 8, fontSize: "0.85em", marginTop: 12, marginBottom: 12, fontWeight: 600 }}>
+              {error}
+            </div>
+          )}
+          {success && (
+            <div style={{ background: "#e8f5e9", color: "#2e7d32", border: "1px solid #a5d6a7", padding: "10px 14px", borderRadius: 8, fontSize: "0.85em", marginTop: 12, marginBottom: 12, fontWeight: 600 }}>
+              {success}
+            </div>
+          )}
+        </aside>
+      </div>
+
+      {/* ── Create Squad Modal ── */}
+      {showCreate && (
+        <div className="overlay" onClick={() => { setShowCreate(false); setSquadName(""); }}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Create a Squad</h3>
+            <input
+              type="text"
+              placeholder="Squad name..."
+              value={squadName}
+              onChange={e => setSquadName(e.target.value)}
+              autoFocus
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button className="primary" onClick={handleCreate}>Create</button>
+              <button className="secondary" onClick={() => { setShowCreate(false); setSquadName(""); }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Leave Confirmation Modal ── */}
+      {confirmLeave && (
+        <div className="overlay" onClick={() => { setConfirmLeave(false); setLeaveError(""); }}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Leave Squad?</h3>
+            <p>Are you sure you want to leave {squad?.name}?</p>
+            {leaveError && <p className="error" style={{ marginTop: 8 }}>{leaveError}</p>}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button className="primary" onClick={handleLeave}>Yes, Leave</button>
+              <button className="secondary" onClick={() => { setConfirmLeave(false); setLeaveError(""); }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+    </section>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);

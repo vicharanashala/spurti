@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import Squad from "./Squad.js";
 
 const studentSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, index: true },
@@ -15,6 +16,7 @@ const studentSchema = new mongoose.Schema({
   level: { type: Number, default: 1 },
   trophyLeague: { type: String, default: 'Bronze II' },
   legendBadgeUnlocked: { type: Boolean, default: false },
+  squadId: { type: mongoose.Schema.Types.ObjectId, ref: "Squad", default: null, index: true },
   leaderboardGroup: { type: String, default: '', index: true },
   // Survey triangulation (perception follow-up). Set when the student submits
   // the dashboard pop-up Google Form — via the Apps Script webhook or the
