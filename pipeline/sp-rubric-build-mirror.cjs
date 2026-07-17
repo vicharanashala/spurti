@@ -239,7 +239,14 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   for (const e of await Tx.distinct('email')) if (!keep.has(e)) staleSet.add(e);
   const staleEmails = [...staleSet];
   let zdel = 0; for (let i = 0; i < staleEmails.length; i += 500) { const r = await Tx.deleteMany({ email: { $in: staleEmails.slice(i, i + 500) } }); zdel += r.deletedCount; }
-  for (let i = 0; i < staleEmails.length; i += 1000) await Students.bulkWrite(staleEmails.slice(i, i + 1000).map((email) => ({ updateOne: { filter: { email }, update: { $set: { totalSp: 0 } } } })), { ordered: false });
-  console.log(`RECONCILED -> ${staleEmails.length} students not in new ledger cleared (incl ${zeroOut.length} future-start; ghost txns deleted ${zdel}, totalSp=0)`);
+  const zeroOutSet = new Set(zeroOut);
+  const staleBulk = staleEmails.map((email) => {
+    const isExcused = excusedSet.has(email);
+    const isFuture = zeroOutSet.has(email);
+    const status = isExcused ? 'excused' : (isFuture ? 'yet to onboard' : 'active');
+    return { updateOne: { filter: { email }, update: { $set: { totalSp: 0, status } } } };
+  });
+  for (let i = 0; i < staleBulk.length; i += 1000) await Students.bulkWrite(staleBulk.slice(i, i + 1000), { ordered: false });
+  console.log(`RECONCILED -> ${staleEmails.length} students not in new ledger cleared (incl ${zeroOut.length} future-start set to 'yet to onboard'; ghost txns deleted ${zdel}, totalSp=0)`);
   await conn.close();
 })().catch((e) => { console.error('FATAL', e.message); process.exit(1); });

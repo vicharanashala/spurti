@@ -72,7 +72,8 @@ async function run() {
       existing.internshipStartDate = row.internshipStartDate || existing.internshipStartDate;
       existing.internshipEndDate = row.internshipEndDate || existing.internshipEndDate;
       if (existing.status === 'excused') stats.reactivated++;
-      existing.status = 'active';
+      const existingStart = existing.internshipStartDate ? new Date(existing.internshipStartDate) : null;
+      existing.status = (existingStart && existingStart > new Date()) ? 'yet to onboard' : 'active';
       existing.excusedAt = null;
       existing.excusedReason = '';
       await existing.save();
@@ -81,13 +82,14 @@ async function run() {
       continue;
     }
 
+    const start = row.internshipStartDate ? new Date(row.internshipStartDate) : null;
     const student = await Student.create({
       name: row.name || row.email,
       email: normalizeEmail(row.email),
       alternateEmail: normalizeEmail(row.alternateEmail),
       internshipStartDate: row.internshipStartDate,
       internshipEndDate: row.internshipEndDate,
-      status: 'active',
+      status: (start && start > new Date()) ? 'yet to onboard' : 'active',
       excusedAt: null,
       excusedReason: '',
       totalSp: 100
