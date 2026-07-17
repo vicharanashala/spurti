@@ -1,9 +1,8 @@
 /**
  * server/tests/samagama-cache.test.js
  *
- * Validates the cache-stats math (hit rate calculation, oldest/newest
- * entry ages, negative-hit counting). The cache itself is exercised
- * by integration; these tests cover the observable surface.
+ * Comprehensive tests for the Samagama auth cache + rate limiter service.
+ * Covers the security model described in services/samagamaCache.js.
  *
  * Run: node --test server/tests/samagama-cache.test.js
  */
@@ -11,78 +10,203 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-// Mirror of the stats object inside server.js. Reset by the endpoint
-// when ?reset=1 is set; reset by the test at start of each case.
-function makeStats() {
-  return { hits: 0, misses: 0, negativeHits: 0, sets: 0, evictions: 0, lastResetAt: Date.now() };
-}
+import {
+  cacheGet,
+  cacheSet,
+  invalidateSamagamaCache,
+  isRateLimited,
+  cacheStats,
+  cacheStatsReset,
+  projectAuthPayload,
+  SAMAGAMA_CACHE_TTL_MS,
+  SAMAGAMA_RATE_PER_TOKEN_PER_MIN,
+  _cacheWipeForTest
+} from '../services/samagamaCache.js';
 
-// Mirror of the stats-to-response transform. Mirrored rather than
-// imported because the cache lives in server.js's module scope.
-function snapshot(stats, cache, ttlMs = 60_000) {
-  const now = Date.now();
-  let oldestAge = 0;
-  let newestAge = 0;
-  for (const [, entry] of cache) {
-    const age = now - entry.at;
-    if (age > oldestAge) oldestAge = age;
-    if (newestAge === 0 || age < newestAge) newestAge = age;
+const TOK = 'chatengine_token_abc123';
+const NOW = 1_700_000_000_000; // fixed clock for deterministic tests
+
+test.beforeEach(() => { _cacheWipeForTest(); });
+
+// ── projectAuthPayload (the data minimization boundary) ────────────────
+
+test('projectAuthPayload: returns null for null input', () => {
+  assert.equal(projectAuthPayload(null), null);
+  assert.equal(projectAuthPayload(undefined), null);
+});
+
+test('projectAuthPayload: returns null for non-object input', () => {
+  assert.equal(projectAuthPayload('hello'), null);
+  assert.equal(projectAuthPayload(42), null);
+});
+
+test('projectAuthPayload: returns null if no email present', () => {
+  assert.equal(projectAuthPayload({ user: { name: 'Alice' } }), null);
+  assert.equal(projectAuthPayload({ name: 'Alice' }), null);
+});
+
+test('projectAuthPayload: extracts email from { user: { email, ... } }', () => {
+  const r = projectAuthPayload({
+    user: { email: '  Alice@Example.COM ', name: 'Alice', role: 'admin', internal_id: 999 }
+  });
+  assert.equal(r.email, 'alice@example.com');
+  assert.equal(r.name, 'Alice');
+  // Internal fields stripped — they never reach the cache.
+  assert.equal(r.role, undefined);
+  assert.equal(r.internal_id, undefined);
+});
+
+test('projectAuthPayload: extracts email from top-level { email, ... }', () => {
+  const r = projectAuthPayload({ email: 'bob@x.com', password_hash: 'SECRET' });
+  assert.equal(r.email, 'bob@x.com');
+  assert.equal(r.password_hash, undefined);
+});
+
+test('projectAuthPayload: returns null if email is not a string', () => {
+  assert.equal(projectAuthPayload({ email: 42 }), null);
+  assert.equal(projectAuthPayload({ email: null }), null);
+});
+
+// ── cacheGet / cacheSet (basic TTL semantics) ──────────────────────────
+
+test('cacheGet: returns undefined for never-seen token', () => {
+  assert.equal(cacheGet('unknown', NOW), undefined);
+});
+
+test('cacheGet: returns cached payload for fresh entry', () => {
+  cacheSet(TOK, { email: 'a@x.com', name: 'A' }, NOW);
+  assert.deepEqual(cacheGet(TOK, NOW), { email: 'a@x.com', name: 'A' });
+});
+
+test('cacheGet: returns null for negative cache entry', () => {
+  cacheSet(TOK, null, NOW);
+  assert.equal(cacheGet(TOK, NOW), null);
+});
+
+test('cacheGet: returns undefined after TTL expires', () => {
+  cacheSet(TOK, { email: 'a@x.com', name: 'A' }, NOW);
+  // 1ms past TTL
+  assert.equal(cacheGet(TOK, NOW + SAMAGAMA_CACHE_TTL_MS + 1), undefined);
+});
+
+test('cacheGet: still valid at exactly TTL', () => {
+  cacheSet(TOK, { email: 'a@x.com', name: 'A' }, NOW);
+  assert.deepEqual(cacheGet(TOK, NOW + SAMAGAMA_CACHE_TTL_MS), { email: 'a@x.com', name: 'A' });
+});
+
+// ── invalidateSamagamaCache (explicit invalidation hook) ───────────────
+
+test('invalidateSamagamaCache: removes existing entry', () => {
+  cacheSet(TOK, { email: 'a@x.com', name: 'A' }, NOW);
+  assert.equal(invalidateSamagamaCache(TOK), true);
+  assert.equal(cacheGet(TOK, NOW), undefined);
+});
+
+test('invalidateSamagamaCache: returns false when nothing to remove', () => {
+  assert.equal(invalidateSamagamaCache('not-set'), false);
+});
+
+test('invalidateSamagamaCache: also clears per-token rate bucket', () => {
+  // Burn the rate budget
+  for (let i = 0; i < SAMAGAMA_RATE_PER_TOKEN_PER_MIN; i++) {
+    assert.equal(isRateLimited(TOK, NOW + i), false);
   }
-  const total = stats.hits + stats.misses;
-  return {
-    hits: stats.hits,
-    misses: stats.misses,
-    hitRate: total ? stats.hits / total : 0,
-    entries: cache.size,
-    ttlMs,
-    oldestAgeMs: oldestAge
-  };
-}
-
-test('empty cache: zero hits, zero misses, hitRate 0', () => {
-  const s = makeStats();
-  const c = new Map();
-  const snap = snapshot(s, c);
-  assert.equal(snap.hits, 0);
-  assert.equal(snap.misses, 0);
-  assert.equal(snap.hitRate, 0);
-  assert.equal(snap.entries, 0);
+  // Next call should be rate-limited
+  assert.equal(isRateLimited(TOK, NOW + SAMAGAMA_RATE_PER_TOKEN_PER_MIN + 1), true);
+  // Invalidate clears the bucket
+  invalidateSamagamaCache(TOK);
+  // Should be un-rate-limited again
+  assert.equal(isRateLimited(TOK, NOW + SAMAGAMA_RATE_PER_TOKEN_PER_MIN + 2), false);
 });
 
-test('three misses: hitRate stays 0', () => {
-  const s = makeStats();
-  const c = new Map();
-  s.misses += 3;
-  assert.equal(snapshot(s, c).hitRate, 0);
+// ── isRateLimited (per-token upstream-call cap) ──────────────────────
+
+test('isRateLimited: allows first call', () => {
+  assert.equal(isRateLimited(TOK, NOW), false);
 });
 
-test('seven hits and three misses: hitRate ~ 0.7', () => {
-  const s = makeStats();
-  s.hits = 7; s.misses = 3;
-  assert.equal(snapshot(s, new Map()).hitRate, 7 / 10);
+test('isRateLimited: allows up to N calls per 60s window', () => {
+  // Already 1 call from previous test? No — beforeEach wiped.
+  for (let i = 0; i < SAMAGAMA_RATE_PER_TOKEN_PER_MIN; i++) {
+    assert.equal(isRateLimited(TOK, NOW + i), false);
+  }
 });
 
-test('oldestAge: reflects the oldest non-expired entry', () => {
-  const s = makeStats();
-  const c = new Map();
-  const now = Date.now();
-  c.set('a', { at: now - 5_000, data: { user: { email: 'a' } } });
-  c.set('b', { at: now - 30_000, data: { user: { email: 'b' } } });
-  c.set('c', { at: now - 1_000, data: { user: { email: 'c' } } });
-  const snap = snapshot(s, c);
-  assert.equal(snap.entries, 3);
-  assert.ok(snap.oldestAgeMs >= 29_000);
-  assert.ok(snap.oldestAgeMs <= 31_000);
+test('isRateLimited: blocks the (N+1)th call within the window', () => {
+  for (let i = 0; i < SAMAGAMA_RATE_PER_TOKEN_PER_MIN; i++) {
+    isRateLimited(TOK, NOW + i);
+  }
+  assert.equal(isRateLimited(TOK, NOW + SAMAGAMA_RATE_PER_TOKEN_PER_MIN + 100), true);
 });
 
-test('negative hits counted separately from positive hits', () => {
-  const s = makeStats();
-  // simulate: cache returned null twice (negative hits) and a valid
-  // user object three times (positive hits); misses happened on first lookup
-  s.misses = 5;        // 5 cold lookups
-  s.hits = 5;         // 5 warm returns
-  s.negativeHits = 2; // 2 of the 5 hits were cached nulls
-  assert.equal(s.negativeHits + 3, s.hits);
-  // hitRate counts both positive and negative as "hits" (we found an answer)
-  assert.equal(snapshot(s, new Map()).hitRate, 0.5);
+test('isRateLimited: resets after 60s sliding window', () => {
+  for (let i = 0; i < SAMAGAMA_RATE_PER_TOKEN_PER_MIN; i++) {
+    isRateLimited(TOK, NOW + i);
+  }
+  // 60s + 1ms later, the oldest entry has fallen out of the window.
+  assert.equal(isRateLimited(TOK, NOW + 60_000 + 1), false);
+});
+
+test('isRateLimited: separate tokens have independent budgets', () => {
+  for (let i = 0; i < SAMAGAMA_RATE_PER_TOKEN_PER_MIN; i++) {
+    isRateLimited(TOK, NOW + i);
+  }
+  // TOK is at the limit; a DIFFERENT token still has budget.
+  assert.equal(isRateLimited('other_token', NOW), false);
+});
+
+// ── cacheStats / cacheStatsReset ───────────────────────────────────────
+
+test('cacheStats: snapshot has all expected fields', () => {
+  cacheSet(TOK, { email: 'a@x.com', name: 'A' }, NOW);
+  cacheGet(TOK, NOW);
+  cacheGet(TOK, NOW);
+  cacheGet('miss_token', NOW);
+  const s = cacheStats();
+  assert.equal(s.hits, 2);
+  assert.equal(s.misses, 1);
+  assert.equal(s.entries, 1);
+  assert.equal(s.ttlMs, SAMAGAMA_CACHE_TTL_MS);
+  assert.ok(s.uptimeMs >= 0);
+});
+
+test('cacheStats: negativeHits only counted for null entries', () => {
+  cacheSet(TOK, null, NOW);
+  cacheGet(TOK, NOW);
+  const otherTok = 'other';
+  cacheSet(otherTok, { email: 'x@x.com' }, NOW);
+  cacheGet(otherTok, NOW);
+  const s = cacheStats();
+  assert.equal(s.negativeHits, 1);
+  assert.equal(s.hits, 2);
+});
+
+test('cacheStatsReset: zeros counters but keeps cache contents', () => {
+  cacheSet(TOK, { email: 'a@x.com', name: 'A' }, NOW);
+  cacheGet(TOK, NOW);
+  cacheStatsReset(NOW);
+  const s = cacheStats();
+  assert.equal(s.hits, 0);
+  assert.equal(s.misses, 0);
+  assert.equal(s.entries, 1); // still there
+  assert.deepEqual(cacheGet(TOK, NOW), { email: 'a@x.com', name: 'A' });
+});
+
+test('cacheStats: rateLimited counter increments when isRateLimited blocks', () => {
+  for (let i = 0; i < SAMAGAMA_RATE_PER_TOKEN_PER_MIN; i++) {
+    isRateLimited(TOK, NOW + i);
+  }
+  isRateLimited(TOK, NOW + SAMAGAMA_RATE_PER_TOKEN_PER_MIN + 1); // blocked
+  const s = cacheStats();
+  assert.equal(s.rateLimited, 1);
+});
+
+// ── Constants sanity ──────────────────────────────────────────────────
+
+test('TTL is 60 seconds', () => {
+  assert.equal(SAMAGAMA_CACHE_TTL_MS, 60_000);
+});
+
+test('Rate limit is 30 per minute per token', () => {
+  assert.equal(SAMAGAMA_RATE_PER_TOKEN_PER_MIN, 30);
 });

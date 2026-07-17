@@ -127,51 +127,47 @@ function parseCookies(header = '') {
   }).filter(Boolean));
 }
 
-// 60s in-memory cache for Samagama /api/auth/me lookups. Each entry is keyed
-// by the chatengine_token cookie value; a null result (bad token / Samagama
-// down) is cached too so a flood of bad requests doesn't hammer Samagama.
-const _samagamaCache = new Map();
-const _samagamaStats = { hits: 0, misses: 0, negativeHits: 0, sets: 0, evictions: 0, lastResetAt: Date.now() };
-const SAMAGAMA_CACHE_TTL_MS = 60_000;
-function _samagamaCacheGet(token) {
-  const entry = _samagamaCache.get(token);
-  if (!entry) {
-    _samagamaStats.misses++;
-    return undefined;
-  }
-  if (Date.now() - entry.at > SAMAGAMA_CACHE_TTL_MS) {
-    _samagamaCache.delete(token);
-    _samagamaStats.evictions++;
-    _samagamaStats.misses++;
-    return undefined;
-  }
-  _samagamaStats.hits++;
-  if (entry.data === null) _samagamaStats.negativeHits++;
-  return entry.data;
-}
+// Samagama /api/auth/me response cache + per-token upstream rate limit.
+// See server/services/samagamaCache.js for the security model (per-identity
+// key, minimal projection, explicit invalidation, negative caching, rate
+// cap, 60s TTL rationale).
+import {
+  cacheGet as _samagamaCacheGet,
+  cacheSet as _samagamaCacheSet,
+  invalidateSamagamaCache,
+  isRateLimited as _samagamaIsRateLimited,
+  cacheStats as _samagamaStatsSnapshot,
+  cacheStatsReset as _samagamaStatsReset,
+  projectAuthPayload,
+  SAMAGAMA_CACHE_TTL_MS
+} from './services/samagamaCache.js';
 
 // Validate the student's Samagama session by forwarding their chatengine_token
-// cookie to Samagama's internal auth endpoint. Returns the parsed JSON on
-// success, or null on 401 / timeout / network failure. Hits a 60s in-memory
-// cache so repeated API calls (e.g. /survey/status polling every 5s) don't
-// round-trip to Samagama on every request.
+// cookie to Samagama's internal auth endpoint. Caches the MINIMAL projection
+// (only { email, name }) — never the full response body. Rate-limits the
+// upstream call per token. On 401/timeout, caches null (negative cache).
 async function getSamagamaUser(chatengineToken) {
   if (!chatengineToken) return null;
   const cached = _samagamaCacheGet(chatengineToken);
   if (cached !== undefined) return cached;
-  let result = null;
+  if (_samagamaIsRateLimited(chatengineToken)) {
+    // Token is over the per-minute upstream-call cap. Return null (the
+    // safest fallback) and let the next legitimate token miss retry.
+    return null;
+  }
+  let raw = null;
   try {
     const res = await fetch(SAMAGAMA_AUTH_URL, {
       headers: { cookie: `chatengine_token=${chatengineToken}` },
       signal: AbortSignal.timeout(5000)
     });
-    if (res.ok) result = await res.json();
+    if (res.ok) raw = await res.json();
   } catch {
-    // network / timeout / non-JSON body -> cache null so we don't retry for 60s
+    // network / timeout / non-JSON body -> cache null (negative cache)
   }
-  _samagamaCache.set(chatengineToken, { at: Date.now(), data: result });
-  _samagamaStats.sets++;
-  return result;
+  const projected = projectAuthPayload(raw); // strips to { email, name } only
+  _samagamaCacheSet(chatengineToken, projected);
+  return projected;
 }
 
 async function studentEmailFromRequest(req) {
@@ -521,36 +517,23 @@ api.get('/admin/active', adminGuard, (_req, res) => {
 // counters + size + oldest entry age so admins can quantify the perf win
 // in production. Use ?reset=1 to zero the counters.
 api.get('/admin/cache-stats', adminGuard, (_req, res) => {
-  if (_req.query.reset === '1') {
-    _samagamaStats.hits = 0;
-    _samagamaStats.misses = 0;
-    _samagamaStats.negativeHits = 0;
-    _samagamaStats.sets = 0;
-    _samagamaStats.evictions = 0;
-    _samagamaStats.lastResetAt = Date.now();
-  }
-  const now = Date.now();
-  let oldestAge = 0;
-  let newestAge = 0;
-  for (const [, entry] of _samagamaCache) {
-    const age = now - entry.at;
-    if (age > oldestAge) oldestAge = age;
-    if (newestAge === 0 || age < newestAge) newestAge = age;
-  }
-  const total = _samagamaStats.hits + _samagamaStats.misses;
+  if (_req.query.reset === '1') _samagamaStatsReset();
+  const s = _samagamaStatsSnapshot();
+  const total = s.hits + s.misses;
   res.json({
-    hits: _samagamaStats.hits,
-    misses: _samagamaStats.misses,
-    negativeHits: _samagamaStats.negativeHits,
-    sets: _samagamaStats.sets,
-    evictions: _samagamaStats.evictions,
-    hitRate: total ? _samagamaStats.hits / total : 0,
-    entries: _samagamaCache.size,
-    ttlMs: SAMAGAMA_CACHE_TTL_MS,
-    oldestAgeMs: oldestAge,
-    newestAgeMs: newestAge,
-    uptimeMs: now - _samagamaStats.lastResetAt,
-    sinceReset: _samagamaStats.lastResetAt
+    hits: s.hits,
+    misses: s.misses,
+    negativeHits: s.negativeHits,
+    sets: s.sets,
+    evictions: s.evictions,
+    rateLimited: s.rateLimited,
+    hitRate: total ? s.hits / total : 0,
+    entries: s.entries,
+    ttlMs: s.ttlMs,
+    oldestAgeMs: s.oldestAgeMs,
+    newestAgeMs: s.newestAgeMs,
+    uptimeMs: s.uptimeMs,
+    sinceReset: s.lastResetAt
   });
 });
 
