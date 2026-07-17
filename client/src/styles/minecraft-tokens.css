@@ -349,3 +349,180 @@
   text-align: center;
   line-height: 1.4;
 }
+
+/* Journey Tracker - Clean Minecraft-style */
+.journey-biome-weekly {
+  position: relative;
+}
+.journey-biome-weekly .journey-biome-bar {
+  background: linear-gradient(90deg, transparent, #7CB34244, #7CB34266, #7CB34244, transparent);
+  height: 3px;
+  margin: -16px -16px 12px -16px;
+  border-radius: 0;
+}
+
+.journey-biome-monthly {
+  position: relative;
+}
+.journey-biome-monthly .journey-biome-bar {
+  background: linear-gradient(90deg, transparent, #5D403744, #5D403766, #5D403744, transparent);
+  height: 3px;
+  margin: -16px -16px 12px -16px;
+  border-radius: 0;
+}
+
+.journey-biome-tenure {
+  position: relative;
+}
+.journey-biome-tenure .journey-biome-bar {
+  background: linear-gradient(90deg, transparent, #7B1FA244, #7B1FA266, #7B1FA244, transparent);
+  height: 3px;
+  margin: -16px -16px 12px -16px;
+  border-radius: 0;
+}
+
+/* Window selector */
+.journey-window-selector {
+  display: flex;
+  gap: 2px;
+  background: #f1f5f9;
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.journey-window-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+  cursor: pointer;
+  border-radius: 5px;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+
+.journey-window-btn.active {
+  background: #fff;
+  color: #172033;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.journey-window-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--btn-beam, #ccc);
+  flex-shrink: 0;
+}
+
+/* Waypoint row */
+.journey-waypoint-row {
+  display: flex;
+  align-items: center;
+  padding: 14px 0 18px;
+}
+
+.journey-waypoint-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.journey-waypoint-pin {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2.5px solid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s;
+}
+
+.journey-waypoint-check {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.journey-waypoint-item.reached .journey-waypoint-pin {
+  transform: scale(1.1);
+}
+
+.journey-waypoint-label {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 7px;
+  color: #64748b;
+  text-align: center;
+  line-height: 1.3;
+}
+
+.journey-waypoint-item.reached .journey-waypoint-label {
+  color: #172033;
+  font-weight: 700;
+}
+
+.journey-waypoint-connector {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 3px;
+  margin: 0 -2px;
+  margin-bottom: 26px;
+  border-radius: 2px;
+  transition: background 0.3s;
+}
+
+/* Journey bars (replaces XP bars) */
+.journey-bar-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 38px;
+  align-items: center;
+  gap: 10px;
+}
+
+.journey-bar-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.journey-bar-track {
+  height: 10px;
+  background: #e2e8f0;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.journey-bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.6s ease;
+  min-width: 4px;
+}
+
+.journey-bar-value {
+  font-size: 13px;
+  font-weight: 800;
+  text-align: right;
+}
+
+/* Footer */
+.journey-footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #d9e1ec;
+  font-size: 11px;
+  color: #64748b;
+}

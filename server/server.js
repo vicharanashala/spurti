@@ -14,6 +14,8 @@ import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import engagementRouter from './routes/engagement.js';
+import journeyRouter from './routes/journey.js';
+import { getAllTargets, upsertTarget } from './journey/targets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -639,6 +641,21 @@ api.get('/admin/engagement/report', adminGuard, async (req, res) => {
   res.json({ summary, total: results.length, groups });
 });
 
+api.get('/admin/journey/targets', adminGuard, async (_req, res) => {
+  try { res.json(await getAllTargets()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+api.put('/admin/journey/targets/:window', adminGuard, async (req, res) => {
+  try {
+    if (!['weekly', 'monthly', 'tenure'].includes(req.params.window)) {
+      return res.status(400).json({ error: 'Invalid window' });
+    }
+    const updated = await upsertTarget(req.params.window, req.body);
+    res.json(updated);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
@@ -647,6 +664,8 @@ app.use('/api', api);
 app.use('/spurti/api', api);
 app.use('/api', engagementRouter);
 app.use('/spurti/api', engagementRouter);
+app.use('/api', journeyRouter);
+app.use('/spurti/api', journeyRouter);
 
 if (fs.existsSync(clientDist)) {
   app.use('/spurti', express.static(clientDist));
