@@ -233,8 +233,13 @@ async function participants(uuid) {
   // zero students who attended but are future-start or yet-to-onboard (meter not started)
   if (zeroOut.length) {
     let zdel = 0; for (let i = 0; i < zeroOut.length; i += 500) { const r = await Tx.deleteMany({ email: { $in: zeroOut.slice(i, i + 500) } }); zdel += r.deletedCount; }
-    for (let i = 0; i < zeroOut.length; i += 1000) await Students.bulkWrite(zeroOut.slice(i, i + 1000).map((email) => ({ updateOne: { filter: { email }, update: { $set: { totalSp: 0 } } } })), { ordered: false });
-    console.log(`ZEROED -> ${zeroOut.length} future-start/yet-to-onboard students (txns deleted ${zdel}, totalSp=0)`);
+    const zBulk = zeroOut.map((email) => {
+      const isExcused = excusedSet.has(email);
+      const status = isExcused ? 'excused' : 'yet to onboard';
+      return { updateOne: { filter: { email }, update: { $set: { totalSp: 0, status } } } };
+    });
+    for (let i = 0; i < zBulk.length; i += 1000) await Students.bulkWrite(zBulk.slice(i, i + 1000), { ordered: false });
+    console.log(`ZEROED -> ${zeroOut.length} future-start/yet-to-onboard students set to 'yet to onboard' (txns deleted ${zdel}, totalSp=0)`);
   }
   await wconn.close();
 })().catch((e) => { console.error('FATAL', e.message); process.exit(1); });
