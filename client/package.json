@@ -1,5 +1,5 @@
 {
-  "name": "analysis-summership-client",
+  "name": "spurti-client",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -9,9 +9,9 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^5.4.11",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {}
+    "react-dom": "^18.3.1",
+    "recharts": "^3.9.1",
+    "vite": "^5.4.11"
+  }
 }

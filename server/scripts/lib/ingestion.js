@@ -6,6 +6,8 @@ import Session from '../../models/Session.js';
 import AttendanceRecord from '../../models/AttendanceRecord.js';
 import PollRecord from '../../models/PollRecord.js';
 import SPTransaction from '../../models/SPTransaction.js';
+import { normalizeEmail } from '../../utils/email.js';
+import { parseCsv, parseDate, parseZoomDate } from '../../utils/parse.js';
 
 export const KNOWN_SESSIONS = [
   session('15 May Morning', '2026-05-15', 'morning', '2026-05-15T08:27:30', '2026-05-15T12:37:30', 250, '2026-05-15/15_may_attendance_M.csv', '2026-05-15/15 May - orientation poll report - morning.csv'),
@@ -27,58 +29,11 @@ export function session(label, date, type, startDateTime, endDateTime, totalMinu
   return { label, date, type, startDateTime, endDateTime, totalMinutes, attendanceFile, pollFile };
 }
 
-export function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
+export { normalizeEmail } from '../../utils/email.js';
+export { parseCsv, parseDate, parseZoomDate } from '../../utils/parse.js';
 
 export function normalizeName(value) {
   return String(value || '').toLowerCase().replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
-}
-
-export function parseCsv(text) {
-  const rows = [];
-  let row = [];
-  let value = '';
-  let quoted = false;
-  const input = text.replace(/^\uFEFF/, '');
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-    const next = input[i + 1];
-    if (quoted) {
-      if (ch === '"' && next === '"') { value += '"'; i++; }
-      else if (ch === '"') quoted = false;
-      else value += ch;
-      continue;
-    }
-    if (ch === '"') quoted = true;
-    else if (ch === ',') { row.push(value); value = ''; }
-    else if (ch === '\n') { row.push(value); rows.push(row); row = []; value = ''; }
-    else if (ch !== '\r') value += ch;
-  }
-  if (value || row.length) { row.push(value); rows.push(row); }
-  return rows;
-}
-
-export function parseDate(value) {
-  const raw = String(value || '').trim();
-  let m = raw.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
-  if (m) {
-    const months = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
-    return new Date(Number(m[3]), months[m[2].slice(0, 3).toLowerCase()], Number(m[1]), 9, 0, 0);
-  }
-  m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 9, 0, 0);
-  return null;
-}
-
-export function parseZoomDate(value, fallback) {
-  const raw = String(value || '').trim();
-  const m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})\s+(AM|PM)$/i);
-  if (!m) return fallback;
-  let hour = Number(m[4]);
-  if (m[7].toUpperCase() === 'PM' && hour !== 12) hour += 12;
-  if (m[7].toUpperCase() === 'AM' && hour === 12) hour = 0;
-  return new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2]), hour, Number(m[5]), Number(m[6]));
 }
 
 function headerIndex(headers, names) {
@@ -209,7 +164,8 @@ export async function createTransactionOnce(student, category, sessionLabel, del
   const exists = await SPTransaction.exists({ email: student.email, category, sessionLabel });
   if (exists) { stats.skippedExistingTransactions = (stats.skippedExistingTransactions || 0) + 1; return null; }
   const last = await SPTransaction.findOne({ email: student.email }).sort({ dateTime: -1, createdAt: -1 }).lean();
-  const balanceAfter = Number(last?.balanceAfter ?? student.totalSp ?? 0) + delta;
+  const prevBalance = Number(last?.balanceAfter ?? student.totalSp ?? 0);
+  const balanceAfter = Math.max(0, prevBalance + delta);
   const transaction = await SPTransaction.create({
     email: student.email,
     studentId: student._id,
@@ -230,7 +186,7 @@ export async function recalculateStudentSp(studentOrEmail) {
   const txns = await SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 });
   let balance = 0;
   for (const txn of txns) {
-    balance += Number(txn.appliedDelta || 0);
+    balance = Math.max(0, balance + Number(txn.appliedDelta || 0));
     if (txn.balanceAfter !== balance) {
       txn.balanceAfter = balance;
       await txn.save();
@@ -320,6 +276,40 @@ export async function applySessionForStudents(config, students, rootDir, stats =
           { upsert: true }
         );
         stats.pollsBackfilled = (stats.pollsBackfilled || 0) + 1;
+      }
+    }
+  }
+
+  const matchedEmails = new Set(students.map(s => s.email));
+  const matchedAltEmails = new Set(students.map(s => s.alternateEmail).filter(Boolean));
+  const unmatchedZoomEmails = [];
+
+  for (const zoomEmail of parsedAttendance.rows.keys()) {
+    if (!matchedEmails.has(zoomEmail) && !matchedAltEmails.has(zoomEmail)) {
+      unmatchedZoomEmails.push(zoomEmail);
+    }
+  }
+
+  if (unmatchedZoomEmails.length > 0) {
+    stats.unmatchedEmailsFound = (stats.unmatchedEmailsFound || 0) + unmatchedZoomEmails.length;
+    for (const zoomEmail of unmatchedZoomEmails) {
+      const byAltEmail = await Student.findOne({ alternateEmail: zoomEmail }).lean();
+      if (byAltEmail && byAltEmail.status !== 'excused' && byAltEmail.email !== zoomEmail && sessionApplies(byAltEmail, endDateTime)) {
+        const minutes = parsedAttendance.rows.get(zoomEmail) || 0;
+        const pct = totalMinutes ? Math.round((minutes / totalMinutes) * 100) : 0;
+        const qualified = totalMinutes > 0 && minutes / totalMinutes >= 0.75;
+        const delta = qualified ? 5 : -5;
+        const reason = `${config.label}: alternate email match for ${zoomEmail}, attended ${minutes}/${totalMinutes} minutes (${pct}%). ${qualified ? '+5' : '-5'} SP.`;
+        const tx = await createTransactionOnce(byAltEmail, 'attendance', config.label, delta, reason, endDateTime, stats);
+        if (tx) {
+          await AttendanceRecord.findOneAndUpdate(
+            { email: byAltEmail.email, sessionLabel: config.label },
+            { $set: { email: byAltEmail.email, studentId: byAltEmail._id, sessionLabel: config.label, attendedMinutes: minutes, totalSessionMinutes: totalMinutes, attendancePercentage: pct, qualified, transactionId: tx._id } },
+            { upsert: true }
+          );
+          touchedEmails.add(byAltEmail.email);
+          stats.altEmailRecovered = (stats.altEmailRecovered || 0) + 1;
+        }
       }
     }
   }

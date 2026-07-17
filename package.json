@@ -1,5 +1,5 @@
 {
-  "name": "analysis-summership",
+  "name": "spurti",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -9,15 +9,33 @@
     "add-students": "node server/scripts/addStudents.js",
     "sync-students": "node server/scripts/syncStudents.js",
     "ingest-session": "node server/scripts/ingestSession.js",
+    "split-22-may": "node server/scripts/split22MaySessions.js",
     "setup": "npm install && npm --prefix client install && npm run rebuild && npm run build",
     "build": "npm --prefix client run build",
     "start": "node server/server.js",
-    "dev": "node server/server.js"
+    "dev": "node --watch server/server.js",
+    "lint": "node --check server/server.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --passWithNoTests"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
-    "mongoose": "^8.8.4"
+    "express-rate-limit": "^7.5.0",
+    "mongoose": "^8.8.4",
+    "zod": "^3.24.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.1.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/__tests__/**/*.test.js"],
+    "collectCoverageFrom": ["server/**/*.js", "!server/scripts/**"],
+    "verbose": true
   }
 }

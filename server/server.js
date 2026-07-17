@@ -13,12 +13,21 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { normalizeEmail, maskEmail } from './utils/email.js';
+import {
+  searchQuerySchema,
+  pingBodySchema,
+  confirmBodySchema,
+  leaderboardTypeSchema,
+  validateQuery,
+  validateBody
+} from './utils/validators.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
-const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || 'dled@iitrpr.ac.in');
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'vled-local-admin';
+const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || '');
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 // Survey triangulation pop-up(s). All driven by env so the form link / mode can
 // change without a client rebuild (the client reads these via /api/config).
@@ -92,21 +101,65 @@ function surveyPublic(cfg) {
 const app = express();
 const api = express.Router();
 const liveViewers = new Map();
+const LIVE_VIEWER_TTL_MS = 120_000; // 2 minutes
 
-app.use(cors());
+function cleanStaleViewers() {
+  const now = Date.now();
+  for (const [email, data] of liveViewers.entries()) {
+    if (now - data.lastSeen > LIVE_VIEWER_TTL_MS) liveViewers.delete(email);
+  }
+}
+
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://samagama.in,https://www.samagama.in')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    callback(new Error(`Origin ${origin} not allowed by CORS policy`));
+  },
+  credentials: true
+}));
+
+import rateLimit from 'express-rate-limit';
+
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' }
+});
+
+const searchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Search rate limit exceeded.' }
+});
+
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Admin endpoint rate limit exceeded.' }
+});
+
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Webhook rate limit exceeded.' }
+});
+
+app.use('/api', generalLimiter);
+app.use('/spurti/api', generalLimiter);
 app.use(express.json({ limit: '2mb' }));
-
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function maskEmail(email) {
-  const [name, domain] = String(email || '').split('@');
-  if (!name || !domain) return 'hidden email';
-  const start = name.slice(0, Math.min(2, name.length));
-  const end = name.length > 4 ? name.slice(-2) : '';
-  return `${start}${'*'.repeat(Math.max(3, name.length - start.length - end.length))}${end}@${domain}`;
-}
 
 function publicStudent(student) {
   return {
@@ -175,27 +228,122 @@ function excusedPayload(student) {
   };
 }
 
+function buildRecovery(totalSp, transactions, attendance) {
+  const RECOVERY_THRESHOLD = 80;
+  const TARGET_SP = 20;
+
+  if (totalSp >= RECOVERY_THRESHOLD) return null;
+
+  const recentAttendance = (attendance || []).slice(-3);
+
+  const categoryLosses = {};
+  for (const rec of recentAttendance) {
+    if (!rec.qualified) {
+      categoryLosses['attendance'] = (categoryLosses['attendance'] || 0) + 1;
+    }
+  }
+
+  for (const rec of recentAttendance) {
+    if (rec.missedQuestions > 0) {
+      categoryLosses['poll'] = (categoryLosses['poll'] || 0) + (rec.missedQuestions > 0 ? 1 : 0);
+    }
+  }
+
+  const sortedCategories = Object.entries(categoryLosses)
+    .sort(([, a], [, b]) => b - a)
+    .map(([cat]) => cat);
+
+  const taskTemplates = {
+    attendance: {
+      icon: '✅',
+      label: 'Attend Next Session Fully',
+      description: 'Be present for the full session window (9:05 IST to end) to earn +10 SP',
+      category: 'attendance',
+      targetSp: 10,
+      action: 'Attend your next session and stay for the full duration'
+    },
+    poll: {
+      icon: '📊',
+      label: 'Answer Every Poll Question',
+      description: 'Answer all poll questions in the next session to earn +10 SP',
+      category: 'poll',
+      targetSp: 10,
+      action: 'Pay attention to every poll in your next session'
+    }
+  };
+
+  const tasks = [];
+  const seen = new Set();
+
+  for (const cat of sortedCategories) {
+    if (seen.has(cat)) continue;
+    if (tasks.length >= 3) break;
+    const template = taskTemplates[cat];
+    if (template) {
+      tasks.push({ ...template, status: 'active' });
+      seen.add(cat);
+    }
+  }
+
+  if (tasks.length === 0 && totalSp < RECOVERY_THRESHOLD) {
+    tasks.push({
+      icon: '📚',
+      label: 'Attend Next Session',
+      description: 'Attend your next session to start recovering SP',
+      category: 'attendance',
+      targetSp: 10,
+      action: 'Be present in your next scheduled session'
+    });
+  }
+
+  const earnedFromTasks = tasks.reduce((sum, t) => sum + t.targetSp, 0);
+
+  return {
+    isActive: true,
+    currentSp: totalSp,
+    threshold: RECOVERY_THRESHOLD,
+    targetSp: TARGET_SP,
+    spGap: RECOVERY_THRESHOLD - totalSp,
+    progress: Math.round(Math.max(0, ((totalSp - 0) / RECOVERY_THRESHOLD) * 100)),
+    tasks
+  };
+}
+
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const myGroup = leaderboardGroup(student.internshipStartDate);
+
+  const [transactions, polls, attendance, rankInfo, leaderboard, groupStudents, statsResult, top10CutoffResult, top50CutoffResult] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    myGroup
+      ? Student.find({ ...activeFilter, leaderboardGroup: myGroup }).sort({ totalSp: -1, name: 1 }).limit(50).lean()
+      : Promise.resolve([]),
+    Student.aggregate([
+      { $match: activeFilter },
+      {
+        $group: {
+          _id: null,
+          count: { $sum: 1 },
+          totalSp: { $sum: { $ifNull: ['$totalSp', 0] } }
+        }
+      }
+    ]),
+    Student.find(activeFilter).sort({ totalSp: -1 }).skip(9).select('totalSp').lean(),
+    Student.find(activeFilter).sort({ totalSp: -1 }).skip(49).select('totalSp').lean()
   ]);
-  const allSp = allStudents.map(s => Number(s.totalSp || 0));
-  const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
-  const top10Cutoff = allStudents[9]?.totalSp || null;
-  const top50Cutoff = allStudents[49]?.totalSp || null;
-  const currentIndex = allStudents.findIndex(s => s.email === email);
-  const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
-  // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
+
+  const stats = statsResult[0] || { count: 0, totalSp: 0 };
+  const averageSp = stats.count ? Math.round(stats.totalSp / stats.count) : 0;
+  const top10Cutoff = top10CutoffResult[0]?.totalSp ?? null;
+  const top50Cutoff = top50CutoffResult[0]?.totalSp ?? null;
+
   const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
-  const myGroup = leaderboardGroup(student.internshipStartDate);
-  const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
+
   const mapRow = (row, index) => ({
     rank: index + 1,
     name: row.name,
@@ -204,6 +352,7 @@ async function studentPayload(student) {
     level: levelFor(Math.max(Number(row.highestSpEver) || 0, Number(row.totalSp) || 0)),
     isCurrentStudent: row.email === email
   });
+
   return {
     student: {
       _id: String(student._id),
@@ -235,14 +384,16 @@ async function studentPayload(student) {
       top10Cutoff,
       top50Cutoff,
       pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - student.totalSp + 1),
-      pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
+      pointsToNextRank: 0
     },
     leaderboard: leaderboard.map(mapRow),
-    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
+    groupLeaderboard: groupStudents.map(mapRow),
+    recovery: buildRecovery(student.totalSp, transactions, attendance)
   };
 }
 
 function isAdmin(req) {
+  if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false;
   const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
   const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
   return emailOk && tokenOk;
@@ -270,7 +421,7 @@ api.get('/me', async (req, res) => {
   res.json({ authenticated: true, profile: await studentPayload(student) });
 });
 
-api.get('/search', async (req, res) => {
+api.get('/search', searchLimiter, async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ exact: false, matches: [] });
@@ -294,11 +445,10 @@ api.get('/search', async (req, res) => {
   res.json({ exact: false, matches: matches.map(publicStudent) });
 });
 
-api.post('/confirm', async (req, res) => {
+api.post('/confirm', validateBody(confirmBodySchema), async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
-  const { studentId, email } = req.body || {};
+  const { studentId, email } = req.validatedBody;
   const typed = normalizeEmail(email);
-  const student = await Student.findById(studentId).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   if (typed !== normalizeEmail(student.email) && typed !== normalizeEmail(student.alternateEmail)) {
     return res.status(403).json({ error: 'Email did not match this record' });
@@ -322,20 +472,17 @@ api.get('/leaderboard', async (req, res) => {
   })));
 });
 
-api.post('/ping', async (req, res) => {
-  const { email, name, page } = req.body || {};
+api.post('/ping', validateBody(pingBodySchema), async (req, res) => {
+  const { email, name, page } = req.validatedBody;
   const normalized = normalizeEmail(email);
-  if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
-  // Telemetry is best-effort: an unknown page value (e.g. a new admin sub-page
-  // not yet in the enum) must never crash the request or leak an unhandled
-  // rejection. Drop the write and carry on.
   try {
     await SessionEvent.create({ email: normalized, name, event: 'page_view', page });
   } catch (err) {
     if (err?.name !== 'ValidationError') console.error('ping log failed:', err?.message);
   }
   if (page === 'record' || page.startsWith('admin')) {
-    liveViewers.set(normalized, { name, page, lastSeen: new Date() });
+    cleanStaleViewers();
+    liveViewers.set(normalized, { name, page, lastSeen: Date.now() });
   }
   res.json({ ok: true });
 });
@@ -384,9 +531,11 @@ function registerSurveyRoutes(base, cfg) {
     res.json({ completed: false });
   });
 
-  // Authoritative confirmation: the Google Form's Apps Script onFormSubmit
+<  // Authoritative confirmation: the Google Form's Apps Script onFormSubmit
   // trigger POSTs { email, secret } here. Secret-authenticated, not session.
-  api.post(`${base}/webhook`, async (req, res) => {
+  // webhookLimiter (from PR #6's security commit) protects against abuse
+  // from a misbehaving Apps Script.
+  api.post(`${base}/webhook`, webhookLimiter, async (req, res) => {
     if (!cfg.webhookSecret || String(req.body?.secret || '') !== cfg.webhookSecret) {
       return res.status(403).json({ ok: false, error: 'forbidden' });
     }
@@ -398,7 +547,7 @@ function registerSurveyRoutes(base, cfg) {
 registerSurveyRoutes('/survey', SURVEY);
 registerSurveyRoutes('/poll2', POLL2);
 
-api.get('/admin/stats', adminGuard, async (_req, res) => {
+api.get('/admin/stats', adminLimiter, adminGuard, async (_req, res) => {
   const [yetToOnboard, excusedStudents, sessions, txns, activeStudents] = await Promise.all([
     Student.countDocuments({ status: 'yet to onboard' }),
     Student.countDocuments({ status: 'excused' }),
@@ -408,7 +557,7 @@ api.get('/admin/stats', adminGuard, async (_req, res) => {
   ]);
   res.json({ yetToOnboard, excusedStudents, activeStudents, sessions, transactions: txns });
 });
-api.get('/admin/students-by-status', adminGuard, async (req, res) => {
+api.get('/admin/students-by-status', adminLimiter, adminGuard, async (req, res) => {
   const status = String(req.query.status || 'yet to onboard');
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 200)));
   const students = await Student.find({ status }).sort({ name: 1 }).limit(limit).lean();
@@ -422,7 +571,7 @@ api.get('/admin/students-by-status', adminGuard, async (req, res) => {
 });
 
 
-api.get('/admin/leaderboard', adminGuard, async (req, res) => {
+api.get('/admin/leaderboard', adminLimiter, adminGuard, async (req, res) => {
   const limit = Math.min(500, Math.max(1, Number(req.query.limit || 50)));
   const students = await Student.find({ status: 'active' }).sort({ totalSp: -1, name: 1 }).limit(limit).lean();
   res.json(students.map((s, i) => ({
@@ -434,7 +583,7 @@ api.get('/admin/leaderboard', adminGuard, async (req, res) => {
   })));
 });
 
-api.get('/admin/attendance', adminGuard, async (_req, res) => {
+api.get('/admin/attendance', adminLimiter, adminGuard, async (_req, res) => {
   const [sessions, students, records] = await Promise.all([
     Session.find().sort({ endDateTime: 1 }).lean(),
     Student.find({ status: 'active' }).sort({ name: 1 }).lean(),
@@ -462,13 +611,13 @@ api.get('/admin/attendance', adminGuard, async (_req, res) => {
   });
 });
 
-api.get('/admin/student/:id', adminGuard, async (req, res) => {
+api.get('/admin/student/:id', adminLimiter, adminGuard, async (req, res) => {
   const student = await Student.findById(req.params.id).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await studentPayload(student));
 });
 
-api.get('/admin/active', adminGuard, (_req, res) => {
+api.get('/admin/active', adminLimiter, adminGuard, (_req, res) => {
   const now = new Date();
   const cutoff = now.getTime() - 60_000;
   const viewers = [];
@@ -486,129 +635,424 @@ api.get('/admin/active', adminGuard, (_req, res) => {
   res.json(viewers);
 });
 
-api.get('/admin/analytics', adminGuard, async (_req, res) => {
+api.get('/admin/integrity-check', adminLimiter, adminGuard, async (_req, res) => {
+  const issues = await SPTransaction.aggregate([
+    {
+      $group: {
+        _id: '$email',
+        computedBalance: { $sum: '$appliedDelta' },
+        transactions: { $sum: 1 }
+      }
+    },
+    {
+      $lookup: {
+        from: 'students',
+        localField: '_id',
+        foreignField: 'email',
+        pipeline: [{ $project: { email: 1, totalSp: 1, name: 1 } }],
+        as: 'student'
+      }
+    },
+    { $unwind: { path: '$student', preserveNullAndEmpty: false } },
+    {
+      $match: {
+        $expr: { $ne: ['$computedBalance', '$student.totalSp'] }
+      }
+    },
+    {
+      $project: {
+        _id: 0,
+        email: '$_id',
+        name: '$student.name',
+        storedTotalSp: '$student.totalSp',
+        computedBalance: 1,
+        discrepancy: { $subtract: ['$student.totalSp', '$computedBalance'] },
+        transactions: 1
+      }
+    },
+    { $sort: { discrepancy: -1 } }
+  ]);
+
+  const negativeSp = await Student.find({ totalSp: { $lt: 0 } })
+    .select('email name totalSp')
+    .lean();
+
+  const deltaModeIssues = await SPTransaction.countDocuments({ deltaMode: 'percent' });
+
+  res.json({
+    clean: issues.length === 0 && negativeSp.length === 0,
+    checkedAt: new Date().toISOString(),
+    summary: {
+      totalIssues: issues.length,
+      studentsWithNegativeSp: negativeSp.length,
+      deltaModeIssues,
+      totalStudentsChecked: (await Student.countDocuments({ status: 'active' }))
+    },
+    balanceDiscrepancies: issues,
+    negativeSpStudents: negativeSp,
+    deltaModeFixNeeded: deltaModeIssues > 0
+      ? `Run: db.sptransactions.updateMany({deltaMode:'percent'},{$set:{deltaMode:'percentage'}})`
+      : null
+  });
+});
+
+api.get('/admin/analytics', adminLimiter, adminGuard, async (_req, res) => {
   const now = new Date();
-  const lastHour = new Date(now.getTime() - 60 * 60 * 1000);
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+  const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+  const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const last7Days = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const lastHour = new Date(now.getTime() - 60 * 60 * 1000);
 
-  const [allStudents, sessions, attendance, transactions, events] = await Promise.all([
-    Student.find().lean(),
+  const [
+    statusCountsRaw,
+    spStats,
+    spMedianResult,
+    sessions,
+    attendanceBySession,
+    categoryTotals,
+    topDropsRaw,
+    topGainersRaw,
+    todayTopGainersRaw,
+    activeNow,
+    lastHourUnique,
+    todayUniqueEmails,
+    yesterdayUnique,
+    last7dUnique,
+    last30dUnique,
+    hourlySeries,
+    weeklySeries,
+    monthlySeries
+  ] = await Promise.all([
+    Student.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
+    Student.aggregate([
+      { $match: { status: 'active' } },
+      {
+        $group: {
+          _id: null,
+          count: { $sum: 1 },
+          totalSp: { $sum: { $ifNull: ['$totalSp', 0] } },
+          min: { $min: { $ifNull: ['$totalSp', 0] } },
+          max: { $max: { $ifNull: ['$totalSp', 0] } },
+          below100: { $sum: { $cond: [{ $lt: [{ $ifNull: ['$totalSp', 0] }, 100] }, 1, 0] } },
+          from100to149: { $sum: { $cond: [{ $and: [{ $gte: [{ $ifNull: ['$totalSp', 0] }, 0] }, { $lt: [{ $ifNull: ['$totalSp', 0] }, 150] }] }, 1, 0] } },
+          from150to199: { $sum: { $cond: [{ $and: [{ $gte: [{ $ifNull: ['$totalSp', 0] }, 150] }, { $lt: [{ $ifNull: ['$totalSp', 0] }, 200] }] }, 1, 0] } },
+          from200plus: { $sum: { $cond: [{ $gte: [{ $ifNull: ['$totalSp', 0] }, 200] }, 1, 0] } }
+        }
+      }
+    ]),
+    Student.aggregate([
+      { $match: { status: 'active' } },
+      { $setWindowFields: { output: { $percentile: [{ input: '$totalSp', p: [0.5] }] } } }
+    ]),
     Session.find().sort({ endDateTime: 1 }).lean(),
-    AttendanceRecord.find().lean(),
-    SPTransaction.find().lean(),
-    SessionEvent.find({ timestamp: { $gte: last30Days } }).lean()
+    AttendanceRecord.aggregate([
+      {
+        $lookup: {
+          from: 'students',
+          localField: 'email',
+          foreignField: 'email',
+          pipeline: [{ $match: { status: 'active' } }, { $project: { _id: 1 } }],
+          as: 'student'
+        }
+      },
+      { $match: { 'student._id': { $ne: null } } },
+      {
+        $group: {
+          _id: '$sessionLabel',
+          totalStudents: { $sum: 1 },
+          qualified: { $sum: { $cond: ['$qualified', 1, 0] } },
+          totalMinutes: { $sum: { $ifNull: ['$attendedMinutes', 0] } }
+        }
+      }
+    ]),
+    SPTransaction.aggregate([
+      {
+        $lookup: {
+          from: 'students',
+          localField: 'email',
+          foreignField: 'email',
+          pipeline: [{ $match: { status: 'active' } }, { $project: { _id: 1 } }],
+          as: 'student'
+        }
+      },
+      { $match: { 'student._id': { $ne: null } } },
+      {
+        $group: {
+          _id: '$category',
+          count: { $sum: 1 },
+          netSp: { $sum: '$appliedDelta' },
+          credits: { $sum: { $cond: [{ $gt: ['$appliedDelta', 0] }, 1, 0] } },
+          debits: { $sum: { $cond: [{ $lt: ['$appliedDelta', 0] }, 1, 0] } }
+        }
+      }
+    ]),
+    SPTransaction.aggregate([
+      { $match: { category: { $in: ['attendance', 'poll'] }, appliedDelta: { $lt: 0 } } },
+      {
+        $lookup: {
+          from: 'students',
+          localField: 'email',
+          foreignField: 'email',
+          pipeline: [{ $match: { status: 'active' } }, { $project: { _id: 1, name: 1 } }],
+          as: 'student'
+        }
+      },
+      { $match: { 'student._id': { $ne: null } } },
+      {
+        $group: {
+          _id: '$email',
+          debitCount: { $sum: 1 },
+          debitSp: { $sum: { $abs: '$appliedDelta' } }
+        }
+      },
+      { $sort: { debitSp: -1 } },
+      { $limit: 10 },
+      {
+        $lookup: {
+          from: 'students',
+          localField: '_id',
+          foreignField: 'email',
+          pipeline: [{ $project: { name: 1 } }],
+          as: 'student'
+        }
+      },
+      { $unwind: '$student' },
+      { $project: { _id: 0, email: '$_id', name: '$student.name', debitCount: 1, debitSp: 1 } }
+    ]),
+    SPTransaction.aggregate([
+      { $match: { createdAt: { $gte: last7Days }, appliedDelta: { $gt: 0 } } },
+      {
+        $lookup: {
+          from: 'students',
+          localField: 'email',
+          foreignField: 'email',
+          pipeline: [{ $match: { status: 'active' } }, { $project: { name: 1 } }],
+          as: 'student'
+        }
+      },
+      { $match: { 'student._id': { $ne: null } } },
+      { $group: { _id: '$email', gainedSp: { $sum: '$appliedDelta' } } },
+      { $sort: { gainedSp: -1 } },
+      { $limit: 10 },
+      {
+        $lookup: {
+          from: 'students',
+          localField: '_id',
+          foreignField: 'email',
+          pipeline: [{ $project: { name: 1 } }],
+          as: 'student'
+        }
+      },
+      { $unwind: '$student' },
+      { $project: { _id: 0, email: '$_id', name: '$student.name', gainedSp: 1 } }
+    ]),
+    SPTransaction.aggregate([
+      { $match: { createdAt: { $gte: last24h }, appliedDelta: { $gt: 0 } } },
+      {
+        $lookup: {
+          from: 'students',
+          localField: 'email',
+          foreignField: 'email',
+          pipeline: [{ $match: { status: 'active' } }, { $project: { name: 1 } }],
+          as: 'student'
+        }
+      },
+      { $match: { 'student._id': { $ne: null } } },
+      { $group: { _id: '$email', gainedSp: { $sum: '$appliedDelta' } } },
+      { $sort: { gainedSp: -1 } },
+      { $limit: 10 },
+      {
+        $lookup: {
+          from: 'students',
+          localField: '_id',
+          foreignField: 'email',
+          pipeline: [{ $project: { name: 1 } }],
+          as: 'student'
+        }
+      },
+      { $unwind: '$student' },
+      { $project: { _id: 0, email: '$_id', name: '$student.name', gainedSp: 1 } }
+    ]),
+    Promise.resolve([...liveViewers.values()].filter(v => now.getTime() - v.lastSeen.getTime() <= 60_000).length),
+    SessionEvent.distinct('email', { timestamp: { $gte: lastHour } }),
+    SessionEvent.distinct('email', { timestamp: { $gte: todayStart, $lt: todayEnd } }),
+    SessionEvent.distinct('email', { timestamp: { $gte: yesterdayStart, $lt: todayStart } }),
+    SessionEvent.distinct('email', { timestamp: { $gte: last7Days } }),
+    SessionEvent.distinct('email', { timestamp: { $gte: last30Days } }),
+    SessionEvent.aggregate([
+      { $match: { timestamp: { $gte: last24h } } },
+      {
+        $group: {
+          _id: {
+            hour: { $dateToString: { format: '%Y-%m-%d %H:00', date: '$timestamp' } },
+            email: '$email'
+          },
+          emailCount: { $sum: 1 }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.hour',
+          uniqueUsers: { $sum: 1 },
+          events: { $sum: '$emailCount' }
+        }
+      },
+      { $sort: { _id: 1 } },
+      { $project: { _id: 0, label: '$_id', uniqueUsers: 1, events: 1 } }
+    ]),
+    SessionEvent.aggregate([
+      { $match: { timestamp: { $gte: last30Days } } },
+      {
+        $group: {
+          _id: {
+            week: { $dateToString: { format: '%Y-W%V', date: '$timestamp' } },
+            email: '$email'
+          },
+          emailCount: { $sum: 1 }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.week',
+          uniqueUsers: { $sum: 1 },
+          events: { $sum: '$emailCount' }
+        }
+      },
+      { $sort: { _id: 1 } },
+      { $project: { _id: 0, label: '$_id', uniqueUsers: 1, events: 1 } }
+    ]),
+    SessionEvent.aggregate([
+      { $match: { timestamp: { $gte: last30Days } } },
+      {
+        $group: {
+          _id: {
+            month: { $dateToString: { format: '%Y-%m', date: '$timestamp' } },
+            email: '$email'
+          },
+          emailCount: { $sum: 1 }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.month',
+          uniqueUsers: { $sum: 1 },
+          events: { $sum: '$emailCount' }
+        }
+      },
+      { $sort: { _id: 1 } },
+      { $project: { _id: 0, label: '$_id', uniqueUsers: 1, events: 1 } }
+    ])
   ]);
+
   const statusCounts = { active: 0, 'yet to onboard': 0, excused: 0 };
-  for (const s of allStudents) { if (s.status in statusCounts) statusCounts[s.status]++; }
-  const activeStudents = allStudents.filter(s => s.status === 'active');
-  const activeEmails = new Set(activeStudents.map(student => student.email));
-  const activeAttendance = attendance.filter(row => activeEmails.has(row.email));
-  const activeTransactions = transactions.filter(row => activeEmails.has(row.email));
-  const activeEvents = events.filter(row => activeEmails.has(row.email));
+  for (const r of statusCountsRaw) {
+    if (r._id in statusCounts) statusCounts[r._id] = r.count;
+  }
 
-  const uniqueSince = (date) => new Set(activeEvents.filter(e => e.timestamp >= date).map(e => e.email)).size;
-  const bucket = (date, mode) => {
-    const d = new Date(date);
-    if (mode === 'hour') return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:00`;
-    if (mode === 'week') {
-      const first = new Date(d.getFullYear(), 0, 1);
-      const week = Math.ceil((((d - first) / 86400000) + first.getDay() + 1) / 7);
-      return `${d.getFullYear()}-W${String(week).padStart(2,'0')}`;
-    }
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-  };
-  const series = (mode, from) => {
-    const map = new Map();
-    for (const ev of activeEvents.filter(e => e.timestamp >= from)) {
-      const key = bucket(ev.timestamp, mode);
-      if (!map.has(key)) map.set(key, { label: key, events: 0, emails: new Set() });
-      const row = map.get(key);
-      row.events += 1;
-      row.emails.add(ev.email);
-    }
-    return [...map.values()].sort((a, b) => a.label.localeCompare(b.label)).map(r => ({ label: r.label, events: r.events, uniqueUsers: r.emails.size }));
-  };
+  const sp = spStats[0] || { count: 0, totalSp: 0, min: 0, max: 0, below100: 0, from100to149: 0, from150to199: 0, from200plus: 0 };
+  const activeCount = sp.count;
+  const avgSp = activeCount ? Math.round(sp.totalSp / activeCount) : 0;
+  const medianSp = spMedianResult[0]?.percentile?.[0] ?? 0;
+  const inactiveToday = activeCount - todayUniqueEmails.length;
 
-  const activeNow = [...liveViewers.values()].filter(v => now.getTime() - v.lastSeen.getTime() <= 60_000).length;
-  const spValues = activeStudents.map(s => Number(s.totalSp || 0)).sort((a, b) => a - b);
-  const avgSp = spValues.length ? Math.round(spValues.reduce((a, b) => a + b, 0) / spValues.length) : 0;
-  const medianSp = spValues.length ? spValues[Math.floor(spValues.length / 2)] : 0;
-  const spBands = {
-    below100: spValues.filter(v => v < 100).length,
-    from100to149: spValues.filter(v => v >= 100 && v < 150).length,
-    from150to199: spValues.filter(v => v >= 150 && v < 200).length,
-    from200plus: spValues.filter(v => v >= 200).length
-  };
+  const sessionMap = new Map(attendanceBySession.map(r => [r._id, r]));
+  const catMap = new Map(categoryTotals.map(r => [r._id, r]));
+  const overallQualified = attendanceBySession.reduce((sum, r) => sum + r.qualified, 0);
+  const overallTotal = attendanceBySession.reduce((sum, r) => sum + r.totalStudents, 0);
 
-  const attendanceBySession = sessions.map(session => {
-    const rows = activeAttendance.filter(a => a.sessionLabel === session.label);
-    const qualified = rows.filter(r => r.qualified).length;
-    const totalMinutes = rows.reduce((sum, r) => sum + Number(r.attendedMinutes || 0), 0);
+  const categoryTotalsResult = ['initial', 'attendance', 'poll', 'manual'].map(cat => {
+    const r = catMap.get(cat) || { count: 0, netSp: 0, credits: 0, debits: 0 };
+    return { category: cat, count: r.count, netSp: r.netSp, credits: r.credits, debits: r.debits };
+  });
+
+  const attendanceBySessionResult = sessions.map(session => {
+    const r = sessionMap.get(session.label) || { totalStudents: 0, qualified: 0, totalMinutes: 0 };
     return {
       label: session.label,
-      totalStudents: rows.length,
-      qualified,
-      notQualified: rows.length - qualified,
-      qualifiedPct: rows.length ? Math.round((qualified / rows.length) * 100) : 0,
-      avgMinutes: rows.length ? Math.round(totalMinutes / rows.length) : 0,
+      totalStudents: r.totalStudents,
+      qualified: r.qualified,
+      notQualified: r.totalStudents - r.qualified,
+      qualifiedPct: r.totalStudents ? Math.round((r.qualified / r.totalStudents) * 100) : 0,
+      avgMinutes: r.totalStudents ? Math.round(r.totalMinutes / r.totalStudents) : 0,
       sessionMinutes: session.totalMinutes
     };
   });
 
-  const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
-    const rows = activeTransactions.filter(t => t.category === category);
-    return {
-      category,
-      count: rows.length,
-      netSp: rows.reduce((sum, t) => sum + Number(t.appliedDelta || 0), 0),
-      credits: rows.filter(t => t.appliedDelta > 0).length,
-      debits: rows.filter(t => t.appliedDelta < 0).length
-    };
-  });
-  const attendanceDebits = activeTransactions.filter(t => t.category === 'attendance' && t.appliedDelta < 0);
-  const pollDebits = activeTransactions.filter(t => t.category === 'poll' && t.appliedDelta < 0);
-  const inactiveToday = activeStudents.length - new Set(activeEvents.filter(e => e.timestamp >= todayStart).map(e => e.email)).size;
-  const lowSp = activeStudents.filter(s => Number(s.totalSp || 0) < 100).length;
-  const topDrops = Object.values(attendanceDebits.concat(pollDebits).reduce((acc, txn) => {
-    if (!acc[txn.email]) acc[txn.email] = { email: txn.email, debitCount: 0, debitSp: 0 };
-    acc[txn.email].debitCount += 1;
-    acc[txn.email].debitSp += Math.abs(Number(txn.appliedDelta || 0));
-    return acc;
-  }, {})).sort((a, b) => b.debitSp - a.debitSp).slice(0, 10);
+  const attDebits = categoryTotals.find(c => c._id === 'attendance')?.debits || 0;
+  const pollDebits = categoryTotals.find(c => c._id === 'poll')?.debits || 0;
+
+  const topGainersFormatted = topGainersRaw.map(g => ({ email: g.email, name: g.name, gainedSp: g.gainedSp }));
+  const todayTopGainersFormatted = todayTopGainersRaw.map(g => ({ email: g.email, name: g.name, gainedSp: g.gainedSp }));
+
+  const trends = {
+    activeTodayDelta: yesterdayUnique.length > 0 ? Math.round(((todayUniqueEmails.length - yesterdayUnique.length) / yesterdayUnique.length) * 100) : 0,
+    activeLast7dDelta: last7dUnique.length,
+    qualifiedPct: overallTotal ? Math.round((overallQualified / overallTotal) * 100) : 0,
+    avgSpDelta: 0,
+    inactiveToday,
+    activeNow
+  };
+
+  const spBandsDetailed = [
+    { band: '0-49', label: '0–49', color: '#ef4444' },
+    { band: '50-99', label: '50–99', color: '#f97316' },
+    { band: '100-149', label: '100–149', color: '#eab308' },
+    { band: '150-199', label: '150–199', color: '#22c55e' },
+    { band: '200-249', label: '200–249', color: '#10b981' },
+    { band: '250-299', label: '250–299', color: '#06b6d4' },
+    { band: '300-399', label: '300–399', color: '#3b82f6' },
+    { band: '400-499', label: '400–499', color: '#6366f1' },
+    { band: '500-799', label: '500–799', color: '#8b5cf6' },
+    { band: '800+', label: '800+', color: '#a855f7' }
+  ];
 
   res.json({
     live: { activeNow },
     users: {
-      activeLastHour: uniqueSince(lastHour),
-      activeToday: uniqueSince(todayStart),
-      activeLast7Days: uniqueSince(last7Days),
-      activeLast30Days: uniqueSince(last30Days),
-      hourly: series('hour', last24Hours(now)),
-      weekly: series('week', last30Days),
-      monthly: series('month', last30Days)
+      activeLastHour: lastHourUnique.length,
+      activeToday: todayUniqueEmails.length,
+      activeYesterday: yesterdayUnique.length,
+      activeLast7Days: last7dUnique.length,
+      activeLast30Days: last30dUnique.length,
+      hourly: hourlySeries,
+      weekly: weeklySeries,
+      monthly: monthlySeries
     },
     attendance: {
-      sessions: attendanceBySession,
-      overallQualifiedPct: activeAttendance.length ? Math.round((activeAttendance.filter(a => a.qualified).length / activeAttendance.length) * 100) : 0
+      sessions: attendanceBySessionResult,
+      overallQualifiedPct: overallTotal ? Math.round((overallQualified / overallTotal) * 100) : 0
     },
     sp: {
-      students: activeStudents.length,
+      students: activeCount,
       statusCounts,
       average: avgSp,
       median: medianSp,
-      min: spValues[0] || 0,
-      max: spValues[spValues.length - 1] || 0,
-      bands: spBands,
-      categoryTotals
+      min: sp.min,
+      max: sp.max,
+      bands: {
+        below100: sp.below100,
+        from100to149: sp.from100to149,
+        from150to199: sp.from150to199,
+        from200plus: sp.from200plus
+      },
+      bandsDetailed: spBandsDetailed,
+      categoryTotals: categoryTotalsResult
     },
     alerts: {
-      lowSp,
+      lowSp: sp.below100,
       inactiveToday,
-      attendanceDebits: attendanceDebits.length,
-      pollDebits: pollDebits.length,
-      topDrops
+      attendanceDebits: attDebits,
+      pollDebits: pollDebits,
+      topDrops: topDropsRaw,
+      topGainers: topGainersFormatted,
+      todayTopGainers: todayTopGainersFormatted
+    },
+    trends,
+    meta: {
+      fetchedAt: new Date().toISOString()
     }
   });
 });
