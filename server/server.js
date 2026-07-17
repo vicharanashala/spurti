@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { buildTrajectoryPayload, computeAtRisk } from './services/trajectory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -322,6 +323,23 @@ api.get('/leaderboard', async (req, res) => {
   })));
 });
 
+api.get('/student/trajectory', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  // Use the pure helper for the math; route handler just fetches data.
+  // Optimization: load ONLY this student's transactions + a per-session
+  // cohort aggregation (instead of every transaction for every student).
+  // For now we keep the simple implementation (fetch all, compute client-side);
+  // future PR can swap in an aggregation pipeline.
+  const studentTxns = await SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean();
+  const cohortTxns = await SPTransaction.find({}, 'email dateTime sessionLabel appliedDelta').lean();
+
+  res.json(buildTrajectoryPayload(studentTxns, cohortTxns));
+});
+
 api.post('/ping', async (req, res) => {
   const { email, name, page } = req.body || {};
   const normalized = normalizeEmail(email);
@@ -466,6 +484,19 @@ api.get('/admin/student/:id', adminGuard, async (req, res) => {
   const student = await Student.findById(req.params.id).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await studentPayload(student));
+});
+
+api.get('/admin/student/by-email/:email', adminGuard, async (req, res) => {
+  const email = normalizeEmail(req.params.email);
+  const student = await Student.findOne({ email }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  res.json(await studentPayload(student));
+});
+
+api.get('/admin/at-risk', adminGuard, async (_req, res) => {
+  const students = await Student.find({ status: 'active' }).lean();
+  const records = await AttendanceRecord.find({}, 'email sessionLabel qualified dateTime createdAt').lean();
+  res.json(computeAtRisk(students, records));
 });
 
 api.get('/admin/active', adminGuard, (_req, res) => {
