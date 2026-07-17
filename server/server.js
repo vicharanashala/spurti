@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { buildTrajectoryPayload, computeAtRisk } from './services/trajectory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -328,39 +329,15 @@ api.get('/student/trajectory', async (req, res) => {
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
 
-  const allTxns = await SPTransaction.find({}).sort({ dateTime: 1, createdAt: 1 }).lean();
+  // Use the pure helper for the math; route handler just fetches data.
+  // Optimization: load ONLY this student's transactions + a per-session
+  // cohort aggregation (instead of every transaction for every student).
+  // For now we keep the simple implementation (fetch all, compute client-side);
+  // future PR can swap in an aggregation pipeline.
+  const studentTxns = await SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean();
+  const cohortTxns = await SPTransaction.find({}, 'email dateTime sessionLabel appliedDelta').lean();
 
-  const byEmail = new Map();
-  for (const t of allTxns) {
-    const e = t.email.toLowerCase();
-    if (!byEmail.has(e)) byEmail.set(e, []);
-    byEmail.get(e).push(t);
-  }
-
-  let myBalance = 0;
-  const myPoints = (byEmail.get(student.email.toLowerCase()) || []).map(t => {
-    myBalance += Number(t.appliedDelta || 0);
-    return { session: t.sessionLabel || 'Start', balance: myBalance, at: t.dateTime };
-  });
-  if (myPoints.length && myPoints[0].session === 'Start') myPoints[0].balance = 100;
-
-  const bySession = new Map();
-  for (const [, txns] of byEmail) {
-    let b = 0;
-    for (const t of txns) {
-      b += Number(t.appliedDelta || 0);
-      const lbl = t.sessionLabel || 'Start';
-      if (!bySession.has(lbl)) bySession.set(lbl, []);
-      bySession.get(lbl).push(b);
-    }
-  }
-
-  const cohortAverages = [];
-  for (const [session, vals] of [...bySession.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    cohortAverages.push({ session, avgBalance: vals.length ? Math.round(vals.reduce((s, v) => s + v, 0) / vals.length) : 0 });
-  }
-
-  res.json({ myPoints, cohortAverages });
+  res.json(buildTrajectoryPayload(studentTxns, cohortTxns));
 });
 
 api.post('/ping', async (req, res) => {
@@ -517,43 +494,12 @@ api.get('/admin/student/by-email/:email', adminGuard, async (req, res) => {
 });
 
 api.get('/admin/at-risk', adminGuard, async (_req, res) => {
-  const CONSECUTIVE_MISS = 2;
   const students = await Student.find({ status: 'active' }).lean();
-  const records = await AttendanceRecord.find().sort({ sessionLabel: 1 }).lean();
-
-  const byStudent = new Map();
-  for (const rec of records) {
-    if (!byStudent.has(rec.email)) byStudent.set(rec.email, []);
-    byStudent.get(rec.email).push(rec);
-  }
-
-  const atRisk = [];
-  for (const student of students) {
-    const recs = byStudent.get(student.email) || [];
-    if (recs.length < CONSECUTIVE_MISS) continue;
-
-    let consecutive = 0;
-    for (let i = recs.length - 1; i >= 0 && i >= recs.length - 5; i--) {
-      if (!recs[i].qualified) consecutive++;
-      else break;
-    }
-
-    if (consecutive >= CONSECUTIVE_MISS) {
-      const lastRec = recs[recs.length - 1];
-      atRisk.push({
-        email: student.email,
-        name: student.name,
-        totalSp: student.totalSp,
-        consecutiveMissed: consecutive,
-        lastSession: lastRec?.sessionLabel || '—',
-        lastActive: lastRec?.qualified ? (lastRec.dateTime || null) : null
-      });
-    }
-  }
-
-  atRisk.sort((a, b) => b.consecutiveMissed - a.consecutiveMissed);
-  res.json(atRisk);
+  const records = await AttendanceRecord.find({}, 'email sessionLabel qualified dateTime createdAt').lean();
+  res.json(computeAtRisk(students, records));
 });
+
+api.get('/admin/active', adminGuard, (_req, res) => {
   const now = new Date();
   const cutoff = now.getTime() - 60_000;
   const viewers = [];
