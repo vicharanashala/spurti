@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { runAdminAnalytics } from './services/analyticsAggregation.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -487,135 +488,13 @@ api.get('/admin/active', adminGuard, (_req, res) => {
 });
 
 api.get('/admin/analytics', adminGuard, async (_req, res) => {
+  const t0 = Date.now();
   const now = new Date();
-  const lastHour = new Date(now.getTime() - 60 * 60 * 1000);
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const last7Days = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-  const [allStudents, sessions, attendance, transactions, events] = await Promise.all([
-    Student.find().lean(),
-    Session.find().sort({ endDateTime: 1 }).lean(),
-    AttendanceRecord.find().lean(),
-    SPTransaction.find().lean(),
-    SessionEvent.find({ timestamp: { $gte: last30Days } }).lean()
-  ]);
-  const statusCounts = { active: 0, 'yet to onboard': 0, excused: 0 };
-  for (const s of allStudents) { if (s.status in statusCounts) statusCounts[s.status]++; }
-  const activeStudents = allStudents.filter(s => s.status === 'active');
-  const activeEmails = new Set(activeStudents.map(student => student.email));
-  const activeAttendance = attendance.filter(row => activeEmails.has(row.email));
-  const activeTransactions = transactions.filter(row => activeEmails.has(row.email));
-  const activeEvents = events.filter(row => activeEmails.has(row.email));
-
-  const uniqueSince = (date) => new Set(activeEvents.filter(e => e.timestamp >= date).map(e => e.email)).size;
-  const bucket = (date, mode) => {
-    const d = new Date(date);
-    if (mode === 'hour') return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:00`;
-    if (mode === 'week') {
-      const first = new Date(d.getFullYear(), 0, 1);
-      const week = Math.ceil((((d - first) / 86400000) + first.getDay() + 1) / 7);
-      return `${d.getFullYear()}-W${String(week).padStart(2,'0')}`;
-    }
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-  };
-  const series = (mode, from) => {
-    const map = new Map();
-    for (const ev of activeEvents.filter(e => e.timestamp >= from)) {
-      const key = bucket(ev.timestamp, mode);
-      if (!map.has(key)) map.set(key, { label: key, events: 0, emails: new Set() });
-      const row = map.get(key);
-      row.events += 1;
-      row.emails.add(ev.email);
-    }
-    return [...map.values()].sort((a, b) => a.label.localeCompare(b.label)).map(r => ({ label: r.label, events: r.events, uniqueUsers: r.emails.size }));
-  };
-
-  const activeNow = [...liveViewers.values()].filter(v => now.getTime() - v.lastSeen.getTime() <= 60_000).length;
-  const spValues = activeStudents.map(s => Number(s.totalSp || 0)).sort((a, b) => a - b);
-  const avgSp = spValues.length ? Math.round(spValues.reduce((a, b) => a + b, 0) / spValues.length) : 0;
-  const medianSp = spValues.length ? spValues[Math.floor(spValues.length / 2)] : 0;
-  const spBands = {
-    below100: spValues.filter(v => v < 100).length,
-    from100to149: spValues.filter(v => v >= 100 && v < 150).length,
-    from150to199: spValues.filter(v => v >= 150 && v < 200).length,
-    from200plus: spValues.filter(v => v >= 200).length
-  };
-
-  const attendanceBySession = sessions.map(session => {
-    const rows = activeAttendance.filter(a => a.sessionLabel === session.label);
-    const qualified = rows.filter(r => r.qualified).length;
-    const totalMinutes = rows.reduce((sum, r) => sum + Number(r.attendedMinutes || 0), 0);
-    return {
-      label: session.label,
-      totalStudents: rows.length,
-      qualified,
-      notQualified: rows.length - qualified,
-      qualifiedPct: rows.length ? Math.round((qualified / rows.length) * 100) : 0,
-      avgMinutes: rows.length ? Math.round(totalMinutes / rows.length) : 0,
-      sessionMinutes: session.totalMinutes
-    };
-  });
-
-  const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
-    const rows = activeTransactions.filter(t => t.category === category);
-    return {
-      category,
-      count: rows.length,
-      netSp: rows.reduce((sum, t) => sum + Number(t.appliedDelta || 0), 0),
-      credits: rows.filter(t => t.appliedDelta > 0).length,
-      debits: rows.filter(t => t.appliedDelta < 0).length
-    };
-  });
-  const attendanceDebits = activeTransactions.filter(t => t.category === 'attendance' && t.appliedDelta < 0);
-  const pollDebits = activeTransactions.filter(t => t.category === 'poll' && t.appliedDelta < 0);
-  const inactiveToday = activeStudents.length - new Set(activeEvents.filter(e => e.timestamp >= todayStart).map(e => e.email)).size;
-  const lowSp = activeStudents.filter(s => Number(s.totalSp || 0) < 100).length;
-  const topDrops = Object.values(attendanceDebits.concat(pollDebits).reduce((acc, txn) => {
-    if (!acc[txn.email]) acc[txn.email] = { email: txn.email, debitCount: 0, debitSp: 0 };
-    acc[txn.email].debitCount += 1;
-    acc[txn.email].debitSp += Math.abs(Number(txn.appliedDelta || 0));
-    return acc;
-  }, {})).sort((a, b) => b.debitSp - a.debitSp).slice(0, 10);
-
-  res.json({
-    live: { activeNow },
-    users: {
-      activeLastHour: uniqueSince(lastHour),
-      activeToday: uniqueSince(todayStart),
-      activeLast7Days: uniqueSince(last7Days),
-      activeLast30Days: uniqueSince(last30Days),
-      hourly: series('hour', last24Hours(now)),
-      weekly: series('week', last30Days),
-      monthly: series('month', last30Days)
-    },
-    attendance: {
-      sessions: attendanceBySession,
-      overallQualifiedPct: activeAttendance.length ? Math.round((activeAttendance.filter(a => a.qualified).length / activeAttendance.length) * 100) : 0
-    },
-    sp: {
-      students: activeStudents.length,
-      statusCounts,
-      average: avgSp,
-      median: medianSp,
-      min: spValues[0] || 0,
-      max: spValues[spValues.length - 1] || 0,
-      bands: spBands,
-      categoryTotals
-    },
-    alerts: {
-      lowSp,
-      inactiveToday,
-      attendanceDebits: attendanceDebits.length,
-      pollDebits: pollDebits.length,
-      topDrops
-    }
-  });
+  const sessions = await Session.find().sort({ endDateTime: 1 }).lean();
+  const result = await runAdminAnalytics({ now, liveViewers, sessions });
+  res.setHeader('X-Analytics-Duration-Ms', String(Date.now() - t0));
+  res.json(result);
 });
-
-function last24Hours(now) {
-  return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-}
 
 app.use('/api', api);
 app.use('/spurti/api', api);
