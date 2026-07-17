@@ -114,12 +114,19 @@ function LearningInsights({ profile }) {
           <h3>Weekday Attendance Bar Chart</h3>
           <div className="weekday-bar-chart" role="img" aria-label="Weekday attendance percentage bar chart">
             {weekdayBarStats.map((row) => (
-              <div className="weekday-bar" key={row.name} title={`${row.name}: ${formatPercent(row.attendancePct)} (${row.sessionsAttended}/${row.totalSessions})`}>
-                <div className="weekday-bar-value">{formatPercent(row.attendancePct)}</div>
-                <div className="weekday-bar-track">
-                  <div className="weekday-bar-fill" style={{ height: `${Math.max(0, row.attendancePct)}%` }} />
+              <div
+                className={`weekday-bar${row.totalSessions ? '' : ' is-empty'}`}
+                key={row.name}
+                title={row.totalSessions ? `${row.name}: ${formatPercent(row.attendancePct)} (${row.sessionsAttended}/${row.totalSessions})` : `${row.name}: no sessions`}
+              >
+                <div className="weekday-bar-label">
+                  <strong>{row.name.slice(0, 3)}</strong>
+                  <span>{row.totalSessions ? `${row.sessionsAttended}/${row.totalSessions} sessions` : 'No sessions'}</span>
                 </div>
-                <div className="weekday-bar-label">{row.name.slice(0, 3)}</div>
+                <div className="weekday-bar-track">
+                  <div className="weekday-bar-fill" style={{ width: `${row.totalSessions ? Math.max(0, row.attendancePct) : 0}%` }} />
+                </div>
+                <div className="weekday-bar-value">{row.totalSessions ? formatPercent(row.attendancePct) : '—'}</div>
               </div>
             ))}
           </div>
