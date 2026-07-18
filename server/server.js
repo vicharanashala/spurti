@@ -13,6 +13,10 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import Season from './models/Season.js';
+import StudentSeasonData from './models/StudentSeasonData.js';
+import CouncilSuggestion from './models/CouncilSuggestion.js';
+import RewardTrack from './models/RewardTrack.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -174,6 +178,47 @@ async function studentPayload(student) {
   const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
   const myGroup = leaderboardGroup(student.internshipStartDate);
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
+  const activeSeason = await Season.findOne({ isActive: true });
+  let seasonSp = 0;
+  let isEligibleForCouncil = false;
+  let isCouncilMember = false;
+  let studentCouncil = { activeSeason: null };
+
+  if (activeSeason) {
+    const seasonTxs = transactions.filter(t => t.dateTime >= activeSeason.startDate && t.appliedDelta > 0 && t.category !== 'initial');
+    seasonSp = seasonTxs.reduce((sum, t) => sum + t.appliedDelta, 0);
+
+    const seasonData = await StudentSeasonData.findOne({ studentId: student._id, seasonId: activeSeason._id });
+    const endorsementsCount = seasonData ? (seasonData.matrixMysticsEndorsements || []).length : 0;
+    const hasSpamPenalties = seasonData ? Boolean(seasonData.hasSpamPenalties) : false;
+    const hasDisciplinaryActions = seasonData ? Boolean(seasonData.hasDisciplinaryActions) : false;
+
+    isEligibleForCouncil = (seasonSp >= activeSeason.minSpRequired) &&
+                           (endorsementsCount >= activeSeason.minEndorsementsRequired) &&
+                           !hasSpamPenalties &&
+                           !hasDisciplinaryActions;
+
+    studentCouncil = {
+      activeSeason,
+      seasonSp,
+      endorsementsCount,
+      hasSpamPenalties,
+      hasDisciplinaryActions,
+      isNominated: seasonData ? Boolean(seasonData.isNominated) : false,
+      nominationStatement: seasonData ? seasonData.nominationStatement : '',
+      nominatedBy: seasonData ? seasonData.nominatedBy : null
+    };
+  }
+
+  const lastConcludedSeason = await Season.findOne({ isActive: false }).sort({ endDate: -1 });
+  if (lastConcludedSeason) {
+    const lastData = await StudentSeasonData.findOne({ studentId: student._id, seasonId: lastConcludedSeason._id });
+    if (lastData && lastData.isElected) {
+      isCouncilMember = true;
+    }
+    studentCouncil.electedInPreviousSeason = isCouncilMember;
+  }
+
   const mapRow = (row, index) => ({
     rank: index + 1,
     name: row.name,
@@ -202,7 +247,10 @@ async function studentPayload(student) {
       legendBadgeUnlocked: legendBadge(highestSpEver),
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
-      surveyCompleted: Boolean(student.surveyCompleted)
+      surveyCompleted: Boolean(student.surveyCompleted),
+      isEligibleForCouncil,
+      isCouncilMember,
+      studentCouncil
     },
     transactions,
     polls,
@@ -587,6 +635,475 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
       topDrops
     }
   });
+});
+
+// ==========================================
+// STUDENT COUNCIL FEATURE ENDPOINTS
+// ==========================================
+
+api.get('/student-council/status', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  
+  const payload = await studentPayload(student);
+  res.json(payload.student.studentCouncil);
+});
+
+api.post('/student-council/nomination/refine-statement', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const { statement } = req.body;
+  if (!statement || typeof statement !== 'string') return res.status(400).json({ error: 'statement is required' });
+  try {
+    let refined = statement.trim();
+    refined = refined.replace(/(^\s*|[.!?]\s+)([a-z])/g, (m, p1, p2) => p1 + p2.toUpperCase());
+    if (!refined.endsWith('.')) refined += '.';
+    
+    const prefix = "I am highly motivated to serve on the Student Council. My goal is to collaborate with peers, address community feedback, and help make our learning environment and quests even more engaging. ";
+    res.json({ refined: prefix + refined });
+  } catch (err) {
+    console.error("Local statement refinement failed:", err);
+    res.status(500).json({ error: "Failed to refine statement: " + err.message });
+  }
+});
+
+api.post('/student-council/nominate', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const currentStudent = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!currentStudent) return res.status(404).json({ error: 'Student not found' });
+
+  const activeSeason = await Season.findOne({ isActive: true });
+  if (!activeSeason) return res.status(400).json({ error: 'No active election season.' });
+
+  const { nomineeEmail, statement } = req.body;
+  if (!statement || typeof statement !== 'string') return res.status(400).json({ error: 'statement is required' });
+
+  let nominee = currentStudent;
+  if (nomineeEmail && normalizeEmail(nomineeEmail) !== email) {
+    nominee = await Student.findOne({ $or: [{ email: normalizeEmail(nomineeEmail) }, { alternateEmail: normalizeEmail(nomineeEmail) }] });
+    if (!nominee) return res.status(404).json({ error: 'Nominee not found.' });
+  }
+
+  const transactions = await SPTransaction.find({ email: nominee.email }).lean();
+  const seasonTxs = transactions.filter(t => t.dateTime >= activeSeason.startDate && t.appliedDelta > 0 && t.category !== 'initial');
+  const seasonSp = seasonTxs.reduce((sum, t) => sum + t.appliedDelta, 0);
+
+  let seasonData = await StudentSeasonData.findOne({ studentId: nominee._id, seasonId: activeSeason._id });
+  const endorsementsCount = seasonData ? (seasonData.matrixMysticsEndorsements || []).length : 0;
+  const hasSpamPenalties = seasonData ? Boolean(seasonData.hasSpamPenalties) : false;
+  const hasDisciplinaryActions = seasonData ? Boolean(seasonData.hasDisciplinaryActions) : false;
+
+  const isEligible = (seasonSp >= activeSeason.minSpRequired) &&
+                     (endorsementsCount >= activeSeason.minEndorsementsRequired) &&
+                     !hasSpamPenalties &&
+                     !hasDisciplinaryActions;
+
+  if (!isEligible) {
+    return res.status(400).json({ error: 'Nominee does not meet eligibility requirements (check SP, Matrix Mystics question endorsements, or penalties).' });
+  }
+
+  if (!seasonData) {
+    seasonData = new StudentSeasonData({ studentId: nominee._id, seasonId: activeSeason._id });
+  }
+
+  seasonData.isNominated = true;
+  seasonData.nominationStatement = statement.trim();
+  if (nominee._id.toString() !== currentStudent._id.toString()) {
+    seasonData.nominatedBy = email;
+  } else {
+    seasonData.nominatedBy = null;
+  }
+
+  await seasonData.save();
+  res.json({ success: true, message: 'Nomination submitted successfully.' });
+});
+
+api.post('/student-council/vote', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const activeSeason = await Season.findOne({ isActive: true });
+  if (!activeSeason) return res.status(400).json({ error: 'No active election season.' });
+
+  const { nomineeId } = req.body;
+  if (!nomineeId) return res.status(400).json({ error: 'nomineeId is required.' });
+
+  const alreadyVoted = await StudentSeasonData.exists({ seasonId: activeSeason._id, votes: email });
+  if (alreadyVoted) {
+    return res.status(400).json({ error: 'You have already voted in this election.' });
+  }
+
+  const nomineeData = await StudentSeasonData.findOne({ _id: nomineeId, seasonId: activeSeason._id });
+  if (!nomineeData || !nomineeData.isNominated) {
+    return res.status(404).json({ error: 'Nominee not found or not active.' });
+  }
+
+  const nomineeStudent = await Student.findById(nomineeData.studentId).lean();
+  if (nomineeStudent && (normalizeEmail(nomineeStudent.email) === email || normalizeEmail(nomineeStudent.alternateEmail) === email)) {
+    return res.status(400).json({ error: 'You cannot vote for yourself.' });
+  }
+
+  nomineeData.votes.push(email);
+  await nomineeData.save();
+  res.json({ success: true, message: 'Vote cast successfully.' });
+});
+
+api.get('/student-council/nominees', async (req, res) => {
+  const activeSeason = await Season.findOne({ isActive: true });
+  if (!activeSeason) return res.json([]);
+
+  const nominees = await StudentSeasonData.find({ seasonId: activeSeason._id, isNominated: true }).populate('studentId').lean();
+  
+  res.json(nominees.map(n => {
+    return {
+      _id: String(n._id),
+      studentId: String(n.studentId?._id),
+      name: n.studentId?.name || 'Anonymous',
+      maskedEmail: maskEmail(n.studentId?.email || ''),
+      nominationStatement: n.nominationStatement,
+      votesCount: (n.votes || []).length,
+      seasonSp: 0,
+      endorsementsCount: (n.matrixMysticsEndorsements || []).length
+    };
+  }));
+});
+
+api.get('/student-council/members', async (req, res) => {
+  const lastConcludedSeason = await Season.findOne({ isActive: false }).sort({ endDate: -1 });
+  if (!lastConcludedSeason) return res.json({ seasonName: '', members: [] });
+
+  const members = await StudentSeasonData.find({ seasonId: lastConcludedSeason._id, isElected: true }).populate('studentId').lean();
+  
+  res.json({
+    seasonName: lastConcludedSeason.name,
+    members: members.map(m => ({
+      _id: String(m.studentId?._id),
+      name: m.studentId?.name || 'Anonymous',
+      maskedEmail: maskEmail(m.studentId?.email || ''),
+      level: levelFor(Math.max(Number(m.studentId?.highestSpEver) || 0, Number(m.studentId?.totalSp) || 0)),
+      totalSp: m.studentId?.totalSp || 0,
+      nominationStatement: m.nominationStatement,
+      certificateDate: lastConcludedSeason.endDate
+    }))
+  });
+});
+
+api.post('/student-council/suggestions', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const lastConcludedSeason = await Season.findOne({ isActive: false }).sort({ endDate: -1 });
+  if (!lastConcludedSeason) return res.status(400).json({ error: 'No active council.' });
+
+  const isMember = await StudentSeasonData.exists({ studentId: student._id, seasonId: lastConcludedSeason._id, isElected: true });
+  if (!isMember) return res.status(403).json({ error: 'Only elected Student Council members can suggest.' });
+
+  const { type, content } = req.body;
+  if (!type || !content) return res.status(400).json({ error: 'type and content are required.' });
+
+  const suggestion = await CouncilSuggestion.create({
+    studentId: student._id,
+    seasonId: lastConcludedSeason._id,
+    type,
+    content
+  });
+
+  res.json(suggestion);
+});
+
+api.post('/student-council/suggestions/:id/upvote', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const lastConcludedSeason = await Season.findOne({ isActive: false }).sort({ endDate: -1 });
+  if (!lastConcludedSeason) return res.status(400).json({ error: 'No active council.' });
+
+  const isMember = await StudentSeasonData.exists({ studentId: student._id, seasonId: lastConcludedSeason._id, isElected: true });
+  if (!isMember) return res.status(403).json({ error: 'Only elected Student Council members can vote.' });
+
+  const suggestion = await CouncilSuggestion.findById(req.params.id);
+  if (!suggestion) return res.status(404).json({ error: 'Suggestion not found.' });
+
+  if (suggestion.votes.includes(email)) {
+    suggestion.votes = suggestion.votes.filter(e => e !== email);
+  } else {
+    suggestion.votes.push(email);
+  }
+  await suggestion.save();
+  res.json(suggestion);
+});
+
+api.get('/student-council/suggestions', async (req, res) => {
+  const lastConcludedSeason = await Season.findOne({ isActive: false }).sort({ endDate: -1 });
+  if (!lastConcludedSeason) return res.json([]);
+  const list = await CouncilSuggestion.find({ seasonId: lastConcludedSeason._id }).populate('studentId').lean();
+  res.json(list.map(s => ({
+    _id: String(s._id),
+    type: s.type,
+    content: s.content,
+    studentName: s.studentId?.name || 'Anonymous',
+    votesCount: (s.votes || []).length,
+    voted: req.query.email ? s.votes.includes(normalizeEmail(req.query.email)) : false
+  })));
+});
+
+api.get('/student-council/reward-tracks', async (req, res) => {
+  const lastConcludedSeason = await Season.findOne({ isActive: false }).sort({ endDate: -1 });
+  if (!lastConcludedSeason) return res.json([]);
+  const tracks = await RewardTrack.find({ seasonId: lastConcludedSeason._id }).lean();
+  res.json(tracks.map(t => ({
+    _id: String(t._id),
+    name: t.name,
+    description: t.description,
+    items: t.items,
+    votesCount: (t.votes || []).length,
+    voted: req.query.email ? t.votes.includes(normalizeEmail(req.query.email)) : false
+  })));
+});
+
+api.post('/student-council/reward-tracks/:id/vote', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const lastConcludedSeason = await Season.findOne({ isActive: false }).sort({ endDate: -1 });
+  if (!lastConcludedSeason) return res.status(400).json({ error: 'No active council.' });
+
+  const isMember = await StudentSeasonData.exists({ studentId: student._id, seasonId: lastConcludedSeason._id, isElected: true });
+  if (!isMember) return res.status(403).json({ error: 'Only elected Student Council members can vote.' });
+
+  const track = await RewardTrack.findById(req.params.id);
+  if (!track) return res.status(404).json({ error: 'Track not found.' });
+
+  if (track.votes.includes(email)) {
+    track.votes = track.votes.filter(e => e !== email);
+  } else {
+    track.votes.push(email);
+  }
+  await track.save();
+  res.json(track);
+});
+
+// Admin Student Council endpoints
+api.post('/admin/student-council/season/start', adminGuard, async (req, res) => {
+  const { name, maxSpCapForScore, councilSize, minEndorsementsRequired, minSpRequired } = req.body;
+  if (!name) return res.status(400).json({ error: 'Season name is required.' });
+
+  await Season.updateMany({ isActive: true }, { $set: { isActive: false, endDate: new Date() } });
+
+  const season = await Season.create({
+    name,
+    maxSpCapForScore: maxSpCapForScore || 1000,
+    councilSize: councilSize || 5,
+    minEndorsementsRequired: minEndorsementsRequired || 40,
+    minSpRequired: minSpRequired || 500,
+    isActive: true
+  });
+
+  await RewardTrack.create([
+    {
+      name: 'Alpha Track',
+      description: 'Focuses on visual badges and direct SP boosts.',
+      items: ['Digital Leader Badge', '+30 SP Boost Card', 'Featured profile slot'],
+      seasonId: season._id
+    },
+    {
+      name: 'Beta Track',
+      description: 'Focuses on streak protection and mystery bonuses.',
+      items: ['2x Streak Freezes', 'Bonus Spin Wheel Coupon', 'Custom frame styling'],
+      seasonId: season._id
+    }
+  ]);
+
+  res.json(season);
+});
+
+api.post('/admin/student-council/season/config', adminGuard, async (req, res) => {
+  const activeSeason = await Season.findOne({ isActive: true });
+  if (!activeSeason) return res.status(404).json({ error: 'No active season.' });
+
+  const { maxSpCapForScore, councilSize, minEndorsementsRequired, minSpRequired } = req.body;
+  if (maxSpCapForScore !== undefined) activeSeason.maxSpCapForScore = maxSpCapForScore;
+  if (councilSize !== undefined) activeSeason.councilSize = councilSize;
+  if (minEndorsementsRequired !== undefined) activeSeason.minEndorsementsRequired = minEndorsementsRequired;
+  if (minSpRequired !== undefined) activeSeason.minSpRequired = minSpRequired;
+
+  await activeSeason.save();
+  res.json(activeSeason);
+});
+
+api.post('/admin/student-council/student-data', adminGuard, async (req, res) => {
+  const { studentId, matrixMysticsEndorsements, hasSpamPenalties, hasDisciplinaryActions } = req.body;
+  if (!studentId) return res.status(400).json({ error: 'studentId is required.' });
+
+  const activeSeason = await Season.findOne({ isActive: true });
+  if (!activeSeason) return res.status(400).json({ error: 'No active season.' });
+
+  let data = await StudentSeasonData.findOne({ studentId, seasonId: activeSeason._id });
+  if (!data) {
+    data = new StudentSeasonData({ studentId, seasonId: activeSeason._id });
+  }
+
+  if (matrixMysticsEndorsements !== undefined) data.matrixMysticsEndorsements = matrixMysticsEndorsements;
+  if (hasSpamPenalties !== undefined) data.hasSpamPenalties = hasSpamPenalties;
+  if (hasDisciplinaryActions !== undefined) data.hasDisciplinaryActions = hasDisciplinaryActions;
+
+  await data.save();
+  res.json(data);
+});
+
+api.post('/admin/student-council/conclude', adminGuard, async (req, res) => {
+  const activeSeason = await Season.findOne({ isActive: true });
+  if (!activeSeason) return res.status(404).json({ error: 'No active season to conclude.' });
+
+  const nominees = await StudentSeasonData.find({ seasonId: activeSeason._id, isNominated: true }).populate('studentId');
+  if (!nominees.length) {
+    activeSeason.isActive = false;
+    activeSeason.endDate = new Date();
+    await activeSeason.save();
+    return res.json({ success: true, message: 'Season ended with no nominees.', elected: [] });
+  }
+
+  const maxVotes = Math.max(1, ...nominees.map(n => (n.votes || []).length));
+  const cap = activeSeason.maxSpCapForScore;
+
+  const scoredNominees = [];
+  for (const n of nominees) {
+    if (!n.studentId) continue;
+    const txs = await SPTransaction.find({ email: n.studentId.email, dateTime: { $gte: activeSeason.startDate } }).lean();
+    const seasonTxs = txs.filter(t => t.appliedDelta > 0 && t.category !== 'initial');
+    const seasonSp = seasonTxs.reduce((sum, t) => sum + t.appliedDelta, 0);
+
+    const votesCount = (n.votes || []).length;
+    const endorsementsCount = (n.matrixMysticsEndorsements || []).length;
+
+    const spScore = (Math.min(seasonSp, cap) / cap) * 60;
+    const endorsementsScore = (endorsementsCount / 53) * 20;
+    const votesScore = (votesCount / maxVotes) * 20;
+    
+    n.councilScore = Math.round(spScore + endorsementsScore + votesScore);
+    scoredNominees.push(n);
+  }
+
+  scoredNominees.sort((a, b) => b.councilScore - a.councilScore);
+  const electCount = Math.min(scoredNominees.length, activeSeason.councilSize);
+  const elected = scoredNominees.slice(0, electCount);
+
+  for (let i = 0; i < scoredNominees.length; i++) {
+    const isElected = i < electCount;
+    const nomineeData = scoredNominees[i];
+    nomineeData.isElected = isElected;
+    await nomineeData.save();
+
+    if (isElected && nomineeData.studentId) {
+      await Student.updateOne({ _id: nomineeData.studentId._id }, { $inc: { totalSp: 50 } });
+      await SPTransaction.create({
+        email: nomineeData.studentId.email,
+        studentId: nomineeData.studentId._id,
+        category: 'manual',
+        deltaValue: 50,
+        appliedDelta: 50,
+        balanceAfter: (nomineeData.studentId.totalSp || 0) + 50,
+        reason: `Elected to Student Council - ${activeSeason.name} Bonus SP`,
+        dateTime: new Date()
+      });
+    }
+  }
+
+  activeSeason.isActive = false;
+  activeSeason.endDate = new Date();
+  await activeSeason.save();
+
+  res.json({
+    success: true,
+    message: `Season concluded. Elected ${elected.length} council members.`,
+    elected: elected.map(e => ({ name: e.studentId?.name, email: e.studentId?.email, score: e.councilScore }))
+  });
+});
+
+api.post('/admin/student-council/invalidate-nomination', adminGuard, async (req, res) => {
+  const { nomineeId } = req.body;
+  const data = await StudentSeasonData.findByIdAndUpdate(nomineeId, { $set: { isNominated: false } }, { new: true });
+  if (!data) return res.status(404).json({ error: 'Nomination not found.' });
+  res.json({ success: true, data });
+});
+
+api.post('/admin/student-council/invalidate-vote', adminGuard, async (req, res) => {
+  const { nomineeId, voterEmail } = req.body;
+  const data = await StudentSeasonData.findById(nomineeId);
+  if (!data) return res.status(404).json({ error: 'Nominee not found.' });
+  
+  data.votes = data.votes.filter(v => v !== normalizeEmail(voterEmail));
+  await data.save();
+  res.json({ success: true, votesCount: data.votes.length });
+});
+
+api.get('/admin/student-council/insights', adminGuard, async (req, res) => {
+  const lastConcludedSeason = await Season.findOne({ isActive: false }).sort({ endDate: -1 });
+  if (!lastConcludedSeason) return res.status(400).json({ error: 'No concluded season with council feedback.' });
+
+  const suggestions = await CouncilSuggestion.find({ seasonId: lastConcludedSeason._id }).populate('studentId').lean();
+  if (suggestions.length === 0) return res.json({ insights: 'No suggestions submitted yet by this season\'s council.' });
+
+  try {
+    const weeklyQuests = suggestions.filter(s => s.type === 'weeklyQuest');
+    const communityChallenges = suggestions.filter(s => s.type === 'communityChallenge');
+    const feedback = suggestions.filter(s => s.type === 'structuredFeedback');
+    const platformImprovements = suggestions.filter(s => s.type === 'platformImprovement');
+
+    let report = `### 📋 Student Council Advisory & Suggestions Report (Offline Summary)\n\n`;
+    report += `This report lists and categorizes the submissions from the Student Council representatives for the concluded season: **${lastConcludedSeason.name}**.\n\n`;
+
+    if (weeklyQuests.length > 0) {
+      report += `#### 🎮 Suggested Weekly Quests & Challenges:\n`;
+      weeklyQuests.forEach(s => {
+        report += `- **${s.studentId?.name || 'Anonymous'}:** "${s.content}"\n`;
+      });
+      report += `\n`;
+    }
+
+    if (communityChallenges.length > 0) {
+      report += `#### 🏆 Suggested Community Challenges:\n`;
+      communityChallenges.forEach(s => {
+        report += `- **${s.studentId?.name || 'Anonymous'}:** "${s.content}"\n`;
+      });
+      report += `\n`;
+    }
+
+    if (platformImprovements.length > 0) {
+      report += `#### 🛠 Recommended Platform Improvements:\n`;
+      platformImprovements.forEach(s => {
+        report += `- **${s.studentId?.name || 'Anonymous'}:** "${s.content}"\n`;
+      });
+      report += `\n`;
+    }
+
+    if (feedback.length > 0) {
+      report += `#### 💬 General Advisory Feedback:\n`;
+      feedback.forEach(s => {
+        report += `- **${s.studentId?.name || 'Anonymous'}:** "${s.content}"\n`;
+      });
+      report += `\n`;
+    }
+
+    report += `#### 💡 Recommended Next Action Items for Admins:\n`;
+    report += `1. Review the proposed weekly quest templates above and integrate them into the upcoming cycle.\n`;
+    report += `2. Assess feasibility of suggested platform enhancements.\n`;
+    report += `3. Schedule a cohort-wide sync if any critical general feedback requires immediate resolution.`;
+
+    res.json({ insights: report });
+  } catch (err) {
+    console.error("Local Insights generation failed:", err);
+    res.status(500).json({ error: "Failed to generate local insights: " + err.message });
+  }
 });
 
 function last24Hours(now) {

@@ -514,3 +514,406 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* --- Student Council Layout & Styling --------------------------------- */
+.council-member-layout {
+  border: 4px solid gold;
+  box-shadow: 0 0 20px rgba(255, 215, 0, 0.3);
+  border-radius: 12px;
+}
+
+.council-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.council-hall, .council-advisory, .council-eligibility, .nominees-campaigns {
+  padding: 1.5rem;
+  border-radius: 12px;
+  background: var(--panel-bg, #ffffff);
+  border: 1px solid var(--border, #e2e8f0);
+}
+
+.elected-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.25rem;
+  margin-top: 1.25rem;
+}
+
+.elected-card {
+  position: relative;
+  padding: 1.25rem;
+  border-radius: 10px;
+  border: 2px solid gold;
+  background: linear-gradient(135deg, #fffbeb 0%, #fff 100%);
+  box-shadow: 0 4px 12px rgba(251, 191, 36, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.elected-card.elected-me {
+  background: linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%);
+}
+
+.elected-badge {
+  align-self: flex-start;
+  background: #fbbf24;
+  color: #78350f;
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.elected-stats {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.85rem;
+  color: #4b5563;
+  margin-top: 4px;
+}
+
+.elected-card .statement {
+  font-style: italic;
+  color: #374151;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  margin-top: 8px;
+}
+
+.certificate-btn {
+  margin-top: auto;
+  font-size: 0.85rem;
+  padding: 8px 12px;
+  background: #b45309;
+}
+
+/* Campaign and Nominees */
+.nominees-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.25rem;
+  margin-top: 1rem;
+}
+
+.campaign-card {
+  padding: 1.25rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.campaign-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  text-align: center;
+  background: #f8fafc;
+  padding: 8px;
+  border-radius: 6px;
+}
+
+.metric-box {
+  display: flex;
+  flex-direction: column;
+}
+
+.metric-box span {
+  font-size: 0.7rem;
+  color: #64748b;
+}
+
+.metric-box strong {
+  font-size: 1rem;
+  color: var(--primary);
+}
+
+.personal-statement {
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.personal-statement p {
+  font-style: italic;
+  margin: 4px 0 0;
+}
+
+/* Checklist and Nom form */
+.checklist-nomination-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+@media (max-width: 768px) {
+  .checklist-nomination-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.checklist {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.checklist li {
+  font-size: 0.9rem;
+}
+
+.elig-badge {
+  background: #dcfce7;
+  color: #15803d;
+  font-weight: bold;
+  padding: 8px;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.nomination-success-card {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  padding: 1rem;
+  border-radius: 8px;
+  color: #166534;
+}
+
+.campaign-card-preview {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px dashed #86efac;
+  background: white;
+  border-radius: 6px;
+}
+
+.ai-btn {
+  background: #f5f3ff;
+  color: #6d28d9;
+  border-color: #ddd6fe;
+}
+
+.nomination-msg, .voting-msg {
+  font-size: 0.85rem;
+  font-weight: bold;
+  margin-top: 6px;
+  color: #b45309;
+}
+
+/* Advisory section */
+.advisory-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 1.5rem;
+}
+
+@media (max-width: 768px) {
+  .advisory-grid {
+    grid-template-columns: 1fr;
+  }
+  .advisory-tracks-container {
+    grid-column: span 1 !important;
+  }
+}
+
+.suggestion-form select, .suggestion-form textarea {
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.suggestions-list {
+  max-height: 250px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-right: 4px;
+}
+
+.suggestion-item {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.item-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.item-content {
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.upvote-btn {
+  align-self: flex-start;
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  margin-top: 4px;
+}
+
+.tracks-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.track-card {
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.track-card.selected-track {
+  border-color: #6366f1;
+  background: #f5f3ff;
+}
+
+.track-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.track-item-badge {
+  background: #e2e8f0;
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* Digital Certificate Modal */
+.modal-overlay {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(5px);
+  z-index: 2000;
+}
+
+.certificate-modal {
+  position: relative;
+  background: #fff;
+  width: min(800px, 95vw);
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+}
+
+.certificate-modal .close-btn {
+  position: absolute;
+  top: 10px;
+  right: 15px;
+  border: none;
+  background: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+}
+
+.certificate-border {
+  border: 20px double #c5a059;
+  padding: 2rem;
+  background: #faf8f5;
+  border-radius: 4px;
+}
+
+.certificate-inner {
+  border: 2px solid #c5a059;
+  padding: 2rem;
+  text-align: center;
+  position: relative;
+}
+
+.certificate-header h1 {
+  font-family: 'Georgia', serif;
+  font-size: 2rem;
+  color: #8c6239;
+  margin: 10px 0 0;
+  letter-spacing: 2px;
+}
+
+.certificate-header h2 {
+  font-family: 'Helvetica Neue', sans-serif;
+  font-size: 1rem;
+  color: #333;
+  margin: 5px 0 25px;
+  letter-spacing: 4px;
+}
+
+.certificate-body p {
+  font-style: italic;
+  font-size: 1rem;
+  color: #666;
+  margin: 5px 0;
+}
+
+.certificate-body h3 {
+  font-family: 'Brush Script MT', cursive, Georgia, serif;
+  font-size: 2.8rem;
+  color: #222;
+  margin: 10px 0;
+}
+
+.cert-desc {
+  width: 80%;
+  margin: 0 auto !important;
+  font-size: 0.95rem !important;
+  line-height: 1.5;
+}
+
+.cert-desc2 {
+  font-weight: bold;
+  font-size: 0.95rem !important;
+  color: #333 !important;
+}
+
+.certificate-footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 40px;
+  padding: 0 10px;
+}
+
+.sign-line, .date-line {
+  display: block;
+  border-bottom: 1px solid #888;
+  padding-bottom: 5px;
+  margin-bottom: 5px;
+  font-family: 'Brush Script MT', cursive, serif;
+  font-size: 1.2rem;
+  min-width: 150px;
+}
+
+.date-line {
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.gold-seal {
+  font-size: 2rem;
+  color: #c5a059;
+}
