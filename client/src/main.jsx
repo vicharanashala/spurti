@@ -395,18 +395,16 @@ function StreakCard({ streak, student, attendance, onRefreshProfile }) {
     setFreezes(student?.streakFreezesAvailable || 0);
   }, [student?.streakFreezesAvailable]);
 
-  const buyAndUseFreeze = async () => {
-    if (!streak?.streakBrokenAt) return;
+  const buyFreeze = async () => {
     setUsing(true);
     setError(null);
     try {
-      const res = await fetch(`${API}/streak/freeze/use`, {
+      const res = await fetch(`${API}/streak-freeze/buy`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionLabel: streak.streakBrokenAt })
+        headers: { 'Content-Type': 'application/json' }
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to use freeze');
+      if (!res.ok) throw new Error(data.error || 'Failed to buy freeze');
       setFreezes(data.streakFreezesAvailable);
       if (onRefreshProfile) onRefreshProfile();
     } catch (err) {
@@ -442,9 +440,8 @@ function StreakCard({ streak, student, attendance, onRefreshProfile }) {
 
   const { currentStreak, longestStreak, streakBrokenAt, isActive } = streak;
 
-  const hasMissed = !isActive && streakBrokenAt;
   const hasSp = (student?.totalSp || 0) >= 20;
-  const isEligible = hasMissed && attendancePercentage > 85 && freezes > 0 && hasSp;
+  const canBuy = freezes < 3 && attendancePercentage >= 85 && hasSp;
 
   return (
     <div className={`pulse-card streak-card ${isActive ? 'streak-active' : ''}`}>
@@ -480,33 +477,31 @@ function StreakCard({ streak, student, attendance, onRefreshProfile }) {
       <div className="streak-freeze-action">
         <button 
           className="streak-freeze-buy" 
-          onClick={buyAndUseFreeze} 
-          disabled={using || !isEligible}
+          onClick={buyFreeze} 
+          disabled={using || !canBuy}
           title={
-            !hasMissed 
-              ? 'No missed sessions to protect.' 
-              : attendancePercentage <= 85 
-                ? 'Requires >85% attendance to purchase a streak freeze.' 
-                : freezes <= 0 
-                  ? '0 streak freezes available to spend.' 
-                  : !hasSp 
-                    ? 'Not enough SP to buy a streak freeze (costs 20 SP).' 
-                    : ''
+            freezes >= 3 
+              ? 'You can hold a maximum of 3 streak freezes.' 
+              : attendancePercentage < 85 
+                ? 'Requires >=85% attendance to purchase a streak freeze.' 
+                : !hasSp 
+                  ? 'Not enough SP to buy a streak freeze (costs 20 SP).' 
+                  : ''
           }
         >
           {using ? 'Buying...' : 'Buy Freeze (20 SP)'}
         </button>
-        {hasMissed && attendancePercentage <= 85 && (
+        {attendancePercentage < 85 && (
           <span className="streak-freeze-error" style={{ fontSize: '11px', display: 'block', marginTop: '4px' }}>
-            Requires &gt;85% attendance (current: {attendancePercentage.toFixed(1)}%)
+            Requires &gt;=85% attendance (current: {attendancePercentage.toFixed(1)}%)
           </span>
         )}
-        {hasMissed && freezes === 0 && (
-          <span className="streak-freeze-error" style={{ fontSize: '11px', display: 'block', marginTop: '4px', color: '#dc2626' }}>
-            No streak freezes available (0 remaining)
+        {freezes >= 3 && (
+          <span className="streak-freeze-error" style={{ fontSize: '11px', display: 'block', marginTop: '4px' }}>
+            Maximum 3 freezes allowed
           </span>
         )}
-        {hasMissed && freezes > 0 && !hasSp && (
+        {freezes < 3 && !hasSp && (
           <span className="streak-freeze-error" style={{ fontSize: '11px', display: 'block', marginTop: '4px', color: '#dc2626' }}>
             Not enough SP (costs 20 SP)
           </span>
@@ -1110,8 +1105,13 @@ function NotificationBell({ onSettings, onRefreshProfile, freezes }) {
                         disabled={using}
                         style={{ fontSize: '10px', padding: '4px 8px', marginTop: '4px', alignSelf: 'flex-start' }}
                       >
-                        {using ? 'Buying...' : 'Buy Freeze (20 SP)'}
+                        {using ? 'Using...' : 'Use Streak Freeze'}
                       </button>
+                    )}
+                    {n.title === 'Protect your streak!' && !n.read && freezes === 0 && (
+                      <span style={{ fontSize: '10px', color: '#dc2626', marginTop: '4px', fontStyle: 'italic' }}>
+                        Buy a streak freeze from your dashboard to protect this session.
+                      </span>
                     )}
                   </div>
                 );

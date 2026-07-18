@@ -529,10 +529,6 @@ api.post('/streak/freeze/use', async (req, res) => {
     return res.status(400).json({ error: 'No streak freezes available' });
   }
 
-  if (student.totalSp < STREAK_FREEZE_COST_SP) {
-    return res.status(400).json({ error: 'Not enough SP to buy a streak freeze' });
-  }
-
   if ((student.streakProtectedSessions || []).includes(sessionLabel)) {
     return res.status(400).json({ error: 'Session is already protected' });
   }
@@ -543,18 +539,17 @@ api.post('/streak/freeze/use', async (req, res) => {
   const attendancePercentage = totalAttendance > 0 ? (qualifiedCount / totalAttendance) * 100 : 100;
 
   if (attendancePercentage <= 85) {
-    return res.status(400).json({ error: 'Requires >85% attendance to purchase a streak freeze' });
+    return res.status(400).json({ error: 'Requires >85% attendance to use a streak freeze' });
   }
 
   const updatedStudent = await Student.findOneAndUpdate(
     {
       email,
       streakFreezesAvailable: { $gt: 0 },
-      totalSp: { $gte: STREAK_FREEZE_COST_SP },
       streakProtectedSessions: { $ne: sessionLabel }
     },
     {
-      $inc: { streakFreezesAvailable: -1, totalSp: -STREAK_FREEZE_COST_SP },
+      $inc: { streakFreezesAvailable: -1 },
       $addToSet: { streakProtectedSessions: sessionLabel },
       $set: { lastNotifiedStreakBreak: sessionLabel }
     },
@@ -570,7 +565,7 @@ api.post('/streak/freeze/use', async (req, res) => {
     'streakFreeze',
     '',
     new Date(),
-    -STREAK_FREEZE_COST_SP,
+    0,
     `Used a streak freeze to protect session ${sessionLabel}`,
     updatedStudent.totalSp
   ).catch(() => {});
