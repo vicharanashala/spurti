@@ -10,7 +10,6 @@ yarn-debug.log*
 yarn-error.log*
 
 # raw uploaded session data (not source)
-data/uploads/
 
 # editor backups
 *.bak
@@ -22,3 +21,6 @@ pipeline/.env
 # runtime log + local DB backups (not for the repo)
 server.log
 sp-runs/
+
+# student data — LOCAL ONLY, never commit (untracked 2026-07-14)
+data/
