@@ -279,10 +279,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'],['pca','PCA Exercise']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'pca' && <PCAInteractive />}
     </main>
   );
 }
@@ -433,12 +434,20 @@ function Tabs({ tab, setTab, tabs }) {
 }
 
 function SpBank({ transactions }) {
+  const sortedTransactions = useMemo(() => {//sorting the items to ensure that user see the score from current date to previous dates.
+  return [...transactions].sort((a, b) => {
+    const dayA = new Date(a.dateTime).toDateString();
+    const dayB = new Date(b.dateTime).toDateString();
+    if (dayA === dayB) return 0; // Preserve backend order within the same day
+    return new Date(dayB) - new Date(dayA);
+  });
+}, [transactions]);
   return (
     <section className="panel">
       <h2>SP Bank Statement</h2>
       <div className="bank">
         <div className="bank-header"><span>Date & time</span><span>Credit</span><span>Debit</span><span>Balance</span><span>Reason</span></div>
-        {transactions.map(tx => (
+        {sortedTransactions.map(tx => (
           <div className="bank-row" key={tx._id}>
             <span>{new Date(tx.dateTime).toLocaleString()}</span>
             <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
@@ -501,6 +510,120 @@ function Leaderboard({ rows }) {
         <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>SP</th></tr></thead>
         <tbody>{rows.map(row => <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}><td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.totalSp}</td></tr>)}</tbody>
       </table>
+    </section>
+  );
+}
+
+const PCA_SEED_DATA = [
+  { id: 'A', x: 70, y: 65 },
+  { id: 'B', x: 85, y: 90 },
+  { id: 'C', x: 40, y: 35 },
+  { id: 'D', x: 95, y: 88 },
+  { id: 'E', x: 55, y: 60 },
+  { id: 'F', x: 30, y: 20 },
+  { id: 'G', x: 78, y: 82 },
+  { id: 'H', x: 60, y: 45 }
+];
+
+function computePCA2D(points) {
+  const n = points.length;
+  const meanX = points.reduce((s, p) => s + p.x, 0) / n;
+  const meanY = points.reduce((s, p) => s + p.y, 0) / n;
+  const centered = points.map(p => ({ id: p.id, x: p.x - meanX, y: p.y - meanY }));
+
+  const cxx = centered.reduce((s, p) => s + p.x * p.x, 0) / (n - 1);
+  const cyy = centered.reduce((s, p) => s + p.y * p.y, 0) / (n - 1);
+  const cxy = centered.reduce((s, p) => s + p.x * p.y, 0) / (n - 1);
+
+  const trace = cxx + cyy;
+  const det = cxx * cyy - cxy * cxy;
+  const disc = Math.sqrt(Math.max((trace / 2) ** 2 - det, 0));
+  const lambda1 = trace / 2 + disc;
+  const lambda2 = trace / 2 - disc;
+
+  let vx = lambda1 - cyy, vy = cxy;
+  const vnorm = Math.hypot(vx, vy) || 1;
+  vx /= vnorm; vy /= vnorm;
+
+  const projected = centered.map(p => ({ id: p.id, score: p.x * vx + p.y * vy }));
+
+  return { meanX, meanY, cxx, cyy, cxy, lambda1, lambda2, vx, vy, projected, centered };
+}
+
+function PCAInteractive() {
+  const [points, setPoints] = useState(PCA_SEED_DATA);
+
+  const updatePoint = (id, field, value) => {
+    const num = Number(value);
+    setPoints(prev => prev.map(p => p.id === id ? { ...p, [field]: Number.isFinite(num) ? num : 0 } : p));
+  };
+
+  const pca = useMemo(() => computePCA2D(points), [points]);
+  const varianceExplained = pca.lambda1 / (pca.lambda1 + pca.lambda2 || 1);
+
+  const WIDTH = 380, HEIGHT = 380, PAD = 40;
+  const xs = points.map(p => p.x), ys = points.map(p => p.y);
+  const xMin = Math.min(...xs) - 10, xMax = Math.max(...xs) + 10;
+  const yMin = Math.min(...ys) - 10, yMax = Math.max(...ys) + 10;
+  const scaleX = v => PAD + ((v - xMin) / (xMax - xMin || 1)) * (WIDTH - 2 * PAD);
+  const scaleY = v => HEIGHT - PAD - ((v - yMin) / (yMax - yMin || 1)) * (HEIGHT - 2 * PAD);
+
+  return (
+    <section className="panel">
+      <h2>Try it yourself: edit the numbers, watch PCA respond</h2>
+      <p>
+        Each row is one student's two session-attendance percentages. Change any number and everything below —
+        the mean, the covariance, the best-fit direction, and the plot — updates live.
+      </p>
+
+      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        <table className="table" style={{ minWidth: 220 }}>
+          <thead><tr><th>Student</th><th>Session 1 %</th><th>Session 2 %</th></tr></thead>
+          <tbody>
+            {points.map(p => (
+              <tr key={p.id}>
+                <td>{p.id}</td>
+                <td>
+                  <input type="number" value={p.x} min={0} max={100}
+                    onChange={e => updatePoint(p.id, 'x', e.target.value)}
+                    style={{ width: 60 }} />
+                </td>
+                <td>
+                  <input type="number" value={p.y} min={0} max={100}
+                    onChange={e => updatePoint(p.id, 'y', e.target.value)}
+                    style={{ width: 60 }} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <svg width={WIDTH} height={HEIGHT} style={{ border: '1px solid #ddd', background: '#fafafa', flexShrink: 0 }}>
+          {points.map(p => (
+            <circle key={p.id} cx={scaleX(p.x)} cy={scaleY(p.y)} r={5} fill="#4f46e5" />
+          ))}
+          <line
+            x1={scaleX(pca.meanX - pca.vx * 60)} y1={scaleY(pca.meanY - pca.vy * 60)}
+            x2={scaleX(pca.meanX + pca.vx * 60)} y2={scaleY(pca.meanY + pca.vy * 60)}
+            stroke="#16a34a" strokeWidth={2.5} strokeDasharray="6 4"
+          />
+          <circle cx={scaleX(pca.meanX)} cy={scaleY(pca.meanY)} r={4} fill="#dc2626" />
+        </svg>
+
+        <div className="pulse-card" style={{ minWidth: 220 }}>
+          <span>Live PCA result</span>
+          <div className="compare-list">
+            <b>Mean: ({pca.meanX.toFixed(1)}, {pca.meanY.toFixed(1)})</b>
+            <b>Cov(x,y): {pca.cxy.toFixed(1)}</b>
+            <b>Variance explained by PC1: {(varianceExplained * 100).toFixed(1)}%</b>
+          </div>
+          <p style={{ fontSize: 13, color: '#6b7280', marginTop: 8 }}>
+            The dashed green line is the actual best-fit direction (PC1), computed fresh from your numbers.
+            Try making Session 1 and Session 2 track each other closely (both high or both low per student) —
+            watch variance explained climb toward 100%. Then try making them unrelated — watch it drop toward 50%.
+          </p>
+        </div>
+      </div>
     </section>
   );
 }
