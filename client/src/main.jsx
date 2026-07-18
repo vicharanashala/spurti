@@ -1,6 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import { EntryPill } from './components/replay/EntryPill.tsx';
+import { WeeklyReplayModal } from './components/replay/WeeklyReplayModal.tsx';
+import { FinalJourneyModal } from './components/replay/FinalJourneyModal.tsx';
+import { ShareCard } from './components/replay/ShareCard.tsx';
+import { isFinalJourneyUnlocked, buildReplayHistory } from './components/replay/replayEngine';
+import './components/replay/replay.css';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -255,11 +262,13 @@ function SearchModal({ onClose, onStudent }) {
 
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
+  const [weeklyOpen, setWeeklyOpen] = useState(false);
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
   return (
     <main className="page compact">
+      <ReplaySection profile={profile} />
       <header className="topbar">
         {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
         <div>
@@ -270,10 +279,33 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['replays','Replays']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'replays' && (
+        <section className="panel">
+          <h3 style={{ margin: '12px 0 8px' }}>📼 Replay History</h3>
+          <p style={{ margin: '0 0 12px', color: '#64748b', fontSize: 12 }}>Past weekly recaps synthesized from your activity data. Click any to re-watch.</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
+            {buildReplayHistory(profile, 6).map((w, i) => (
+              <button
+                key={i}
+                type="button"
+                className="replay-history-card"
+                onClick={() => { setWeeklyOpen(true); }}
+                style={{ textAlign: 'left', padding: 10, border: '1px solid #d9e1ec', borderRadius: 10, background: '#fff', cursor: 'pointer' }}
+              >
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#7C3AED' }}>Week of</div>
+                <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 6 }}>{w.weekStartIso}</div>
+                <div style={{ fontSize: 11, color: '#475569' }}>
+                  {w.sessionsAttended} sessions · {w.pollsAnswered} polls · +{w.spEarned} SP
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
     </main>
   );
 }
@@ -837,5 +869,37 @@ function SurveyModal({ survey, student, onDone }) {
   );
 }
 
+function ReplaySection({ profile }) {
+  const [weeklyOpen, setWeeklyOpen] = useState(false);
+  const [finalOpen, setFinalOpen] = useState(false);
+  const [share, setShare] = useState(null);
+  const [unlocked, setUnlocked] = useState(false);
+  useEffect(() => {
+    setUnlocked(isFinalJourneyUnlocked(profile || {}));
+  }, [profile]);
+  if (!profile || !profile.student) return null;
+  return (
+    <>
+      <div className="entry-pill-row">
+        <EntryPill kind="weekly" onClick={() => setWeeklyOpen(true)} />
+        {unlocked && (
+          <span style={{ display: 'inline-block', marginLeft: 10 }}>
+            <EntryPill kind="final" onClick={() => setFinalOpen(true)} />
+          </span>
+        )}
+      </div>
+      <WeeklyReplayModal open={weeklyOpen} onClose={() => setWeeklyOpen(false)} profile={profile} onOpenShare={() => setShare({ kind: 'weekly' })} />
+      <FinalJourneyModal open={finalOpen} onClose={() => setFinalOpen(false)} profile={profile} studentName={profile.student.name} onOpenShare={() => setShare({ kind: 'final' })} />
+      {share && (
+        <ShareCard
+          open={true}
+          kind={share.kind}
+          profile={profile}
+          onClose={() => setShare(null)}
+        />
+      )}
+    </>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);
