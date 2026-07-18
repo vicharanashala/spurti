@@ -136,6 +136,64 @@ scoring — the `pipeline/` rubric is authoritative. The old Zoom ±5 ingest
 - `POST /api/admin/chat-sp-reviews/:id/accept` — award SP
 - `POST /api/admin/chat-sp-reviews/:id/reject` — reject
 
+## Engagement Classification (Chunks 1–7, 2026-07-15)
+
+Classifies students into 4 engagement bands based on a rolling window of sessions.
+
+### Files
+- `server/engagement/config.js` — rolling window size (N=3), band thresholds, 4 band labels
+- `server/engagement/fetchData.js` — fetches attendance + SP transactions, splits into current/previous windows
+- `server/engagement/classifyBand.js` — pure function: `classifyBand(current, previous)` → `{ band, reason, stats }`
+- `server/routes/engagement.js` — Express router for the single-student endpoint
+
+### Bands
+| Band | Criteria | Description |
+|------|----------|-------------|
+| **Excellent** | avg attendance ≥90%, avg SP ≥8/session | High attendance, strong SP gain |
+| **Active** | avg attendance ≥75%, avg SP ≥3/session | Consistent attendance, moderate SP |
+| **Slowing Down** | avg attendance <75% OR declining trend | Dropping off, risk of falling behind |
+| **Recovery** | prior window was Slowing Down, now improving | Trend reversal detected |
+
+### Endpoints
+- `GET /api/engagement/:email` — Single student engagement band + window summary
+  - Response: `{ email, name, totalSp, band, reason, stats, windows: { current, previous } }`
+- `GET /api/admin/engagement/report` — All active students grouped by band (admin auth required)
+  - Optional: `?band=Excellent|Active|Slowing Down|Recovery` to filter
+  - Response: `{ summary: { Excellent: { count }, ... }, total, groups }`
+  - Auth headers: `x-admin-email: dled@iitrpr.ac.in`, `x-admin-token: vled-local-admin`
+
+## Journey Tracker (Chunks 1–9, 2026-07-16)
+
+Tracks student progress across three time windows with admin-configurable targets.
+
+### Files
+- `server/models/JourneyTarget.js` — Mongoose model for DB-stored target configs
+- `server/journey/targets.js` — defaults + get/upsert helpers (fallback to defaults if no DB entry)
+- `server/journey/dateRange.js` — resolves `weekly|monthly|tenure` to `{ start, end, label }`
+- `server/journey/computeJourney.js` — fetches attendance+polls within range, computes overall %, determines checkpoints
+- `server/routes/journey.js` — Express router for the student-facing endpoint
+- `client/src/components/journey/JourneyTracker.jsx` — student-facing route with checkpoint dots + metric bars
+- `client/src/components/journey/AdminJourneyTargets.jsx` — admin form to edit targets
+
+### Default Targets
+| Window | Checkpoints | Att Target | Poll Target | Weight |
+|--------|-------------|-----------|-------------|--------|
+| Weekly | 5 | 80% | 75% | 50/50 |
+| Monthly | 4 | 85% | 80% | 50/50 |
+| Tenure | 8 | 75% | 70% | 50/50 |
+
+### Progress Calculation
+- `overallPct = attendancePct * (attendanceWeight/100) + pollPct * (pollWeight/100)`
+- Checkpoints reached = `floor(elapsedTimeRatio * checkpointCount)`
+
+### Endpoints
+- `GET /api/journey/:email?window=weekly|monthly|tenure` — Student journey progress
+  - Response: `{ window, range, target, progress, checkpoints, sessions }`
+- `GET /api/admin/journey/targets` — All targets (DB override or default)
+- `PUT /api/admin/journey/targets/:window` — Save custom target (admin auth required)
+  - Auth headers: `x-admin-email: dled@iitrpr.ac.in`, `x-admin-token: vled-local-admin`
+  - Body: `{ label, checkpointCount, attendanceTargetPct, pollTargetPct, attendanceWeight, pollWeight }`
+
 ## Auth — `chatengine_token` cookie passthrough (LIVE since 2026-06-29)
 Spurti lives at `samagama.in/spurti` (same domain as Samagama), so the browser
 already holds the student's **`chatengine_token`** cookie. There is **no login
