@@ -295,7 +295,7 @@ function StudentView({ profile, onBack, onRefreshProfile, onSettings }) {
       <header className="topbar">
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
-          <NotificationBell onSettings={onSettings} onRefreshProfile={onRefreshProfile} freezes={student.streakFreezesAvailable || 0} />
+          <NotificationBell onSettings={onSettings} onRefreshProfile={onRefreshProfile} freezes={student.streakFreezesAvailable || 0} studentEmail={student.email} />
         </div>
         <div>
           <p className="eyebrow">Student Spurti Bank</p>
@@ -401,7 +401,10 @@ function StreakCard({ streak, student, attendance, onRefreshProfile }) {
     try {
       const res = await fetch(`${API}/streak-freeze/buy`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-student-email': student.email
+        }
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to buy freeze');
@@ -1026,14 +1029,14 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
 }
 
 
-function NotificationBell({ onSettings, onRefreshProfile, freezes }) {
+function NotificationBell({ onSettings, onRefreshProfile, freezes, studentEmail }) {
   const [notifications, setNotifications] = useState([]);
   const [open, setOpen] = useState(false);
   const [using, setUsing] = useState(false);
 
   const fetchNotifs = async () => {
     try {
-      const res = await fetch(`${API}/notifications`);
+      const res = await fetch(`${API}/notifications?studentEmail=${encodeURIComponent(studentEmail)}`);
       if (res.ok) setNotifications(await res.json());
     } catch (err) {}
   };
@@ -1043,17 +1046,23 @@ function NotificationBell({ onSettings, onRefreshProfile, freezes }) {
     fetchNotifs();
     const id = setInterval(fetchNotifs, 45000);
     return () => { active = false; clearInterval(id); };
-  }, []);
+  }, [studentEmail]);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
   const markAllRead = async () => {
-    await fetch(`${API}/notifications/read-all`, { method: 'POST' });
+    await fetch(`${API}/notifications/read-all`, {
+      method: 'POST',
+      headers: { 'x-student-email': studentEmail }
+    });
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   };
 
   const markRead = async (id) => {
-    await fetch(`${API}/notifications/${id}/read`, { method: 'POST' });
+    await fetch(`${API}/notifications/${id}/read`, {
+      method: 'POST',
+      headers: { 'x-student-email': studentEmail }
+    });
     setNotifications(prev => prev.map(n => n._id === id ? { ...n, read: true } : n));
   };
 
@@ -1063,11 +1072,17 @@ function NotificationBell({ onSettings, onRefreshProfile, freezes }) {
     try {
       const res = await fetch(`${API}/streak/freeze/use`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-student-email': studentEmail
+        },
         body: JSON.stringify({ sessionLabel })
       });
       if (res.ok) {
-        await fetch(`${API}/notifications/${id}/read`, { method: 'POST' });
+        await fetch(`${API}/notifications/${id}/read`, {
+          method: 'POST',
+          headers: { 'x-student-email': studentEmail }
+        });
         await fetchNotifs();
         if (onRefreshProfile) onRefreshProfile();
       }
