@@ -82,19 +82,24 @@ export async function getAllStudentsSummary() {
  * Append a new transaction and update Student.totalSp atomically.
  * Use this when new data arrives (attendance, chat, poll, activity).
  */
-export async function appendTransaction(email, category, sessionLabel, sessionDatetime, delta, reason, ingestedFrom) {
-  const sessionDt = sessionDatetime instanceof Date ? sessionDatetime : new Date(sessionDatetime);
-
+export async function logTransaction(email, category, sessionLabel, dateTime, delta, reason, balanceAfter) {
+  const dt = dateTime instanceof Date ? dateTime : new Date(dateTime);
   const [txn] = await SPTransaction.create([{
     email: email.toLowerCase(),
     category,
     sessionLabel,
-    sessionDatetime: sessionDt,
-    delta,
+    deltaMode: 'absolute',
+    deltaValue: delta,
+    appliedDelta: delta,
+    balanceAfter,
     reason,
-    recordedAt: new Date(),
-    ingestedFrom
+    dateTime: dt
   }]);
+  return txn;
+}
+
+export async function appendTransaction(email, category, sessionLabel, dateTime, delta, reason, currentTotalSp) {
+  const balanceAfter = (Number(currentTotalSp) || 0) + delta;
 
   // Atomic update of student totalSp
   await Student.updateOne(
@@ -102,7 +107,7 @@ export async function appendTransaction(email, category, sessionLabel, sessionDa
     { $inc: { totalSp: delta } }
   );
 
-  return txn;
+  return await logTransaction(email, category, sessionLabel, dateTime, delta, reason, balanceAfter);
 }
 
 function maskEmail(email) {

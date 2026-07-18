@@ -5,14 +5,19 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
-import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
+import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL, STREAK_FREEZE_COST_SP, SESSION_DATETIME_MAP, SESSION_LABELS } from './config.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import NotificationPreference from './models/NotificationPreference.js';
+import Notification from './models/Notification.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { getOrCreatePreferences, notify } from './services/notifications.js';
+import { computeStreak } from './services/streaks.js';
+import { appendTransaction, logTransaction } from './services/spLedger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -145,12 +150,26 @@ async function getSamagamaUser(chatengineToken) {
 
 async function studentEmailFromRequest(req) {
   const cookies = parseCookies(req.headers.cookie || '');
-  const data = await getSamagamaUser(cookies.chatengine_token);
-  // Samagama's /api/auth/me nests the user as { user: { email, ... } };
-  // fall back to a top-level email in case the shape ever flattens.
-  const email = data?.user?.email || data?.email;
-  if (!email) return null;
-  return normalizeEmail(email);
+  
+  if (cookies.chatengine_token) {
+    const data = await getSamagamaUser(cookies.chatengine_token);
+    const email = data?.user?.email || data?.email;
+    if (email) return normalizeEmail(email);
+  }
+
+  if (cookies.student_email) {
+    return normalizeEmail(cookies.student_email);
+  }
+
+  if (req.headers['x-student-email']) {
+    return normalizeEmail(req.headers['x-student-email']);
+  }
+
+  if (req.query.studentEmail) {
+    return normalizeEmail(req.query.studentEmail);
+  }
+
+  return null;
 }
 
 async function rankFor(email) {
@@ -175,8 +194,140 @@ function excusedPayload(student) {
   };
 }
 
+async function awardSp(student, delta, category, reason, sessionLabel = '', dateTime = new Date()) {
+  const email = student.email.toLowerCase();
+  const updatedStudent = await Student.findOneAndUpdate(
+    { _id: student._id },
+    { $inc: { totalSp: delta } },
+    { new: true }
+  );
+  if (!updatedStudent) {
+    throw new Error('Student not found for SP update');
+  }
+  if (updatedStudent.totalSp > (updatedStudent.highestSpEver || 0)) {
+    updatedStudent.highestSpEver = updatedStudent.totalSp;
+    await updatedStudent.save();
+  }
+  const txn = await SPTransaction.create({
+    email,
+    studentId: student._id,
+    category,
+    sessionLabel,
+    deltaMode: 'absolute',
+    deltaValue: delta,
+    appliedDelta: delta,
+    balanceAfter: updatedStudent.totalSp,
+    reason,
+    dateTime
+  });
+  return txn;
+}
+
+export async function checkAndAwardPerfectWeekBonus(student) {
+  const emails = [student.email];
+  if (student.alternateEmail) {
+    emails.push(student.alternateEmail);
+  }
+  const attendanceRecords = await AttendanceRecord.find({
+    email: { $in: emails.map(e => e.toLowerCase()) }
+  }).lean();
+
+  if (!attendanceRecords || attendanceRecords.length === 0) {
+    return {
+      currentStreak: 0,
+      bonusesAwarded: 0,
+      newlyAwardedCount: 0
+    };
+  }
+
+  const sortedSessions = [...attendanceRecords].sort((a, b) => {
+    const idxA = SESSION_LABELS.indexOf(a.sessionLabel);
+    const idxB = SESSION_LABELS.indexOf(b.sessionLabel);
+    if (idxA !== -1 && idxB !== -1) {
+      return idxA - idxB;
+    }
+    if (a.sessionLabel < b.sessionLabel) return -1;
+    if (a.sessionLabel > b.sessionLabel) return 1;
+    return 0;
+  });
+
+  const transactions = await SPTransaction.find({
+    email: { $in: emails.map(e => e.toLowerCase()) }
+  }).sort({ dateTime: 1, createdAt: 1 }).lean();
+
+  const sessionSp = {};
+  const existingBonusLabels = new Set();
+
+  for (const tx of transactions) {
+    const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+    if (isPerfectWeekBonus) {
+      const match = tx.reason.match(/ending (.+)$/);
+      if (match) {
+        existingBonusLabels.add(match[1].trim());
+      }
+      continue;
+    }
+    if (tx.category === 'initial' || tx.category === 'streakFreeze') {
+      continue;
+    }
+    if (tx.reason && tx.reason.includes('Spin Wheel')) {
+      continue;
+    }
+    const label = tx.sessionLabel;
+    if (label) {
+      sessionSp[label] = (sessionSp[label] || 0) + (tx.appliedDelta || 0);
+    }
+  }
+
+  let currentStreak = 0;
+  let newlyAwardedCount = 0;
+  let count = 0;
+
+  for (const session of sortedSessions) {
+    const spEarned = sessionSp[session.sessionLabel] || 0;
+    if (spEarned >= 20) {
+      count++;
+      if (count === 6) {
+        const endingLabel = session.sessionLabel;
+        if (!existingBonusLabels.has(endingLabel)) {
+          let sessionDateTime = new Date();
+          if (SESSION_DATETIME_MAP[endingLabel]) {
+            sessionDateTime = new Date(SESSION_DATETIME_MAP[endingLabel]);
+          }
+
+          await awardSp(
+            student,
+            5,
+            'manual',
+            `Perfect Week Bonus: 6 consecutive sessions ending ${endingLabel}`,
+            '',
+            sessionDateTime
+          );
+          existingBonusLabels.add(endingLabel);
+          newlyAwardedCount++;
+        }
+        count = 0;
+      }
+    } else {
+      count = 0;
+    }
+  }
+
+  currentStreak = count;
+  const totalBonusesCount = existingBonusLabels.size;
+
+  return {
+    currentStreak,
+    bonusesAwarded: totalBonusesCount,
+    newlyAwardedCount
+  };
+}
+
 async function studentPayload(student) {
-  const email = student.email;
+  const streakInfo = await checkAndAwardPerfectWeekBonus(student);
+  const freshStudent = await Student.findById(student._id).lean();
+
+  const email = freshStudent.email;
   const activeFilter = { status: { $ne: 'excused' } };
   const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
@@ -186,6 +337,7 @@ async function studentPayload(student) {
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
+  const streak = computeStreak(attendance, student.streakProtectedSessions || []);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
@@ -193,8 +345,8 @@ async function studentPayload(student) {
   const currentIndex = allStudents.findIndex(s => s.email === email);
   const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
   // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
-  const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
-  const myGroup = leaderboardGroup(student.internshipStartDate);
+  const highestSpEver = Math.max(Number(freshStudent.highestSpEver) || 0, Number(freshStudent.totalSp) || 0);
+  const myGroup = leaderboardGroup(freshStudent.internshipStartDate);
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
   const mapRow = (row, index) => ({
     rank: index + 1,
@@ -206,36 +358,42 @@ async function studentPayload(student) {
   });
   return {
     student: {
-      _id: String(student._id),
-      name: student.name,
-      email: student.email,
-      alternateEmail: student.alternateEmail,
-      internshipStartDate: student.internshipStartDate,
-      internshipEndDate: student.internshipEndDate,
-      status: student.status || 'active',
-      excusedAt: student.excusedAt,
-      excusedReason: student.excusedReason,
-      totalSp: student.totalSp,
+      _id: String(freshStudent._id),
+      name: freshStudent.name,
+      email: freshStudent.email,
+      alternateEmail: freshStudent.alternateEmail,
+      internshipStartDate: freshStudent.internshipStartDate,
+      internshipEndDate: freshStudent.internshipEndDate,
+      status: freshStudent.status || 'active',
+      excusedAt: freshStudent.excusedAt,
+      excusedReason: freshStudent.excusedReason,
+      totalSp: freshStudent.totalSp,
       rank: rankInfo?.rank || null,
       cohortSize: rankInfo?.cohortSize || null,
       highestSpEver,
       level: levelFor(highestSpEver),
-      trophyLeague: leagueBand(student.totalSp),
+      trophyLeague: leagueBand(freshStudent.totalSp),
       legendBadgeUnlocked: legendBadge(highestSpEver),
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
-      surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      surveyCompleted: Boolean(freshStudent.surveyCompleted),
+      poll2Completed: Boolean(freshStudent.poll2Completed),
+      streak: streakInfo.currentStreak,
+      bonusesAwarded: streakInfo.bonusesAwarded,
+      spinsUsed: freshStudent.spinsUsed || 0,
+      milestoneBadges: freshStudent.milestoneBadges || [],
+      streakFreezesAvailable: freshStudent.streakFreezesAvailable || 0
     },
     transactions,
     polls,
     attendance,
+    streak,
     cohort: {
       averageSp,
       top10Cutoff,
       top50Cutoff,
-      pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - student.totalSp + 1),
-      pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
+      pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - freshStudent.totalSp + 1),
+      pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - freshStudent.totalSp + 1) : 0
     },
     leaderboard: leaderboard.map(mapRow),
     groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
@@ -261,13 +419,241 @@ api.get('/config', (_req, res) => res.json({
   poll2: surveyPublic(POLL2)
 }));
 
+async function checkAndNotifyStreakBreak(student, profile) {
+  const streak = profile.streak;
+  if (!streak.isActive && streak.streakBrokenAt &&
+      streak.streakBrokenAt !== student.lastNotifiedStreakBreak &&
+      !(student.streakProtectedSessions || []).includes(streak.streakBrokenAt)) {
+
+    // Assertion: A qualified/attended session is never flagged for freeze use.
+    const lastSessionRec = profile.attendance.find(a => a.sessionLabel === streak.streakBrokenAt);
+    if (lastSessionRec && lastSessionRec.qualified) {
+      throw new Error("Assertion failed: a qualified session is flagged for freeze use.");
+    }
+
+    if (student.streakFreezesAvailable > 0) {
+      await Student.updateOne(
+        { _id: student._id },
+        { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }
+      );
+      notify(student.email, 'streakReminders', {
+        title: 'Protect your streak!',
+        message: `You missed session ${streak.streakBrokenAt} — use a streak freeze to protect your streak?`,
+        sessionLabel: streak.streakBrokenAt
+      }).catch(() => {});
+    } else {
+      const breakClaimed = await Student.findOneAndUpdate(
+        { _id: student._id, lastNotifiedStreakBreak: { $ne: streak.streakBrokenAt } },
+        { $set: { lastNotifiedStreakBreak: streak.streakBrokenAt } }
+      );
+      if (breakClaimed) {
+        notify(student.email, 'streakReminders', {
+          title: 'Streak broken',
+          message: `Your attendance streak ended after session ${streak.streakBrokenAt}. Time for a comeback!`
+        }).catch(() => {});
+      }
+    }
+  }
+}
+
 api.get('/me', async (req, res) => {
   const email = await studentEmailFromRequest(req);
   if (!email) return res.status(401).json({ authenticated: false });
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
+  
+  await getOrCreatePreferences(email);
+
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
-  res.json({ authenticated: true, profile: await studentPayload(student) });
+  
+  const profile = await studentPayload(student);
+  await checkAndNotifyStreakBreak(student, profile);
+
+  res.json({ authenticated: true, profile });
+});
+
+api.post('/streak-freeze/buy', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+
+  const studentCheck = await Student.findOne({ email });
+  if (!studentCheck) return res.status(404).json({ error: 'Student not found' });
+
+  if ((studentCheck.streakFreezesAvailable || 0) >= 3) {
+    return res.status(400).json({ error: 'You can hold a maximum of 3 streak freezes' });
+  }
+
+  const attendance = await AttendanceRecord.find({ email }).lean();
+  const qualified = attendance.filter(a => a.qualified).length;
+  const totalAttendance = attendance.length;
+  const attendancePercentage = totalAttendance > 0 ? (qualified / totalAttendance) * 100 : 100;
+
+  if (attendancePercentage < 85) {
+    return res.status(400).json({ error: `Requires ≥85% attendance (current: ${attendancePercentage.toFixed(1)}%)` });
+  }
+
+  const student = await Student.findOneAndUpdate(
+    { email, totalSp: { $gte: STREAK_FREEZE_COST_SP }, streakFreezesAvailable: { $lt: 3 } },
+    { $inc: { totalSp: -STREAK_FREEZE_COST_SP, streakFreezesAvailable: 1 } },
+    { new: true }
+  );
+
+  if (!student) {
+    return res.status(400).json({ error: 'Not enough SP to buy a streak freeze' });
+  }
+
+  await logTransaction(
+    email,
+    'streakFreeze',
+    '',
+    new Date(),
+    -STREAK_FREEZE_COST_SP,
+    'Purchased a streak freeze',
+    student.totalSp
+  ).catch(() => {});
+
+  res.json({ streakFreezesAvailable: student.streakFreezesAvailable, totalSp: student.totalSp });
+});
+
+api.post('/streak/freeze/use', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+
+  const { sessionLabel } = req.body || {};
+  if (!sessionLabel) return res.status(400).json({ error: 'sessionLabel is required' });
+
+  const student = await Student.findOne({ email });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  if ((student.streakFreezesAvailable || 0) <= 0) {
+    return res.status(400).json({ error: 'No streak freezes available' });
+  }
+
+  if ((student.streakProtectedSessions || []).includes(sessionLabel)) {
+    return res.status(400).json({ error: 'Session is already protected' });
+  }
+
+  const attendance = await AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean();
+  const qualifiedCount = attendance.filter(a => a.qualified).length;
+  const totalAttendance = attendance.length;
+  const attendancePercentage = totalAttendance > 0 ? (qualifiedCount / totalAttendance) * 100 : 100;
+
+  if (attendancePercentage <= 85) {
+    return res.status(400).json({ error: 'Requires >85% attendance to use a streak freeze' });
+  }
+
+  const updatedStudent = await Student.findOneAndUpdate(
+    {
+      email,
+      streakFreezesAvailable: { $gt: 0 },
+      streakProtectedSessions: { $ne: sessionLabel }
+    },
+    {
+      $inc: { streakFreezesAvailable: -1 },
+      $addToSet: { streakProtectedSessions: sessionLabel },
+      $set: { lastNotifiedStreakBreak: sessionLabel }
+    },
+    { new: true }
+  );
+
+  if (!updatedStudent) {
+    return res.status(400).json({ error: 'Failed to use streak freeze' });
+  }
+
+  await logTransaction(
+    email,
+    'streakFreeze',
+    '',
+    new Date(),
+    0,
+    `Used a streak freeze to protect session ${sessionLabel}`,
+    updatedStudent.totalSp
+  ).catch(() => {});
+
+  const streak = computeStreak(attendance, updatedStudent.streakProtectedSessions || []);
+
+  notify(email, 'streakReminders', {
+    title: 'Streak freeze used',
+    message: `A streak freeze protected your streak after session ${sessionLabel}. You have ${updatedStudent.streakFreezesAvailable} left.`
+  }).catch(() => {});
+
+  res.json({
+    success: true,
+    streakFreezesAvailable: updatedStudent.streakFreezesAvailable,
+    totalSp: updatedStudent.totalSp,
+    streak
+  });
+});
+
+api.get('/notifications/preferences', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const prefs = await getOrCreatePreferences(email);
+  res.json(prefs);
+});
+
+api.put('/notifications/preferences', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  
+  const { categories } = req.body;
+  if (!categories || typeof categories !== 'object') return res.status(400).json({ error: 'Invalid payload' });
+
+  const allowedCategories = ['weeklyDigest', 'streakReminders', 'peerActivity', 'announcements'];
+  const updateQuery = { $set: {} };
+
+  for (const cat of allowedCategories) {
+    if (categories[cat]) {
+      if (typeof categories[cat].inApp === 'boolean') {
+        updateQuery.$set[`categories.${cat}.inApp`] = categories[cat].inApp;
+      }
+      if (typeof categories[cat].email === 'boolean') {
+        updateQuery.$set[`categories.${cat}.email`] = categories[cat].email;
+      }
+    }
+  }
+
+  if (Object.keys(updateQuery.$set).length === 0) return res.status(400).json({ error: 'No valid preferences to update' });
+
+  const prefs = await NotificationPreference.findOneAndUpdate(
+    { email },
+    updateQuery,
+    { new: true }
+  );
+  res.json(prefs);
+});
+
+api.get('/notifications', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  
+  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  const filter = { email };
+  if (req.query.before) filter.createdAt = { $lt: new Date(req.query.before) };
+
+  const notifications = await Notification.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
+  res.json(notifications);
+});
+
+api.post('/notifications/:id/read', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const notif = await Notification.findOneAndUpdate(
+    { _id: req.params.id, email },
+    { $set: { read: true } },
+    { new: true }
+  );
+  if (!notif) return res.status(404).json({ error: 'Notification not found' });
+  res.json(notif);
+});
+
+api.post('/notifications/read-all', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  await Notification.updateMany({ email, read: false }, { $set: { read: true } });
+  res.json({ ok: true });
 });
 
 api.get('/search', async (req, res) => {
@@ -304,7 +690,17 @@ api.post('/confirm', async (req, res) => {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
-  res.json(await studentPayload(student));
+  
+  res.cookie('student_email', student.email, { 
+    httpOnly: true, 
+    secure: false, 
+    maxAge: 24 * 60 * 60 * 1000 
+  });
+
+  const profile = await studentPayload(student);
+  await checkAndNotifyStreakBreak(student, profile);
+  
+  res.json(profile);
 });
 
 api.get('/leaderboard', async (req, res) => {
@@ -338,6 +734,459 @@ api.post('/ping', async (req, res) => {
     liveViewers.set(normalized, { name, page, lastSeen: new Date() });
   }
   res.json({ ok: true });
+});
+
+api.post('/spin-wheel', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    let student;
+    if (email) {
+      student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+    } else {
+      const { studentId } = req.body || {};
+      if (studentId) {
+        student = await Student.findById(studentId);
+      }
+    }
+
+    if (!student) return res.status(401).json({ error: 'Unauthorized or student not found' });
+    if (student.status === 'excused') return res.status(403).json({ error: 'Account excused' });
+
+    const streakInfo = await checkAndAwardPerfectWeekBonus(student);
+    const bonusesAwarded = streakInfo.bonusesAwarded;
+    const spinsUsed = student.spinsUsed || 0;
+
+    if (spinsUsed >= bonusesAwarded) {
+      return res.status(400).json({ error: 'No available spins. Complete a Perfect Week to earn a spin!' });
+    }
+
+    const rewards = [
+      { type: 'sp_5', label: '+5 SP', value: 5 },
+      { type: 'sp_10', label: '+10 SP', value: 10 },
+      { type: 'double_sp', label: 'Double SP Day' },
+      { type: 'sp_15', label: '+15 SP', value: 15 },
+      { type: 'sp_20', label: '+20 SP', value: 20 }
+    ];
+
+    const randomIndex = Math.floor(Math.random() * rewards.length);
+    const chosenReward = rewards[randomIndex];
+
+    let delta = 0;
+    let detailText = '';
+
+    if (chosenReward.type === 'double_sp') {
+      const todayStr = getISTDateStr(new Date());
+      const emails = [student.email];
+      if (student.alternateEmail) {
+        emails.push(student.alternateEmail);
+      }
+      const transactions = await SPTransaction.find({
+        email: { $in: emails.map(e => e.toLowerCase()) }
+      }).lean();
+
+      let sum = 0;
+      for (const tx of transactions) {
+        if (tx.category === 'initial' || (tx.reason && tx.reason.includes('Spin Wheel'))) {
+          continue;
+        }
+        if (getISTDateStr(tx.dateTime) === todayStr) {
+          sum += (tx.appliedDelta || 0);
+        }
+      }
+      delta = Math.max(10, sum);
+      detailText = `Double SP Day (+${delta} SP based on today's ${sum} SP earned)`;
+    } else {
+      delta = chosenReward.value;
+      detailText = chosenReward.label;
+    }
+
+    student.spinsUsed = spinsUsed + 1;
+    await student.save();
+
+    await awardSp(
+      student,
+      delta,
+      'manual',
+      `Spin Wheel Reward: ${detailText}`,
+      '',
+      new Date()
+    );
+
+    res.json({
+      success: true,
+      reward: {
+        index: randomIndex,
+        type: chosenReward.type,
+        label: chosenReward.label,
+        detail: detailText,
+        value: delta
+      },
+      spinsUsed: student.spinsUsed,
+      totalSp: student.totalSp + delta
+    });
+  } catch (err) {
+    console.error('spin-wheel error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// --- Motivation Dashboard Endpoints ---
+
+// Deprecated getStudentDailySp and getStudentStreak10 removed as logic is aligned with computeStreak.
+
+api.get('/badges/milestones/:studentId', async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const emails = [student.email];
+    if (student.alternateEmail) {
+      emails.push(student.alternateEmail);
+    }
+    const attendance = await AttendanceRecord.find({
+      email: { $in: emails.map(e => e.toLowerCase()) }
+    }).lean();
+
+    const streakInfo = computeStreak(attendance, student.streakProtectedSessions || []);
+    const currentStreak = streakInfo.currentStreak;
+
+    const badgesToAward = [];
+    if (currentStreak >= 3) badgesToAward.push('Beginner');
+    if (currentStreak >= 7) badgesToAward.push('Consistent');
+    if (currentStreak >= 15) badgesToAward.push('Dedicated');
+    if (currentStreak >= 30) badgesToAward.push('Scholar');
+    if (currentStreak >= 60) badgesToAward.push('Master');
+    if (currentStreak >= 100) badgesToAward.push('Legend');
+
+    let updated = false;
+    if (!student.milestoneBadges) {
+      student.milestoneBadges = [];
+    }
+    for (const b of badgesToAward) {
+      if (!student.milestoneBadges.includes(b)) {
+        student.milestoneBadges.push(b);
+        updated = true;
+      }
+    }
+    if (updated) {
+      await student.save();
+    }
+
+    res.json({
+      studentId: student._id,
+      currentStreak,
+      badges: student.milestoneBadges
+    });
+  } catch (err) {
+    console.error('milestones error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.get('/streak-leaderboard/:studentId', async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    let groupStudents = [];
+    if (student.leaderboardGroup) {
+      groupStudents = await Student.find({
+        status: 'active',
+        leaderboardGroup: student.leaderboardGroup
+      });
+    }
+
+    if (groupStudents.length < 10) {
+      const extraNeeded = 100 - groupStudents.length;
+      const extraStudents = await Student.find({
+        _id: { $nin: groupStudents.map(s => s._id) },
+        status: 'active'
+      }).limit(extraNeeded);
+      groupStudents = groupStudents.concat(extraStudents);
+    }
+
+    if (!groupStudents.some(s => s._id.toString() === student._id.toString())) {
+      groupStudents.push(student);
+    }
+
+    const allEmails = [];
+    for (const s of groupStudents) {
+      if (s.email) allEmails.push(s.email.toLowerCase());
+      if (s.alternateEmail) allEmails.push(s.alternateEmail.toLowerCase());
+    }
+
+    const [allTransactions, allAttendance] = await Promise.all([
+      SPTransaction.find({
+        email: { $in: allEmails }
+      }).sort({ dateTime: 1, createdAt: 1 }).lean(),
+      AttendanceRecord.find({
+        email: { $in: allEmails }
+      }).sort({ sessionLabel: 1 }).lean()
+    ]);
+
+    const txByEmail = {};
+    for (const tx of allTransactions) {
+      if (tx.email) {
+        const emailKey = tx.email.toLowerCase();
+        if (!txByEmail[emailKey]) {
+          txByEmail[emailKey] = [];
+        }
+        txByEmail[emailKey].push(tx);
+      }
+    }
+
+    const attendanceByEmail = {};
+    for (const att of allAttendance) {
+      if (att.email) {
+        const emailKey = att.email.toLowerCase();
+        if (!attendanceByEmail[emailKey]) {
+          attendanceByEmail[emailKey] = [];
+        }
+        attendanceByEmail[emailKey].push(att);
+      }
+    }
+
+    const activityList = [];
+    for (const s of groupStudents) {
+      const emails = [s.email.toLowerCase()];
+      if (s.alternateEmail) {
+        emails.push(s.alternateEmail.toLowerCase());
+      }
+      
+      const studentTx = [];
+      for (const email of emails) {
+        if (txByEmail[email]) {
+          studentTx.push(...txByEmail[email]);
+        }
+      }
+      studentTx.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
+
+      const sAttendance = [];
+      for (const email of emails) {
+        if (attendanceByEmail[email]) {
+          sAttendance.push(...attendanceByEmail[email]);
+        }
+      }
+      sAttendance.sort((a, b) => {
+        if (a.sessionLabel < b.sessionLabel) return -1;
+        if (a.sessionLabel > b.sessionLabel) return 1;
+        return 0;
+      });
+
+      // Check if student has a broken streak and send alert
+      let attStreak = computeStreak(sAttendance, s.streakProtectedSessions || []);
+      if (!attStreak.isActive && attStreak.streakBrokenAt &&
+          s.lastNotifiedStreakBreak !== attStreak.streakBrokenAt &&
+          !(s.streakProtectedSessions || []).includes(attStreak.streakBrokenAt)) {
+
+        // Assertion: A qualified/attended session is never flagged for freeze use.
+        const lastSessionRec = sAttendance.find(a => a.sessionLabel === attStreak.streakBrokenAt);
+        if (lastSessionRec && lastSessionRec.qualified) {
+          throw new Error("Assertion failed: a qualified session is flagged for freeze use.");
+        }
+
+        if (s.streakFreezesAvailable > 0) {
+          await Student.updateOne(
+            { _id: s._id },
+            { $set: { lastNotifiedStreakBreak: attStreak.streakBrokenAt } }
+          );
+          s.lastNotifiedStreakBreak = attStreak.streakBrokenAt;
+          notify(s.email, 'streakReminders', {
+            title: 'Protect your streak!',
+            message: `You missed session ${attStreak.streakBrokenAt} — use a streak freeze to protect your streak?`,
+            sessionLabel: attStreak.streakBrokenAt
+          }).catch(() => {});
+        } else {
+          const breakClaimed = await Student.findOneAndUpdate(
+            { _id: s._id, lastNotifiedStreakBreak: { $ne: attStreak.streakBrokenAt } },
+            { $set: { lastNotifiedStreakBreak: attStreak.streakBrokenAt } },
+            { new: true }
+          );
+          if (breakClaimed) {
+            s.lastNotifiedStreakBreak = attStreak.streakBrokenAt;
+            notify(s.email, 'streakReminders', {
+              title: 'Streak broken',
+              message: `Your attendance streak ended after session ${attStreak.streakBrokenAt}. Time for a comeback!`
+            }).catch(() => {});
+          }
+        }
+      }
+
+      const streak = attStreak.currentStreak;
+      activityList.push({
+        _id: s._id,
+        name: s.name,
+        streak,
+        isSelf: s._id.toString() === student._id.toString()
+      });
+    }
+
+    activityList.sort((a, b) => {
+      if (b.streak !== a.streak) {
+        return b.streak - a.streak;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+    let currentRank = 1;
+    for (let i = 0; i < activityList.length; i++) {
+      if (i > 0 && activityList[i].streak < activityList[i - 1].streak) {
+        currentRank = i + 1;
+      }
+      activityList[i].rank = currentRank;
+    }
+
+    let top10 = activityList.slice(0, 10);
+    const isSelfInTop10 = top10.some(item => item.isSelf);
+    if (!isSelfInTop10) {
+      const selfItem = activityList.find(item => item.isSelf);
+      if (selfItem) {
+        top10.push(selfItem);
+      }
+    }
+
+    res.json(top10);
+  } catch (err) {
+    console.error('streak leaderboard error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+function getISTDateStr(dateInput) {
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return '';
+  // Shift by 5.5 hours to IST
+  const localTime = d.getTime() + 19800000;
+  return new Date(localTime).toISOString().split('T')[0];
+}
+
+api.get('/growth-tree/:studentId', async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const streakInfo = await checkAndAwardPerfectWeekBonus(student);
+
+    const emails = [student.email];
+    if (student.alternateEmail) {
+      emails.push(student.alternateEmail);
+    }
+    const transactions = await SPTransaction.find({
+      email: { $in: emails.map(e => e.toLowerCase()) }
+    }).sort({ dateTime: 1, createdAt: 1 }).lean();
+
+    const dailySp = {};
+    for (const tx of transactions) {
+      const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+      if (isPerfectWeekBonus || tx.category === 'initial') {
+        continue;
+      }
+      const dateStr = getISTDateStr(tx.dateTime);
+      if (dateStr) {
+        dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
+      }
+    }
+
+    const startDateStr = getISTDateStr(student.internshipStartDate);
+    const todayStr = getISTDateStr(new Date());
+
+    if (!startDateStr || !todayStr) {
+      return res.status(400).json({ error: 'Invalid start date or current date' });
+    }
+
+    const start = new Date(startDateStr);
+    const end = new Date(todayStr);
+
+    let successfulDays = 0;
+    let totalDays = 0;
+    let curr = new Date(start);
+    while (curr <= end) {
+      const dateStr = curr.toISOString().split('T')[0];
+      const sp = dailySp[dateStr] || 0;
+      if (sp === 20) {
+        successfulDays++;
+      }
+      totalDays++;
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    res.json({
+      studentId: student._id,
+      successfulDays,
+      totalDays,
+      growthStage: successfulDays,
+      hasFlowers: successfulDays >= 7,
+      hasFruits: successfulDays >= 30,
+      streak: streakInfo.currentStreak,
+      bonusesAwarded: streakInfo.bonusesAwarded,
+      spinsUsed: student.spinsUsed || 0
+    });
+  } catch (err) {
+    console.error('growth-tree error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+api.get('/chain-calendar/:studentId', async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const streakInfo = await checkAndAwardPerfectWeekBonus(student);
+
+    const emails = [student.email];
+    if (student.alternateEmail) {
+      emails.push(student.alternateEmail);
+    }
+    const transactions = await SPTransaction.find({
+      email: { $in: emails.map(e => e.toLowerCase()) }
+    }).sort({ dateTime: 1, createdAt: 1 }).lean();
+
+    const dailySp = {};
+    for (const tx of transactions) {
+      const isPerfectWeekBonus = tx.category === 'manual' && tx.reason && tx.reason.includes('Perfect Week Bonus');
+      if (isPerfectWeekBonus || tx.category === 'initial') {
+        continue;
+      }
+      const dateStr = getISTDateStr(tx.dateTime);
+      if (dateStr) {
+        dailySp[dateStr] = (dailySp[dateStr] || 0) + (tx.appliedDelta || 0);
+      }
+    }
+
+    const startDateStr = getISTDateStr(student.internshipStartDate);
+    const todayStr = getISTDateStr(new Date());
+
+    if (!startDateStr || !todayStr) {
+      return res.status(400).json({ error: 'Invalid start date or current date' });
+    }
+
+    const start = new Date(startDateStr);
+    const end = new Date(todayStr);
+
+    const calendarDays = [];
+    let curr = new Date(start);
+    while (curr <= end) {
+      const dateStr = curr.toISOString().split('T')[0];
+      const spEarned = dailySp[dateStr] || 0;
+      calendarDays.push({
+        date: dateStr,
+        spEarned,
+        success: spEarned === 20
+      });
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    res.json({
+      studentId: student._id,
+      calendarDays,
+      streak: streakInfo.currentStreak,
+      bonusesAwarded: streakInfo.bonusesAwarded
+    });
+  } catch (err) {
+    console.error('chain-calendar error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 // --- Survey triangulation (mandatory perception follow-up) ---------------
@@ -557,7 +1406,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     };
   });
 
-  const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
+  const categoryTotals = ['initial', 'attendance', 'poll', 'manual', 'streakFreeze'].map(category => {
     const rows = activeTransactions.filter(t => t.category === category);
     return {
       category,

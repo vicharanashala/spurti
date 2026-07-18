@@ -21,10 +21,15 @@ const studentSchema = new mongoose.Schema({
   // "I've submitted" button. Drives whether the survey modal still shows.
   surveyCompleted: { type: Boolean, default: false, index: true },
   surveyCompletedAt: { type: Date, default: null },
+  lastNotifiedStreakBreak: { type: String, default: null },
+  streakFreezesAvailable: { type: Number, default: 3 },
+  streakProtectedSessions: { type: [String], default: [] },
   // Second perception pop-up ("poll2") — same mechanism as surveyCompleted, but an
   // independent flag so it never disturbs the first survey's completion state.
   poll2Completed: { type: Boolean, default: false, index: true },
-  poll2CompletedAt: { type: Date, default: null }
+  poll2CompletedAt: { type: Date, default: null },
+  spinsUsed: { type: Number, default: 0 },
+  milestoneBadges: { type: [String], default: [] }
 }, { timestamps: true });
 
 studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });

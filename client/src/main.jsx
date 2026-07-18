@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import MotivationDashboard from './components/MotivationDashboard';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -13,6 +14,20 @@ function App() {
   const [adminAuth, setAdminAuth] = useState(null);
   const [config, setConfig] = useState({ allowStudentSearch: true });
   const [loading, setLoading] = useState(true);
+
+  const refreshProfile = async () => {
+    try {
+      const meRes = await fetch(`${API}/me`);
+      if (meRes.ok) {
+        const data = await meRes.json();
+        if (data.authenticated && data.profile) {
+          setProfile(data.profile);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to refresh profile:', err);
+    }
+  };
 
   useEffect(() => {
     if (!profile?.student) return;
@@ -69,7 +84,12 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView 
+          profile={profile} 
+          onBack={config.allowStudentSearch ? () => setView('landing') : null} 
+          onRefreshProfile={refreshProfile}
+          onSettings={() => setView('notification-settings')}
+        />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -86,6 +106,9 @@ function App() {
         />
       </>
     );
+  }
+  if (view === 'notification-settings' && profile) {
+    return <NotificationSettings onBack={() => setView('student')} />;
   }
   if (view === 'excused' && excused) {
     return <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />;
@@ -262,7 +285,7 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onBack, onRefreshProfile, onSettings }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -270,7 +293,10 @@ function StudentView({ profile, onBack }) {
   return (
     <main className="page compact">
       <header className="topbar">
-        {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
+          <NotificationBell onSettings={onSettings} onRefreshProfile={onRefreshProfile} freezes={student.streakFreezesAvailable || 0} studentEmail={student.email} />
+        </div>
         <div>
           <p className="eyebrow">Student Spurti Bank</p>
           <h1>{student.name}</h1>
@@ -278,11 +304,24 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} onRefreshProfile={onRefreshProfile} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['motivation','Motivation & Rewards']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
-      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'leaderboard' && (
+        <div className="dashboard-row">
+          <div className="dashboard-col main-col">
+            <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />
+          </div>
+        </div>
+      )}
+      {tab === 'motivation' && (
+        <div className="dashboard-row">
+          <div className="dashboard-col main-col" style={{ width: '100%', maxWidth: '1200px', margin: '0 auto' }}>
+            <MotivationDashboard student={student} onRefreshProfile={onRefreshProfile} />
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -347,14 +386,144 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   );
 }
 
-function StudentPulse({ profile, badges, nextActions }) {
-  const { student, cohort, attendance, polls, transactions } = profile;
+function StreakCard({ streak, student, attendance, onRefreshProfile }) {
+  const [freezes, setFreezes] = useState(student?.streakFreezesAvailable || 0);
+  const [using, setUsing] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setFreezes(student?.streakFreezesAvailable || 0);
+  }, [student?.streakFreezesAvailable]);
+
+  const buyFreeze = async () => {
+    setUsing(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API}/streak-freeze/buy`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-student-email': student.email
+        }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to buy freeze');
+      setFreezes(data.streakFreezesAvailable);
+      if (onRefreshProfile) onRefreshProfile();
+    } catch (err) {
+      setError(err.message);
+    }
+    setUsing(false);
+  };
+
+  const qualified = attendance ? attendance.filter(a => a.qualified).length : 0;
+  const totalAttendance = attendance ? attendance.length : 0;
+  const attendancePercentage = totalAttendance > 0 ? (qualified / totalAttendance) * 100 : 100;
+
+  const badgeStyle = freezes === 0 ? { opacity: 0.5, filter: 'grayscale(1)' } : {};
+
+  if (!streak) {
+    return (
+      <div className="pulse-card streak-card">
+        <div className="streak-card-header">
+          <span>Streak & Momentum</span>
+          <span 
+            className={`streak-freeze-badge ${freezes === 0 ? 'disabled' : ''}`}
+            style={badgeStyle}
+          >
+            🛡️ {freezes} streak(s) available
+          </span>
+        </div>
+        <div className="streak-main">
+          <p className="muted">No sessions yet</p>
+        </div>
+      </div>
+    );
+  }
+
+  const { currentStreak, longestStreak, streakBrokenAt, isActive } = streak;
+
+  const hasSp = (student?.totalSp || 0) >= 20;
+  const canBuy = freezes < 3 && attendancePercentage >= 85 && hasSp;
+
+  return (
+    <div className={`pulse-card streak-card ${isActive ? 'streak-active' : ''}`}>
+      <div className="streak-card-header">
+        <span>Streak & Momentum</span>
+        <span 
+          className={`streak-freeze-badge ${freezes === 0 ? 'disabled' : ''}`}
+          style={badgeStyle}
+        >
+          🛡️ {freezes} streak(s) available
+        </span>
+      </div>
+      <div className="streak-main">
+        <strong>{currentStreak}</strong>
+        <div className="compare-list">
+          <b>Personal Best: {longestStreak}</b>
+        </div>
+      </div>
+      
+      {isActive ? (
+        <div className="badge-row">
+          <em className="streak-flame">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path></svg>
+            Active Streak
+          </em>
+        </div>
+      ) : (
+        <p className="muted streak-ended">
+          {streakBrokenAt ? `Streak ended after: ${streakBrokenAt}` : 'No active streak'}
+        </p>
+      )}
+
+      <div className="streak-freeze-action">
+        <button 
+          className="streak-freeze-buy" 
+          onClick={buyFreeze} 
+          disabled={using || !canBuy}
+          title={
+            freezes >= 3 
+              ? 'You can hold a maximum of 3 streak freezes.' 
+              : attendancePercentage < 85 
+                ? 'Requires >=85% attendance to purchase a streak freeze.' 
+                : !hasSp 
+                  ? 'Not enough SP to buy a streak freeze (costs 20 SP).' 
+                  : ''
+          }
+        >
+          {using ? 'Buying...' : 'Buy Freeze (20 SP)'}
+        </button>
+        {attendancePercentage < 85 && (
+          <span className="streak-freeze-error" style={{ fontSize: '11px', display: 'block', marginTop: '4px' }}>
+            Requires &gt;=85% attendance (current: {attendancePercentage.toFixed(1)}%)
+          </span>
+        )}
+        {freezes >= 3 && (
+          <span className="streak-freeze-error" style={{ fontSize: '11px', display: 'block', marginTop: '4px' }}>
+            Maximum 3 freezes allowed
+          </span>
+        )}
+        {freezes < 3 && !hasSp && (
+          <span className="streak-freeze-error" style={{ fontSize: '11px', display: 'block', marginTop: '4px', color: '#dc2626' }}>
+            Not enough SP (costs 20 SP)
+          </span>
+        )}
+        {error && <span className="streak-freeze-error">{error}</span>}
+      </div>
+    </div>
+  );
+}
+
+function StudentPulse({ profile, badges, nextActions, onRefreshProfile }) {
+  const { student, cohort, attendance, polls, transactions, streak } = profile;
   const qualified = attendance.filter(a => a.qualified).length;
   const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
   const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
   return (
     <section className="pulse-grid">
+      <StreakCard streak={streak} student={student} attendance={attendance} onRefreshProfile={onRefreshProfile} />
       <div className="pulse-card progress-card">
         <span>Standing</span>
         <strong>Rank {student.rank}</strong>
@@ -416,6 +585,20 @@ function buildBadges(profile) {
   if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
   if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
   if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
+  
+  if (profile.student.milestoneBadges && Array.isArray(profile.student.milestoneBadges)) {
+    profile.student.milestoneBadges.forEach(badge => {
+      let emoji = '🔥';
+      if (badge === 'Beginner') emoji = '🔥 Beginner';
+      else if (badge === 'Consistent') emoji = '🔥🔥 Consistent';
+      else if (badge === 'Dedicated') emoji = '🔥🔥🔥 Dedicated';
+      else if (badge === 'Scholar') emoji = '🔥🔥🔥🔥 Scholar';
+      else if (badge === 'Master') emoji = '👑 Master';
+      else if (badge === 'Legend') emoji = '💎 Legend';
+      badges.push(emoji);
+    });
+  }
+
   return badges.length ? badges : ['Getting Started'];
 }
 
@@ -773,7 +956,6 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   );
 }
 
-
 function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', completedKey = 'surveyCompleted' }) {
   const [checking, setChecking] = useState(false);
   const [note, setNote] = useState('');
@@ -846,5 +1028,197 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
+
+function NotificationBell({ onSettings, onRefreshProfile, freezes, studentEmail }) {
+  const [notifications, setNotifications] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [using, setUsing] = useState(false);
+
+  const fetchNotifs = async () => {
+    try {
+      const res = await fetch(`${API}/notifications?studentEmail=${encodeURIComponent(studentEmail)}`);
+      if (res.ok) setNotifications(await res.json());
+    } catch (err) {}
+  };
+
+  useEffect(() => {
+    let active = true;
+    fetchNotifs();
+    const id = setInterval(fetchNotifs, 45000);
+    return () => { active = false; clearInterval(id); };
+  }, [studentEmail]);
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  const markAllRead = async () => {
+    await fetch(`${API}/notifications/read-all`, {
+      method: 'POST',
+      headers: { 'x-student-email': studentEmail }
+    });
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
+
+  const markRead = async (id) => {
+    await fetch(`${API}/notifications/${id}/read`, {
+      method: 'POST',
+      headers: { 'x-student-email': studentEmail }
+    });
+    setNotifications(prev => prev.map(n => n._id === id ? { ...n, read: true } : n));
+  };
+
+  const useFreeze = async (e, id, sessionLabel) => {
+    e.stopPropagation();
+    setUsing(true);
+    try {
+      const res = await fetch(`${API}/streak/freeze/use`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-student-email': studentEmail
+        },
+        body: JSON.stringify({ sessionLabel })
+      });
+      if (res.ok) {
+        await fetch(`${API}/notifications/${id}/read`, {
+          method: 'POST',
+          headers: { 'x-student-email': studentEmail }
+        });
+        await fetchNotifs();
+        if (onRefreshProfile) onRefreshProfile();
+      }
+    } catch (err) {
+      console.error('Use freeze notification failed:', err);
+    }
+    setUsing(false);
+  };
+
+  return (
+    <div className="notification-bell-wrapper">
+      <button className="secondary notification-bell-button" onClick={() => setOpen(!open)}>
+        🔔 {unreadCount > 0 && <span className="notification-bell-badge">{unreadCount}</span>}
+      </button>
+      {open && (
+        <div className="notification-dropdown">
+          <div className="notification-dropdown-header">
+            <h3 className="notification-dropdown-title">Notifications</h3>
+            <button className="secondary notification-settings-button" onClick={() => { setOpen(false); onSettings(); }}>⚙️ Settings</button>
+          </div>
+          {notifications.length === 0 ? <p className="muted notification-empty-state">No notifications</p> : (
+            <div className="notification-item-container">
+              {notifications.map(n => {
+                const showUseBtn = n.title === 'Protect your streak!' && n.sessionLabel && freezes > 0 && !n.read;
+                return (
+                  <div key={n._id} onClick={() => markRead(n._id)} className={`notification-item ${n.read ? '' : 'unread'}`} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+                    <div className="notification-item-content">
+                      <p className="notification-item-title">{n.title}</p>
+                      <p className="notification-item-message">{n.message}</p>
+                    </div>
+                    {showUseBtn && (
+                      <button 
+                        className="primary notification-use-freeze-btn" 
+                        onClick={(e) => useFreeze(e, n._id, n.sessionLabel)}
+                        disabled={using}
+                        style={{ fontSize: '10px', padding: '4px 8px', marginTop: '4px', alignSelf: 'flex-start' }}
+                      >
+                        {using ? 'Using...' : 'Use Streak Freeze'}
+                      </button>
+                    )}
+                    {n.title === 'Protect your streak!' && !n.read && freezes === 0 && (
+                      <span style={{ fontSize: '10px', color: '#dc2626', marginTop: '4px', fontStyle: 'italic' }}>
+                        Buy a streak freeze from your dashboard to protect this session.
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {unreadCount > 0 && <button className="primary notification-mark-all" onClick={markAllRead}>Mark all as read</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificationSettings({ onBack }) {
+  const [prefs, setPrefs] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/notifications/preferences`)
+      .then(r => r.json())
+      .then(setPrefs)
+      .catch(() => {});
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    await fetch(`${API}/notifications/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categories: prefs.categories })
+    });
+    setSaving(false);
+    onBack();
+  };
+
+  const toggle = (cat, type) => {
+    setPrefs(p => ({
+      ...p,
+      categories: {
+        ...p.categories,
+        [cat]: { ...p.categories[cat], [type]: !p.categories[cat][type] }
+      }
+    }));
+  };
+
+  if (!prefs || !prefs.categories) return <main className="page"><section className="panel"><p>Loading preferences...</p></section></main>;
+
+  const labels = {
+    weeklyDigest: 'Weekly Digest',
+    streakReminders: 'Streak Reminders',
+    peerActivity: 'Peer Activity',
+    announcements: 'Announcements'
+  };
+
+  return (
+    <main className="page compact">
+      <section className="panel">
+        <div className="notification-settings-header">
+          <div>
+            <p className="eyebrow">Settings</p>
+            <h1>Notification Preferences</h1>
+          </div>
+          <button className="secondary" onClick={onBack}>Back</button>
+        </div>
+        <p className="lead notification-settings-lead">Control how you want to be notified for each type of activity.</p>
+        
+        <div className="notification-settings-list">
+          {Object.keys(labels).map(cat => (
+            <div key={cat} className="notification-settings-row">
+              <strong className="notification-settings-label">{labels[cat]}</strong>
+              <div className="notification-settings-toggles">
+                <label className="notification-settings-toggle">
+                  <input type="checkbox" checked={prefs.categories[cat]?.inApp ?? true} onChange={() => toggle(cat, 'inApp')} />
+                  In-App
+                </label>
+                <label className="notification-settings-toggle">
+                  <input type="checkbox" checked={prefs.categories[cat]?.email ?? false} onChange={() => toggle(cat, 'email')} />
+                  Email
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+        
+        <div className="notification-settings-actions">
+          <button className="primary" onClick={save} disabled={saving}>
+            {saving ? 'Saving...' : 'Save Preferences'}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);
