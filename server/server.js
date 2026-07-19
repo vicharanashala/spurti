@@ -670,8 +670,9 @@ mongoose.connect(MONGO_URI).then(() => {
   setInterval(() => runSettleChallengesJob().catch(e => console.error('[Job:settle-challenges]', e.message)), 5 * 60 * 1000).unref?.();
   console.log('P2P Challenge background jobs scheduled.');
 }).catch((error) => {
-  console.error(error);
-  process.exit(1);
+  console.warn('⚠️ MongoDB connection failed. Starting server in Offline/Demo mode on port:', PORT);
+  console.warn(error.message);
+  app.listen(PORT, () => console.log(`Spurti app running in DEMO mode at http://localhost:${PORT}/`));
 });
 
 
