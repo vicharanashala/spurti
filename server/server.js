@@ -13,6 +13,8 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import challengeRouter from './routes/challenges.js';
+import { runSettleChallengesJob } from './jobs/settle-challenges.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -644,6 +646,10 @@ function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
 
+// ── P2P Challenge routes ────────────────────────────────────────────────────
+// Mounted on both path prefixes so Samagama-proxied requests work identically.
+api.use('/challenges', challengeRouter);
+
 app.use('/api', api);
 app.use('/spurti/api', api);
 
@@ -658,6 +664,11 @@ if (fs.existsSync(clientDist)) {
 
 mongoose.connect(MONGO_URI).then(() => {
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
+
+  // ── P2P Challenge background jobs ──────────────────────────────────────────
+  // runSettleChallengesJob → every 5 minutes (handles expiry and settlements)
+  setInterval(() => runSettleChallengesJob().catch(e => console.error('[Job:settle-challenges]', e.message)), 5 * 60 * 1000).unref?.();
+  console.log('P2P Challenge background jobs scheduled.');
 }).catch((error) => {
   console.error(error);
   process.exit(1);

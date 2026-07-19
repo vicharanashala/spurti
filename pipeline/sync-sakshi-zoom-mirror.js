@@ -20,8 +20,9 @@
  * Scheduled daily at 19:00 IST (13:30 UTC) right after the #zoomupdate refresh
  * — see /etc/cron.d/sakshi-zoom and cron-sakshi-zoom.sh.
  */
+const path = require('path');
 const { MongoClient } = require('mongodb');
-require('dotenv').config({ path: '/var/samagama/server/.env' });
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
 // Derive host+creds base from MONGO_URI (strip trailing /db?query) so the admin
 // password lives ONLY in .env — never hardcoded. Same idiom as the collab mirror.

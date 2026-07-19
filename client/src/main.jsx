@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import {
+  ActiveChallengesWidget,
+  ChallengeBrowser,
+  ChallengeDetail,
+} from './challenges.jsx';
+import { HowItWorks } from './HowItWorks.jsx';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -65,6 +71,10 @@ function App() {
 
   if (loading) {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
+  }
+  const isExplainer = window.location.pathname.endsWith('/challenge/how-it-works');
+  if (isExplainer) {
+    return <HowItWorks onBack={() => window.location.href = APP_BASE || '/'} />;
   }
   if (view === 'student' && profile) {
     return (
@@ -255,20 +265,77 @@ function SearchModal({ onClose, onStudent }) {
 
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
+  // Challenge sub-navigation: 'widget' | 'browser' | 'detail'
+  const [challengeScreen, setChallengeScreen] = useState('widget');
+  const [viewingChallengeId, setViewingChallengeId] = useState(null);
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const attentionItems = useMemo(() => buildAttentionItems(profile), [profile]);
+
+  const [pendingReceivedCount, setPendingReceivedCount] = useState(0);
+  useEffect(() => {
+    if (!student?._id) return;
+    const fetchPendingCount = async () => {
+      try {
+        const res = await fetch(`${API}/challenges/mine`);
+        if (res.ok) {
+          const json = await res.json();
+          setPendingReceivedCount(json.receivedPending?.length || 0);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    fetchPendingCount();
+    const interval = setInterval(fetchPendingCount, 30000);
+    return () => clearInterval(interval);
+  }, [student?._id]);
+
+  const tabOptions = [
+    ['bank', 'SP Bank'],
+    ['summary', '5-Day Summary'],
+    ['polls', 'Polls'],
+    ['leaderboard', 'Leaderboard'],
+    ['challenges', pendingReceivedCount > 0 ? `Challenge (${pendingReceivedCount})` : 'Challenge']
+  ];
+
   return (
     <main className="page compact">
       <DashboardHeader student={student} />
       <DashboardProgressCards student={student} cohort={profile.cohort} vibeCourse={profile.vibeCourse} />
       <DashboardStatCards profile={profile} badges={badges} />
       <DashboardBottom profile={profile} attentionItems={attentionItems} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank', 'SP Bank'], ['summary', '5-Day Summary'], ['polls', 'Polls'], ['leaderboard', 'Leaderboard']]} />
+      <Tabs tab={tab} setTab={(t) => { setTab(t); setChallengeScreen('widget'); }} tabs={tabOptions} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'summary' && <FiveDaySummary profile={profile} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'challenges' && (
+        <div style={{ marginTop: 16 }}>
+          {/* Sub-screen: detail view for a specific challenge */}
+          {challengeScreen === 'detail' && viewingChallengeId && (
+            <ChallengeDetail
+              challengeId={viewingChallengeId}
+              studentId={String(student._id)}
+              onBack={() => { setViewingChallengeId(null); setChallengeScreen('widget'); }}
+            />
+          )}
+          {/* Sub-screen: new challenge browser */}
+          {challengeScreen === 'browser' && (
+            <ChallengeBrowser
+              studentSp={student.totalSp}
+              onClose={() => setChallengeScreen('widget')}
+            />
+          )}
+          {/* Default sub-screen: active challenges widget */}
+          {challengeScreen === 'widget' && (
+            <ActiveChallengesWidget
+              onViewChallenge={(id) => { setViewingChallengeId(id); setChallengeScreen('detail'); }}
+              onStartChallenge={() => setChallengeScreen('browser')}
+            />
+          )}
+        </div>
+      )}
     </main>
   );
 }
@@ -479,9 +546,9 @@ function ProgressRing({ pct, color, size = 68, stroke = 6, loading = false, empt
 }
 
 const VIBE_RING_COURSES = [
-  { key: 'onboarding',     abbr: 'Onb',  color: 'var(--primary)' },
-  { key: 'aiFundamentals', abbr: 'AI',   color: 'var(--green)'   },
-  { key: 'mernStack',      abbr: 'MERN', color: 'var(--amber)'   }
+  { key: 'onboarding', abbr: 'Onb', color: 'var(--primary)' },
+  { key: 'aiFundamentals', abbr: 'AI', color: 'var(--green)' },
+  { key: 'mernStack', abbr: 'MERN', color: 'var(--amber)' }
 ];
 
 function VibeCourseRingsCard({ vibeCourse }) {
@@ -662,7 +729,12 @@ function SpTrendChart({ transactions }) {
     tx
   }));
 
-  const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  // When there is only one data point, a bare 'M x,y' path is invisible.
+  // Draw a short horizontal segment centred on the single point instead.
+  const linePath = transactions.length === 1
+    ? `M${(pts[0].x - 20).toFixed(1)},${pts[0].y.toFixed(1)} L${(pts[0].x + 20).toFixed(1)},${pts[0].y.toFixed(1)}`
+    : pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+
   const areaPath = [
     `M${pts[0].x.toFixed(1)},${(PAD.top + innerH).toFixed(1)}`,
     ...pts.map(p => `L${p.x.toFixed(1)},${p.y.toFixed(1)}`),
@@ -913,15 +985,15 @@ function sessionSortKey(label = '') {
   // "Day N (DD Mon)" format
   const paren = label.match(/\((\d{1,2})\s+([A-Za-z]+)\)/);
   if (paren) {
-    const MONTHS = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
-    const m = MONTHS[paren[2].slice(0,3).toLowerCase()];
+    const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+    const m = MONTHS[paren[2].slice(0, 3).toLowerCase()];
     return m !== undefined ? m * 100 + Number(paren[1]) : -1;
   }
   // "DD Mon [Morning/Afternoon/Evening]" format
   const lead = label.match(/^(\d{1,2})\s+([A-Za-z]+)/);
   if (lead) {
-    const MONTHS = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
-    const m = MONTHS[lead[2].slice(0,3).toLowerCase()];
+    const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+    const m = MONTHS[lead[2].slice(0, 3).toLowerCase()];
     return m !== undefined ? m * 100 + Number(lead[1]) : -1;
   }
   return -1;
@@ -1252,7 +1324,8 @@ function AdminView({ admin, auth, onBack }) {
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
   const fetchStats = async () => {
-    const r = await fetch(`${API}/admin/stats`, headers);
+    // FIX-2.1: Wrap headers in { headers } — fetch expects RequestInit, not a plain object.
+    const r = await fetch(`${API}/admin/stats`, { headers });
     if (r.ok) setStats(await r.json());
   };
   useEffect(() => {
@@ -1444,7 +1517,8 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   const loadList = async (status) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/admin/students-by-status?status=${status}&limit=200`, headers);
+      // FIX-2.2: Wrap headers in { headers } — fetch expects RequestInit, not a plain object.
+      const res = await fetch(`${API}/admin/students-by-status?status=${status}&limit=200`, { headers });
       if (res.ok) setList(await res.json());
     } finally {
       setLoading(false);

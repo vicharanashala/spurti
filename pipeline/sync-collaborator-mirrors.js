@@ -21,8 +21,9 @@
  *
  * Scheduled nightly at a random minute in 00:00–01:00 IST (18:30 UTC + jitter).
  */
+const path = require('path');
 const { MongoClient } = require('mongodb');
-require('dotenv').config({ path: '/var/samagama/server/.env' });
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
 // Derive the host+creds base from MONGO_URI (strip the trailing /db?query) so the
 // admin password lives ONLY in .env — never hardcoded here.

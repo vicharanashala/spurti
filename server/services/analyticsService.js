@@ -35,97 +35,109 @@ function compute_cohort_counts(students) {
 }
 
 export async function computeSnapshot() {
-  const now = new Date();
-  const last30min = new Date(now.getTime() - 30 * 60 * 1000);
+  // FIX-3.8: Wrap in try/catch so a transient DB error in the scheduled job
+  // logs a clear message instead of propagating silently to the setInterval caller.
+  try {
+    const now = new Date();
+    const last30min = new Date(now.getTime() - 30 * 60 * 1000);
 
-  const [
-    allStudents,
-    sessions,
-    recentTransactions,
-    recentEvents,
-    lastSnapshot,
-  ] = await Promise.all([
-    Student.find({}).lean(),
-    Session.find().sort({ endDateTime: 1 }).lean(),
-    SPTransaction.find({ createdAt: { $gte: last30min } }).lean(),
-    SessionEvent.find({ timestamp: { $gte: last30min } }).lean(),
-    AnalyticsSnapshot.findOne({}).sort({ timestamp: -1 }).lean(),
-  ]);
+    const [
+      allStudents,
+      sessions,
+      recentTransactions,
+      recentEvents,
+      // lastSnapshot is fetched but unused — kept for future delta-based metrics.
+      // eslint-disable-next-line no-unused-vars
+      lastSnapshot,
+    ] = await Promise.all([
+      Student.find({}).lean(),
+      Session.find().sort({ endDateTime: 1 }).lean(),
+      SPTransaction.find({ createdAt: { $gte: last30min } }).lean(),
+      SessionEvent.find({ timestamp: { $gte: last30min } }).lean(),
+      AnalyticsSnapshot.findOne({}).sort({ timestamp: -1 }).lean(),
+    ]);
 
-  const activeStudents = allStudents.filter(s => s.status === 'active');
-  const yetToOnboard = allStudents.filter(s => s.status === 'yet to onboard');
-  const excused = allStudents.filter(s => s.status === 'excused');
+    const activeStudents = allStudents.filter(s => s.status === 'active');
+    // FIX-1.4: 'yet to onboard' is now a valid enum value in the Student schema.
+    const yetToOnboard = allStudents.filter(s => s.status === 'yet to onboard');
+    const excused = allStudents.filter(s => s.status === 'excused');
 
-  const activeEmails = new Set(activeStudents.map(s => s.email.toLowerCase()));
-  const activeRecentTx = recentTransactions.filter(t => activeEmails.has(t.email.toLowerCase()));
+    const activeEmails = new Set(activeStudents.map(s => s.email.toLowerCase()));
+    const activeRecentTx = recentTransactions.filter(t => activeEmails.has(t.email.toLowerCase()));
 
-  const spValues = activeStudents.map(s => s.totalSp || 0);
-  const totalSp = spValues.reduce((a, b) => a + b, 0);
-  const avgSp = activeStudents.length ? Math.round(totalSp / activeStudents.length) : 0;
-  const minSp = spValues.length ? Math.min(...spValues) : 0;
-  const maxSp = spValues.length ? Math.max(...spValues) : 0;
+    const spValues = activeStudents.map(s => s.totalSp || 0);
+    const totalSp = spValues.reduce((a, b) => a + b, 0);
+    const avgSp = activeStudents.length ? Math.round(totalSp / activeStudents.length) : 0;
+    const minSp = spValues.length ? Math.min(...spValues) : 0;
+    const maxSp = spValues.length ? Math.max(...spValues) : 0;
 
-  // sessions completed
-  const completedSessions = sessions.filter(s => s.endDateTime && new Date(s.endDateTime) <= now);
-  const currentSession = sessions.length ? sessions[sessions.length - 1]?.label || '' : '';
+    // sessions completed
+    const completedSessions = sessions.filter(s => s.endDateTime && new Date(s.endDateTime) <= now);
+    const currentSession = sessions.length ? sessions[sessions.length - 1]?.label || '' : '';
 
-  // page views
-  const pageViews = { admin: 0, record: 0, search: 0, intro: 0 };
-  for (const e of recentEvents) {
-    if (e.page === 'admin') pageViews.admin++;
-    else if (e.page === 'record') pageViews.record++;
-    else if (e.page === 'search') pageViews.search++;
-    else if (e.page === 'intro') pageViews.intro++;
+    // page views
+    const pageViews = { admin: 0, record: 0, search: 0, intro: 0 };
+    for (const e of recentEvents) {
+      if (e.page === 'admin') pageViews.admin++;
+      else if (e.page === 'record') pageViews.record++;
+      else if (e.page === 'search') pageViews.search++;
+      else if (e.page === 'intro') pageViews.intro++;
+    }
+    const uniqueUsers = new Set(recentEvents.map(e => e.email.toLowerCase())).size;
+
+    // top gainers / losers last 30 min
+    // FIX-1.3: SPTransaction schema uses 'appliedDelta', not 'delta'.
+    // Previously t.delta was always undefined → all deltas computed as 0.
+    const deltaMap = {};
+    for (const t of activeRecentTx) {
+      const key = t.email.toLowerCase();
+      deltaMap[key] = (deltaMap[key] || 0) + (t.appliedDelta || 0);
+    }
+    const emailToName = {};
+    for (const s of activeStudents) {
+      emailToName[s.email.toLowerCase()] = s.name;
+    }
+    const deltas = Object.entries(deltaMap)
+      .map(([email, delta]) => ({ email, name: emailToName[email] || email, delta }))
+      .sort((a, b) => b.delta - a.delta);
+    const topGainers = deltas.slice(0, 10);
+    const topLosers = [...deltas].sort((a, b) => a.delta - b.delta).slice(0, 10);
+
+    // red zone count
+    const redZoneCount = activeStudents.filter(s =>
+      s.totalSp !== undefined && s.totalSp < 100
+    ).length;
+
+    const snapshot = new AnalyticsSnapshot({
+      timestamp: now,
+      activeStudents: activeStudents.length,
+      yetToOnboard: yetToOnboard.length,
+      excused: excused.length,
+      totalStudents: allStudents.length,
+      avgSp,
+      minSp,
+      maxSp,
+      totalSp,
+      spDistribution: compute_sp_distribution(activeStudents),
+      cohortCounts: compute_cohort_counts(activeStudents),
+      totalTransactions: await SPTransaction.countDocuments(),
+      newTransactionsLast30min: recentTransactions.length,
+      sessionsCompleted: completedSessions.length,
+      currentSession,
+      pageViewsLast30min: pageViews,
+      uniqueUsersLast30min: uniqueUsers,
+      topGainersLast30min: topGainers,
+      topLosersLast30min: topLosers,
+      redZoneCount,
+      snapshotType: 'scheduled',
+    });
+
+    await snapshot.save();
+    return snapshot;
+  } catch (err) {
+    console.error('[computeSnapshot] Failed to compute/save analytics snapshot:', err.message);
+    throw err; // Re-throw so the setInterval wrapper in server.js can log it.
   }
-  const uniqueUsers = new Set(recentEvents.map(e => e.email.toLowerCase())).size;
-
-  // top gainers / losers last 30 min
-  const deltaMap = {};
-  for (const t of activeRecentTx) {
-    const key = t.email.toLowerCase();
-    deltaMap[key] = (deltaMap[key] || 0) + (t.delta || 0);
-  }
-  const emailToName = {};
-  for (const s of activeStudents) {
-    emailToName[s.email.toLowerCase()] = s.name;
-  }
-  const deltas = Object.entries(deltaMap)
-    .map(([email, delta]) => ({ email, name: emailToName[email] || email, delta }))
-    .sort((a, b) => b.delta - a.delta);
-  const topGainers = deltas.slice(0, 10);
-  const topLosers = [...deltas].sort((a, b) => a.delta - b.delta).slice(0, 10);
-
-  // red zone count
-  const redZoneCount = activeStudents.filter(s =>
-    s.totalSp !== undefined && s.totalSp < 100
-  ).length;
-
-  const snapshot = new AnalyticsSnapshot({
-    timestamp: now,
-    activeStudents: activeStudents.length,
-    yetToOnboard: yetToOnboard.length,
-    excused: excused.length,
-    totalStudents: allStudents.length,
-    avgSp,
-    minSp,
-    maxSp,
-    totalSp,
-    spDistribution: compute_sp_distribution(activeStudents),
-    cohortCounts: compute_cohort_counts(activeStudents),
-    totalTransactions: await SPTransaction.countDocuments(),
-    newTransactionsLast30min: recentTransactions.length,
-    sessionsCompleted: completedSessions.length,
-    currentSession,
-    pageViewsLast30min: pageViews,
-    uniqueUsersLast30min: uniqueUsers,
-    topGainersLast30min: topGainers,
-    topLosersLast30min: topLosers,
-    redZoneCount,
-    snapshotType: 'scheduled',
-  });
-
-  await snapshot.save();
-  return snapshot;
 }
 
 export async function getRecentSnapshots(hours = 24) {

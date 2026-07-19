@@ -21,9 +21,10 @@
  *
  * Cron: minute 30 of every even UTC hour (= every even IST hour, 00,02,...,22).
  */
-require('/var/samagama/server/node_modules/dotenv').config({ path: '/var/samagama/server/.env' });
-const { MongoClient } = require('/var/samagama/server/node_modules/mongodb');
-const mongoose = require('/var/samagama/server/node_modules/mongoose');
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+const { MongoClient } = require('mongodb');
+const mongoose = require('mongoose');
 
 const BASE = (process.env.MONGO_URI || '').replace(/\/[^/?]*(\?.*)?$/, '');
 const DRY = process.env.DRY_RUN === '1';
@@ -34,8 +35,8 @@ const normSp = (n) => { const v = parseInt(n, 10); return isNaN(v) ? null : (v >
   if (!BASE) throw new Error('no MONGO_URI');
   await mongoose.connect(process.env.MONGO_URI);
   const spledgers = mongoose.connection.db.collection('spledgers');
-  const User = require('/var/samagama/server/models/User');
-  const sak = await MongoClient.connect(`${BASE}/sakshi_spurti?authSource=admin`);
+  const User = require('../models/User');
+  const sak = await MongoClient.connect(`${BASE}/sakshi_spurti?authSource=sakshi_spurti`);
   const sptx = sak.db().collection('sptransactions');
 
   const src = await sptx.find({}, { projection: { email: 1, dateTime: 1, reason: 1, appliedDelta: 1 } }).toArray();

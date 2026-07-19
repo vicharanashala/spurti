@@ -14,8 +14,9 @@
  *
  * Safe to re-run (upsert by email+sessionLabel).
  */
-const { MongoClient, ObjectId } = require('/var/samagama/server/node_modules/mongodb');
-require('/var/samagama/server/node_modules/dotenv').config({ path: '/var/samagama/server/.env' });
+const path = require('path');
+const { MongoClient, ObjectId } = require('mongodb');
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
 const REASON_RE = /present (\d+) of (\d+) min \(([\d.]+)%\)/;
 

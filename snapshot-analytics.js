@@ -77,7 +77,7 @@ async function main() {
   const deltaMap = {};
   for (const t of activeRecentTx) {
     const key = t.email.toLowerCase();
-    deltaMap[key] = (deltaMap[key] || 0) + (t.delta || 0);
+    deltaMap[key] = (deltaMap[key] || 0) + (t.appliedDelta || 0);
   }
   const emailToName = {};
   for (const s of active) emailToName[s.email.toLowerCase()] = s.name;

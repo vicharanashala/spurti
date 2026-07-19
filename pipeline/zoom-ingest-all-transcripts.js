@@ -18,7 +18,8 @@
  *   node zoom-ingest-all-transcripts.js --dry-run  # print only, no write
  */
 
-require('dotenv').config({ path: '/var/samagama/server/.env' });
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 const axios  = require('axios');
 const { MongoClient } = require('mongodb');
 

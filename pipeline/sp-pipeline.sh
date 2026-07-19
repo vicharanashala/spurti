@@ -35,10 +35,10 @@ $NODE $HEAP zoom-update.js
 rc=$?; echo "--- $(ts) stage1 exit=$rc ---"
 [ $rc -eq 0 ] || { echo "ABORT: #zoomupdate failed (rc=$rc)"; exit 1; }
 
-echo "=== $(ts) STAGE 2/3: sp-rubric-build APPLY=1 ==="
-APPLY=1 OUT_DIR=/var/samagama/server/sp-runs $NODE $HEAP sp-rubric-build.js
+echo "=== $(ts) STAGE 2/3: sp-rubric-build-mirror APPLY=1 ==="
+APPLY=1 OUT_DIR=/var/samagama/server/sp-runs $NODE $HEAP sp-rubric-build-mirror.cjs
 rc=$?; echo "--- $(ts) stage2 exit=$rc ---"
-[ $rc -eq 0 ] || { echo "ABORT: sp-rubric-build failed (rc=$rc)"; exit 1; }
+[ $rc -eq 0 ] || { echo "ABORT: sp-rubric-build-mirror failed (rc=$rc)"; exit 1; }
 
 echo "=== $(ts) STAGE 3/3: sync-spurti-from-sakshi (-> chatengine) ==="
 $NODE sync-spurti-from-sakshi.js
@@ -56,7 +56,7 @@ rc=$?; echo "--- $(ts) stage5 exit=$rc ---"
 [ $rc -eq 0 ] || { echo "ABORT: sync-poll-records failed (rc=$rc)"; exit 1; }
 
 echo "=== $(ts) STAGE 6/6: zoom-fetch-transcripts (AI summaries -> zoom_data.summaries) ==="
-$NODE /home/samagama/samagama/server/zoom-fetch-transcripts.js
+$NODE zoom-fetch-transcripts.js
 rc=$?; echo "--- $(ts) stage6 exit=$rc ---"
 # Non-fatal: summary processing lag is normal; today's meeting retried tomorrow
 [ $rc -eq 0 ] || echo "WARN: zoom-fetch-transcripts failed (rc=$rc) — will retry on next run"

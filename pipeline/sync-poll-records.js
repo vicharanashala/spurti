@@ -9,8 +9,9 @@
  * Reason string format from sp-rubric-build:
  *   "Day 20 (8 Jun): answered 3 of 16 poll questions (18.8%) -> 0 SP."
  */
-const { MongoClient } = require('/var/samagama/server/node_modules/mongodb');
-require('/var/samagama/server/node_modules/dotenv').config({ path: '/var/samagama/server/.env' });
+const path = require('path');
+const { MongoClient } = require('mongodb');
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
 const POLL_RE = /answered (\d+) of (\d+) poll questions/;
 

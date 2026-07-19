@@ -27,7 +27,8 @@
  *   node zoom-fetch-transcripts.js --force      # re-fetch even already-stored
  */
 
-require('dotenv').config({ path: '/var/samagama/server/.env' });
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
 
