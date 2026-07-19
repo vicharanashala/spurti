@@ -337,9 +337,6 @@ router.post('/', authenticateStudent, async (req, res) => {
     return res.status(201).json({ challenge });
   }
 
-  const bet = Number(betAmount);
-  const duration = Number(durationDays);
-
   if (isNaN(bet) || bet < 1) {
     return res.status(400).json({ error: 'Wager must be at least 1 SP.' });
   }
