@@ -377,7 +377,8 @@ export function ChallengeBrowser({ onClose, studentSp }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedTopic || !selectedPeer || betAmount < 1 || betAmount > availableSp) return;
+    const wager = Number(betAmount);
+    if (!selectedTopic || !selectedPeer || isNaN(wager) || wager < 1 || wager > availableSp) return;
 
     setSubmitting(true);
     try {
@@ -387,7 +388,7 @@ export function ChallengeBrowser({ onClose, studentSp }) {
         body: JSON.stringify({
           opponentEmail: selectedPeer.email,
           topic: selectedTopic.key,
-          betAmount,
+          betAmount: wager,
           durationDays
         })
       });
@@ -490,7 +491,17 @@ export function ChallengeBrowser({ onClose, studentSp }) {
               min="1"
               max={availableSp}
               value={betAmount}
-              onChange={e => setBetAmount(Math.max(1, Number(e.target.value)))}
+              onChange={e => {
+                const val = e.target.value;
+                if (val === '') {
+                  setBetAmount('');
+                } else {
+                  const num = Number(val);
+                  if (!isNaN(num)) {
+                    setBetAmount(num);
+                  }
+                }
+              }}
               style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 6 }}
             />
             <span style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, display: 'block' }}>Available: {availableSp} SP</span>
@@ -511,7 +522,7 @@ export function ChallengeBrowser({ onClose, studentSp }) {
         </div>
 
         {/* Form Validation messages */}
-        {betAmount > availableSp && (
+        {Number(betAmount) > availableSp && (
           <div style={{ color: 'var(--red)', fontSize: 12, fontWeight: 600 }}>
             ❌ You cannot wager more SP than your available balance ({availableSp} SP).
           </div>
@@ -523,7 +534,7 @@ export function ChallengeBrowser({ onClose, studentSp }) {
           <button
             type="submit"
             className="primary"
-            disabled={submitting || !selectedTopic || !selectedPeer || betAmount < 1 || betAmount > availableSp}
+            disabled={submitting || !selectedTopic || !selectedPeer || Number(betAmount) < 1 || Number(betAmount) > availableSp}
           >
             {submitting ? 'Sending Request...' : 'Issue Challenge'}
           </button>
