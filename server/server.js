@@ -19,6 +19,74 @@ import { runSettleChallengesJob } from './jobs/settle-challenges.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
+
+// --- In-Memory Offline/Demo Mode Mock Database ---
+global.isOfflineMode = false;
+global.offlineStudents = [
+  {
+    _id: '64f7b60e653198e3b56a1111',
+    name: 'Nitesh Verma',
+    email: 'nitesh@verify.com',
+    alternateEmail: 'nitesh.alt@verify.com',
+    totalSp: 150,
+    highestSpEver: 150,
+    status: 'active',
+    internshipStartDate: new Date(),
+    surveyCompleted: false
+  },
+  {
+    _id: '64f7b60e653198e3b56a2222',
+    name: 'Challenger Peer',
+    email: 's1@verify.com',
+    alternateEmail: 's1.alt@verify.com',
+    totalSp: 100,
+    highestSpEver: 100,
+    status: 'active',
+    internshipStartDate: new Date(),
+    surveyCompleted: false
+  },
+  {
+    _id: '64f7b60e653198e3b56a3333',
+    name: 'Opponent Peer',
+    email: 's2@verify.com',
+    alternateEmail: 's2.alt@verify.com',
+    totalSp: 120,
+    highestSpEver: 120,
+    status: 'active',
+    internshipStartDate: new Date(),
+    surveyCompleted: false
+  },
+  {
+    _id: '64f7b60e653198e3b56a4444',
+    name: 'Excused Peer',
+    email: 's3@verify.com',
+    alternateEmail: 's3.alt@verify.com',
+    totalSp: 80,
+    highestSpEver: 80,
+    status: 'excused',
+    internshipStartDate: new Date(),
+    surveyCompleted: false
+  }
+];
+global.offlineChallenges = [];
+global.offlineTransactions = [
+  {
+    _id: '64f7b60e653198e3b56a9991',
+    email: 'nitesh@verify.com',
+    category: 'initial',
+    dateTime: new Date(Date.now() - 5*24*3600*1000),
+    appliedDelta: 100,
+    description: 'Initial Onboarding Points'
+  },
+  {
+    _id: '64f7b60e653198e3b56a9992',
+    email: 'nitesh@verify.com',
+    category: 'attendance',
+    dateTime: new Date(Date.now() - 2*24*3600*1000),
+    appliedDelta: 50,
+    description: 'Session Attendance Bonus'
+  }
+];
 // B1-FIX: defaults are null — admin access is denied unless .env provides real values.
 // Copilot review: using null prevents empty/missing headers (which evaluate to '') from matching.
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL ? normalizeEmail(process.env.ADMIN_EMAIL) : null;
@@ -133,6 +201,10 @@ async function getSamagamaUser(chatengineToken) {
 }
 
 async function studentEmailFromRequest(req) {
+  if (global.isOfflineMode) {
+    req.vibeData = { vibeOnbPct: 90, vibeAiPct: 80, vibeMernPct: 75 };
+    return 'nitesh@verify.com';
+  }
   const cookies = parseCookies(req.headers.cookie || '');
   const data = await getSamagamaUser(cookies.chatengine_token);
   // Samagama's /api/auth/me nests the user as { user: { email, ... } };
@@ -174,6 +246,59 @@ function excusedPayload(student) {
 }
 
 async function studentPayload(student) {
+  if (global.isOfflineMode) {
+    const email = student.email;
+    const transactions = global.offlineTransactions.filter(t => t.email === email);
+    const myRank = email === 'nitesh@verify.com' ? 1 : (email === 's2@verify.com' ? 2 : 3);
+    const myGroup = leaderboardGroup(student.internshipStartDate);
+    const mapRow = (row, index) => ({
+      rank: index + 1,
+      name: row.name,
+      maskedEmail: maskEmail(row.email),
+      totalSp: row.totalSp,
+      level: levelFor(Math.max(Number(row.highestSpEver) || 0, Number(row.totalSp) || 0)),
+      isCurrentStudent: row.email === email
+    });
+    const leaderboardRows = global.offlineStudents.filter(s => s.status !== 'excused').map(mapRow);
+    
+    return {
+      student: {
+        _id: String(student._id),
+        name: student.name,
+        email: student.email,
+        alternateEmail: student.alternateEmail,
+        internshipStartDate: student.internshipStartDate,
+        internshipEndDate: student.internshipEndDate,
+        status: student.status || 'active',
+        excusedAt: student.excusedAt,
+        excusedReason: student.excusedReason,
+        totalSp: student.totalSp,
+        rank: myRank,
+        cohortSize: 3,
+        highestSpEver: student.highestSpEver,
+        level: levelFor(student.highestSpEver),
+        trophyLeague: leagueBand(student.totalSp),
+        legendBadgeUnlocked: legendBadge(student.highestSpEver),
+        leaderboardGroup: myGroup,
+        leaderboardGroupLabel: groupLabel(myGroup),
+        surveyCompleted: Boolean(student.surveyCompleted)
+      },
+      transactions,
+      polls: [],
+      attendance: [],
+      cohort: {
+        averageSp: 123,
+        top50AvgSp: 135,
+        top10Cutoff: 150,
+        top50Cutoff: 120,
+        pointsToTop50: 0,
+        pointsToNextRank: 0
+      },
+      leaderboard: leaderboardRows,
+      groupLeaderboard: leaderboardRows
+    };
+  }
+
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
   const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
@@ -275,6 +400,13 @@ api.get('/config', (_req, res) => res.json({
 api.get('/me', async (req, res) => {
   const email = await studentEmailFromRequest(req);
   if (!email) return res.status(401).json({ authenticated: false });
+  if (global.isOfflineMode) {
+    const student = global.offlineStudents.find(s => s.email === email);
+    if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
+    const payload = await studentPayload(student);
+    payload.vibeCourse = { onboarding: 90, aiFundamentals: 80, mernStack: 75 };
+    return res.json({ authenticated: true, profile: payload });
+  }
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
@@ -291,8 +423,27 @@ api.get('/me', async (req, res) => {
 });
 
 api.get('/search', async (req, res) => {
-  if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const q = String(req.query.q || '').trim();
+  if (global.isOfflineMode) {
+    if (q.length < 2) return res.json({ exact: false, matches: [] });
+    if (q.includes('@')) {
+      const email = normalizeEmail(q);
+      const student = global.offlineStudents.find(s => s.email === email || s.alternateEmail === email);
+      if (student) {
+        const payload = await studentPayload(student);
+        payload.vibeCourse = { onboarding: null, aiFundamentals: null, mernStack: null };
+        return res.json({ exact: true, profile: payload });
+      }
+    }
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matches = global.offlineStudents.filter(s => 
+      s.name.toLowerCase().includes(q.toLowerCase()) || 
+      s.email.toLowerCase().includes(q.toLowerCase())
+    );
+    return res.json({ exact: false, matches: matches.map(publicStudent) });
+  }
+
+  if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   if (q.length < 2) return res.json({ exact: false, matches: [] });
   try {
     if (q.includes('@')) {
@@ -322,9 +473,21 @@ api.get('/search', async (req, res) => {
 });
 
 api.post('/confirm', async (req, res) => {
-  if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const { studentId, email } = req.body || {};
   const typed = normalizeEmail(email);
+
+  if (global.isOfflineMode) {
+    const student = global.offlineStudents.find(s => String(s._id) === String(studentId));
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    if (typed !== normalizeEmail(student.email) && typed !== normalizeEmail(student.alternateEmail)) {
+      return res.status(403).json({ error: 'Email did not match this record' });
+    }
+    const payload = await studentPayload(student);
+    payload.vibeCourse = { onboarding: null, aiFundamentals: null, mernStack: null };
+    return res.json(payload);
+  }
+
+  if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   try {
     const student = await Student.findById(studentId).lean();
     if (!student) return res.status(404).json({ error: 'Student not found' });
@@ -343,6 +506,19 @@ api.post('/confirm', async (req, res) => {
 });
 
 api.get('/leaderboard', async (req, res) => {
+  if (global.isOfflineMode) {
+    const mapRow = (s, i) => ({
+      rank: i + 1,
+      name: s.name,
+      maskedEmail: maskEmail(s.email),
+      totalSp: s.totalSp,
+      level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
+      trophyLeague: leagueBand(s.totalSp)
+    });
+    const matches = global.offlineStudents.filter(s => s.status !== 'excused').map(mapRow);
+    return res.json(matches);
+  }
+
   const type = String(req.query.leaderboardType || 'overall');
   const filter = { status: { $ne: 'excused' } };
   if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
@@ -361,9 +537,14 @@ api.post('/ping', async (req, res) => {
   const { email, name, page } = req.body || {};
   const normalized = normalizeEmail(email);
   if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
-  // Telemetry is best-effort: an unknown page value (e.g. a new admin sub-page
-  // not yet in the enum) must never crash the request or leak an unhandled
-  // rejection. Drop the write and carry on.
+  
+  if (global.isOfflineMode) {
+    if (page === 'record' || page.startsWith('admin')) {
+      liveViewers.set(normalized, { name, page, lastSeen: new Date() });
+    }
+    return res.json({ ok: true });
+  }
+
   try {
     await SessionEvent.create({ email: normalized, name, event: 'page_view', page });
   } catch (err) {

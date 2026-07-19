@@ -13,6 +13,11 @@ import Challenge from '../models/Challenge.js';
 
 // ─── 1. authenticateStudent ───────────────────────────────────────────────────
 export async function authenticateStudent(req, res, next) {
+  if (global.isOfflineMode) {
+    req.student = global.offlineStudents.find(s => s.email === 'nitesh@verify.com');
+    return next();
+  }
+
   // DEV ONLY — bypass Samagama auth in non-production environments when the
   // client signals it with the X-Dev-Bypass header. Never active in production.
   if (
@@ -71,7 +76,12 @@ export async function validateChallengeAccess(req, res, next) {
       });
     }
 
-    const challenge = await Challenge.findById(id);
+    let challenge;
+    if (global.isOfflineMode) {
+      challenge = global.offlineChallenges.find(c => String(c._id) === String(id));
+    } else {
+      challenge = await Challenge.findById(id);
+    }
 
     if (!challenge) {
       return res.status(404).json({
@@ -106,14 +116,21 @@ export async function validateChallengeAccess(req, res, next) {
 export async function checkActiveLimit(req, res, next) {
   try {
     const studentId = req.student._id;
-    // Count active or pending challenges where the student is challenger or opponent
-    const count = await Challenge.countDocuments({
-      status: { $in: ['pending', 'active'] },
-      $or: [
-        { challengerId: studentId },
-        { opponentId: studentId }
-      ]
-    });
+    let count;
+    if (global.isOfflineMode) {
+      count = global.offlineChallenges.filter(c =>
+        ['pending', 'active'].includes(c.status) &&
+        (String(c.challengerId) === String(studentId) || String(c.opponentId) === String(studentId))
+      ).length;
+    } else {
+      count = await Challenge.countDocuments({
+        status: { $in: ['pending', 'active'] },
+        $or: [
+          { challengerId: studentId },
+          { opponentId: studentId }
+        ]
+      });
+    }
 
     if (count >= 3) {
       return res.status(400).json({

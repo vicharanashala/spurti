@@ -10,6 +10,21 @@ const router = express.Router();
 
 // Helper to calculate locked SP for a student
 export async function getLockedSp(studentId) {
+  if (global.isOfflineMode) {
+    const activeChallenges = global.offlineChallenges.filter(c =>
+      c.status === 'active' &&
+      (String(c.challengerId) === String(studentId) || String(c.opponentId) === String(studentId))
+    );
+    const pendingSentChallenges = global.offlineChallenges.filter(c =>
+      c.status === 'pending' &&
+      String(c.challengerId) === String(studentId)
+    );
+    let locked = 0;
+    for (const c of activeChallenges) locked += c.betAmount;
+    for (const c of pendingSentChallenges) locked += c.betAmount;
+    return locked;
+  }
+
   const activeChallenges = await Challenge.find({
     status: 'active',
     $or: [{ challengerId: studentId }, { opponentId: studentId }]
@@ -169,6 +184,31 @@ router.get('/peers', authenticateStudent, async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ matches: [] });
 
+  if (global.isOfflineMode) {
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matches = global.offlineStudents.filter(peer =>
+      peer.status !== 'excused' &&
+      String(peer._id) !== String(req.student._id) &&
+      (peer.name.match(new RegExp(escaped, 'i')) || peer.email.match(new RegExp(escaped, 'i')))
+    );
+    const peers = matches.map(peer => {
+      const concurrent = global.offlineChallenges.filter(c =>
+        ['pending', 'active'].includes(c.status) &&
+        (String(c.challengerId) === String(peer._id) || String(c.opponentId) === String(peer._id))
+      ).length;
+      const limitExceeded = concurrent >= 3;
+      return {
+        _id: String(peer._id),
+        name: peer.name,
+        email: peer.email,
+        totalSp: peer.totalSp,
+        limitExceeded,
+        ineligibleReason: limitExceeded ? 'Opponent already has 3 active/pending challenges.' : ''
+      };
+    });
+    return res.json({ matches: peers });
+  }
+
   try {
     const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const myId = String(req.student._id);
@@ -218,6 +258,83 @@ router.post('/', authenticateStudent, async (req, res) => {
 
   if (!opponentEmail || !topic || !betAmount || !durationDays) {
     return res.status(400).json({ error: 'Missing required parameters.' });
+  }
+
+  const bet = Number(betAmount);
+  const duration = Number(durationDays);
+
+  if (global.isOfflineMode) {
+    if (isNaN(bet) || bet < 1) {
+      return res.status(400).json({ error: 'Wager must be at least 1 SP.' });
+    }
+    if (isNaN(duration) || duration < 1 || duration > 7) {
+      return res.status(400).json({ error: 'Duration must be between 1 and 7 days.' });
+    }
+    const validTopics = ['vibe_course', 'matrix_questions', 'poll_accuracy'];
+    if (!validTopics.includes(topic)) {
+      return res.status(400).json({ error: 'Invalid challenge topic.' });
+    }
+
+    const opponent = global.offlineStudents.find(s =>
+      s.status !== 'excused' &&
+      (s.email === opponentEmail.toLowerCase().trim() || s.alternateEmail === opponentEmail.toLowerCase().trim())
+    );
+    if (!opponent) {
+      return res.status(404).json({ error: 'Eligible opponent student not found.' });
+    }
+    if (String(opponent._id) === String(req.student._id)) {
+      return res.status(400).json({ error: 'You cannot challenge yourself.' });
+    }
+    const challengerConcurrent = global.offlineChallenges.filter(c =>
+      ['pending', 'active'].includes(c.status) &&
+      (String(c.challengerId) === String(req.student._id) || String(c.opponentId) === String(req.student._id))
+    ).length;
+    if (challengerConcurrent >= 3) {
+      return res.status(400).json({ error: 'You already have 3 active or pending challenges.' });
+    }
+    const opponentConcurrent = global.offlineChallenges.filter(c =>
+      ['pending', 'active'].includes(c.status) &&
+      (String(c.challengerId) === String(opponent._id) || String(c.opponentId) === String(opponent._id))
+    ).length;
+    if (opponentConcurrent >= 3) {
+      return res.status(400).json({ error: 'Opponent already has 3 active or pending challenges.' });
+    }
+    const lockedSp = await getLockedSp(req.student._id);
+    const availableSp = req.student.totalSp - lockedSp;
+    if (availableSp < bet) {
+      return res.status(400).json({ error: `You only have ${availableSp} available SP (Wager requires ${bet} SP).` });
+    }
+    const requestedAt = new Date();
+    const respondTimeoutAt = new Date(requestedAt.getTime() + 2 * 60 * 60 * 1000);
+    const topicLabels = { vibe_course: 'Vibe Course Progress', matrix_questions: 'Matrix Questions', poll_accuracy: 'Poll Accuracy' };
+    const challenge = {
+      _id: new mongoose.Types.ObjectId().toString(),
+      challengerId: String(req.student._id),
+      challengerEmail: req.student.email,
+      challengerName: req.student.name,
+      opponentId: String(opponent._id),
+      opponentEmail: opponent.email,
+      opponentName: opponent.name,
+      topic,
+      topicRef: {
+        label: `${topicLabels[topic]} Challenge (Wager: ${bet} SP)`,
+        windowStart: requestedAt,
+        windowEnd: new Date(requestedAt.getTime() + duration * 24 * 60 * 60 * 1000)
+      },
+      betAmount: bet,
+      status: 'pending',
+      requestedAt,
+      respondTimeoutAt,
+      createdAt: requestedAt,
+      updatedAt: requestedAt,
+      auditTrail: [{
+        actor: req.student.name,
+        action: 'create',
+        detail: `Issued ${duration}-day challenge to ${opponent.name} with ${bet} SP bet.`
+      }]
+    };
+    global.offlineChallenges.push(challenge);
+    return res.status(201).json({ challenge });
   }
 
   const bet = Number(betAmount);
@@ -328,6 +445,50 @@ router.post('/', authenticateStudent, async (req, res) => {
 router.get('/mine', authenticateStudent, async (req, res) => {
   const myId = req.student._id;
 
+  if (global.isOfflineMode) {
+    try {
+      const all = JSON.parse(JSON.stringify(global.offlineChallenges.filter(c =>
+        String(c.challengerId) === String(myId) || String(c.opponentId) === String(myId)
+      )));
+      const lockedSp = await getLockedSp(myId);
+      const sentPending = [];
+      const receivedPending = [];
+      const active = [];
+      const history = [];
+      const now = Date.now();
+      for (const c of all) {
+        if (c.status === 'pending') {
+          c.respondTimeoutSec = Math.max(0, Math.floor((new Date(c.respondTimeoutAt).getTime() - now) / 1000));
+          if (String(c.challengerId) === String(myId)) sentPending.push(c);
+          else receivedPending.push(c);
+        } else if (c.status === 'active') {
+          c.endAtSec = Math.max(0, Math.floor((new Date(c.topicRef.windowEnd).getTime() - now) / 1000));
+          c.liveProgress = {
+            challenger: getSimulatedProgress(c._id, c.challengerId, c.topic, 0.5),
+            opponent: getSimulatedProgress(c._id, c.opponentId, c.topic, 0.5)
+          };
+          active.push(c);
+        } else {
+          history.push(c);
+        }
+      }
+      return res.json({
+        profile: {
+          totalSp: req.student.totalSp,
+          availableSp: req.student.totalSp - lockedSp,
+          lockedSp
+        },
+        sentPending,
+        receivedPending,
+        active,
+        history
+      });
+    } catch (err) {
+      console.error('mine challenges error:', err.message);
+      return res.status(500).json({ error: 'Failed to fetch challenges.' });
+    }
+  }
+
   try {
     const all = await Challenge.find({
       $or: [{ challengerId: myId }, { opponentId: myId }]
@@ -416,6 +577,53 @@ router.get('/:id', authenticateStudent, validateChallengeAccess, async (req, res
 router.post('/:id/accept', authenticateStudent, validateChallengeAccess, async (req, res) => {
   const challenge = req.challenge;
 
+  if (global.isOfflineMode) {
+    if (challenge.status !== 'pending') {
+      return res.status(400).json({ error: 'Challenge is not in pending state.' });
+    }
+    const challenger = global.offlineStudents.find(s => String(s._id) === String(challenge.challengerId));
+    if (!challenger || challenger.status === 'excused') {
+      return res.status(404).json({ error: 'Challenger student is no longer active.' });
+    }
+    const opponentLockedSp = await getLockedSp(req.student._id);
+    const opponentAvailableSp = req.student.totalSp - opponentLockedSp;
+    if (opponentAvailableSp < challenge.betAmount) {
+      return res.status(400).json({ error: `You only have ${opponentAvailableSp} available SP (requires ${challenge.betAmount} SP).` });
+    }
+    const challengerLockedSp = await getLockedSp(challenger._id);
+    const challengerAvailableSp = challenger.totalSp - challengerLockedSp;
+    if (challengerAvailableSp < challenge.betAmount) {
+      return res.status(400).json({ error: 'Challenger no longer has enough available SP.' });
+    }
+
+    const startAt = new Date();
+    const durationDays = 3;
+    const endAt = new Date(startAt.getTime() + durationDays * 24 * 60 * 60 * 1000);
+
+    challenge.status = 'active';
+    challenge.respondedAt = startAt;
+    challenge.startAt = startAt;
+    challenge.endAt = endAt;
+    challenge.escrow = {
+      challengerLocked: challenge.betAmount,
+      opponentLocked: challenge.betAmount
+    };
+    challenge.progressSnapshot = {
+      challenger: getSimulatedProgress(challenge._id, challenge.challengerId, challenge.topic, 0),
+      opponent: getSimulatedProgress(challenge._id, challenge.opponentId, challenge.topic, 0)
+    };
+    challenge.topicRef.windowStart = startAt;
+    challenge.topicRef.windowEnd = endAt;
+    challenge.auditTrail.push({
+      actor: req.student.name,
+      action: 'accept',
+      detail: `Challenge accepted. Running window: ${startAt.toLocaleString()} to ${endAt.toLocaleString()}`
+    });
+
+    if (challenge.save) await challenge.save();
+    return res.json({ challenge });
+  }
+
   if (challenge.status !== 'pending') {
     return res.status(400).json({ error: 'Challenge is not in pending state.' });
   }
@@ -496,6 +704,21 @@ router.post('/:id/accept', authenticateStudent, validateChallengeAccess, async (
 router.post('/:id/decline', authenticateStudent, validateChallengeAccess, async (req, res) => {
   const challenge = req.challenge;
 
+  if (global.isOfflineMode) {
+    if (challenge.status !== 'pending') {
+      return res.status(400).json({ error: 'Challenge is not in pending state.' });
+    }
+    challenge.status = 'declined';
+    challenge.respondedAt = new Date();
+    challenge.auditTrail.push({
+      actor: req.student.name,
+      action: 'decline',
+      detail: 'Declined the challenge invitation.'
+    });
+    if (challenge.save) await challenge.save();
+    return res.json({ challenge });
+  }
+
   if (challenge.status !== 'pending') {
     return res.status(400).json({ error: 'Challenge is not in pending state.' });
   }
@@ -523,6 +746,20 @@ router.post('/:id/decline', authenticateStudent, validateChallengeAccess, async 
 // POST /api/challenges/:id/cancel
 router.post('/:id/cancel', authenticateStudent, validateChallengeAccess, async (req, res) => {
   const challenge = req.challenge;
+
+  if (global.isOfflineMode) {
+    if (challenge.status !== 'pending') {
+      return res.status(400).json({ error: 'Challenge is not in pending state.' });
+    }
+    challenge.status = 'cancelled';
+    challenge.auditTrail.push({
+      actor: req.student.name,
+      action: 'cancel',
+      detail: 'Cancelled the challenge request.'
+    });
+    if (challenge.save) await challenge.save();
+    return res.json({ challenge });
+  }
 
   if (challenge.status !== 'pending') {
     return res.status(400).json({ error: 'Challenge is not in pending state.' });
