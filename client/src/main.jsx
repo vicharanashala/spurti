@@ -96,7 +96,7 @@ function App() {
   if (view === 'admin' && admin && adminAuth) {
     return <AdminView admin={admin} auth={adminAuth} onBack={() => setView('landing')} />;
   }
-  return <Landing config={config} onStudent={(data) => {
+  return <Landing config={config} onInstructorLogin={() => setView('admin-login')} onStudent={(data) => {
     if (data?.excused) {
       setExcused(data);
       setProfile(null);
@@ -109,7 +109,7 @@ function App() {
   }} />;
 }
 
-function Landing({ config, onStudent }) {
+function Landing({ config, onStudent, onInstructorLogin }) {
   const [searchOpen, setSearchOpen] = useState(false);
 
   return (
