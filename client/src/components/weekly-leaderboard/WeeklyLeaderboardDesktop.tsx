@@ -167,7 +167,7 @@ function RightColumn({ data, children }) {
   );
 }
 
-export function WeeklyLeaderboardDesktop({ email, profile }) {
+export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
   const [theme, setTheme] = useState('dark');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -196,28 +196,44 @@ export function WeeklyLeaderboardDesktop({ email, profile }) {
 
   const t10 = useAutoTop10(data);
 
+  const body = (
+    <div className="wl-body">
+      <CenterColumn data={data} loading={loading} error={error} onRetry={fetchData}>
+        {data?.me?.weeklySp === 0 && data?.week?.phase !== 'calculating' && (
+          <FreshWeekEmpty data={data} />
+        )}
+        {data?.bucket === 'regular' && data?.me?.weeklySp > 0 && (
+          <RegularUserCard data={data} profile={profile} onViewLeaderboard={() => {}} />
+        )}
+        {data?.bucket === 'bottom50' && data?.me?.weeklySp > 0 && (
+          <Bottom50Experience data={data} profile={profile} />
+        )}
+        <WeeklyLeaderboard data={data} />
+      </CenterColumn>
+      <RightColumn data={data}>
+        <RightRail data={data} profile={profile} />
+      </RightColumn>
+    </div>
+  );
+
+  if (inline) {
+    // Render only the body (3-col grid + theme-aware chrome) so the host
+    // page's own sidebar / topbar remain visible. The full App theme
+    // already inherits the design tokens.
+    return (
+      <div className={`wl-shell-inline wl-shell--${theme}`} data-theme={theme}>
+        {body}
+        <Top10Popup open={t10.open} onClose={t10.close} data={data} />
+      </div>
+    );
+  }
+
   return (
     <div className={`wl-shell wl-shell--${theme}`} data-theme={theme}>
       <Sidebar theme={theme} onThemeToggle={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} />
       <div className="wl-main">
         <Topbar data={data} theme={theme} onThemeToggle={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} profile={profile} />
-        <div className="wl-body">
-          <CenterColumn data={data} loading={loading} error={error} onRetry={fetchData}>
-            {data?.me?.weeklySp === 0 && data?.week?.phase !== 'calculating' && (
-              <FreshWeekEmpty data={data} />
-            )}
-            {data?.bucket === 'regular' && data?.me?.weeklySp > 0 && (
-              <RegularUserCard data={data} profile={profile} onViewLeaderboard={() => {}} />
-            )}
-            {data?.bucket === 'bottom50' && data?.me?.weeklySp > 0 && (
-              <Bottom50Experience data={data} profile={profile} />
-            )}
-            <WeeklyLeaderboard data={data} />
-          </CenterColumn>
-          <RightColumn data={data}>
-            <RightRail data={data} profile={profile} />
-          </RightColumn>
-        </div>
+        {body}
       </div>
       <Top10Popup open={t10.open} onClose={t10.close} data={data} />
     </div>

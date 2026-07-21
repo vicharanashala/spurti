@@ -281,6 +281,7 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
+      <WeeklyLeaderboardDesktop email={student.email} profile={student} inline />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['replays','Replays']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
@@ -874,7 +875,6 @@ function SurveyModal({ survey, student, onDone }) {
 function ReplaySection({ profile }) {
   const [weeklyOpen, setWeeklyOpen] = useState(false);
   const [finalOpen, setFinalOpen] = useState(false);
-  const [lbOpen, setLbOpen] = useState(false);
   const [share, setShare] = useState(null);
   const [unlocked, setUnlocked] = useState(false);
   useEffect(() => {
@@ -885,9 +885,6 @@ function ReplaySection({ profile }) {
     <>
       <div className="entry-pill-row">
         <EntryPill kind="weekly" onClick={() => setWeeklyOpen(true)} />
-        <span style={{ display: 'inline-block', marginLeft: 10 }}>
-          <EntryPill kind="leaderboard" onClick={() => setLbOpen(true)} />
-        </span>
         {unlocked && (
           <span style={{ display: 'inline-block', marginLeft: 10 }}>
             <EntryPill kind="final" onClick={() => setFinalOpen(true)} />
@@ -903,12 +900,6 @@ function ReplaySection({ profile }) {
           profile={profile}
           onClose={() => setShare(null)}
         />
-      )}
-      {lbOpen && (
-        <div className="wl-overlay" role="dialog" aria-modal="true" aria-label="Weekly Leaderboard">
-          <button type="button" className="wl-overlay__close" onClick={() => setLbOpen(false)} aria-label="Close leaderboard">×</button>
-          <WeeklyLeaderboardDesktop email={profile.student.email} profile={profile.student} />
-        </div>
       )}
     </>
   );
