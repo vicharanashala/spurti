@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
+import { WeeklyProgressGraph } from './WeeklyProgressGraph';
 
 // ============================================================
 // Weekly Performance Curve (graph view)
@@ -289,6 +290,7 @@ export function WeeklyLeaderboard({ data }) {
       </header>
 
       <RankGraph rows={allRows} cohortSize={cohortSize} myRank={myRank} top10Boundary={top10Boundary} topRef={listRef} />
+      <WeeklyProgressGraph data={data} email={data?.me?.email || ''} />
     </div>
   );
 }
