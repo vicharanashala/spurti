@@ -288,6 +288,17 @@ export function calculateLearningInsights(attendanceRecords = [], student = {}) 
   const bestPeriod = strongestPeriod;
   const worstPeriod = [...periodStats].sort((a, b) => a.attendancePct - b.attendancePct || a.averageMinutes - b.averageMinutes)[0] || null;
 
+  const recentWindowSize = Math.min(10, totalSessions);
+  const recentRecords = enriched.slice(-recentWindowSize);
+  const recentAttended = recentRecords.filter((record) => record.isAttended).length;
+  const recentAttendancePct = recentWindowSize ? Math.round((recentAttended / recentWindowSize) * 100) : 0;
+
+  const last5 = enriched.slice(-5);
+  const prev5 = enriched.slice(-10, -5);
+  const last5Pct = last5.length ? Math.round((last5.filter((r) => r.isAttended).length / last5.length) * 100) : 0;
+  const prev5Pct = prev5.length ? Math.round((prev5.filter((r) => r.isAttended).length / prev5.length) * 100) : 0;
+  const recentMomentum = last5Pct - prev5Pct;
+
   const trendSeries = enriched.map((record, index) => ({
     index,
     sessionPct: record.attendancePercentage || (record.isAttended ? 100 : 0)
@@ -299,7 +310,18 @@ export function calculateLearningInsights(attendanceRecords = [], student = {}) 
   const historicalTrend = latestAverage - earliestAverage;
 
   const streaks = computeStreak(enriched);
-  const score = Math.max(0, Math.min(100, Math.round((attendancePct * 0.7) + (streaks.longest / Math.max(1, totalSessions)) * 25 + (Math.max(0, historicalTrend) / 100) * 5)));
+
+  const recentStreakScore = (streaks.current / Math.max(1, recentWindowSize)) * 15;
+  const longestStreakScore = (streaks.longest / Math.max(1, totalSessions)) * 5;
+
+  const rawScore =
+    (recentAttendancePct * 0.45) +
+    (attendancePct * 0.25) +
+    recentStreakScore +
+    longestStreakScore +
+    (Math.max(0, recentMomentum) / 100) * 10;
+
+  const score = Math.max(0, Math.min(100, Math.round(rawScore)));
 
   const sessionHistory = enriched.map((record) => ({
     ...record,
@@ -314,6 +336,9 @@ export function calculateLearningInsights(attendanceRecords = [], student = {}) 
     sessionsAttended,
     sessionsMissed,
     attendancePct,
+    recentAttendancePct,
+    recentWindowSize,
+    recentMomentum,
     averageMinutes,
     longestStreak: streaks.longest,
     currentStreak: streaks.current,

@@ -197,6 +197,11 @@ function LearningInsights({ profile }) {
           </div>
           <p className="muted"><strong>{data.consistencyScore} / 100</strong></p>
           <p className="muted">{data.consistencyLabel}</p>
+          {data.recentWindowSize ? (
+            <small className="muted" style={{ display: 'block', marginTop: '0.4rem' }}>
+              Weighted towards last {data.recentWindowSize} sessions ({data.recentAttendancePct}% recent rate)
+            </small>
+          ) : null}
         </section>
       </div>
 
