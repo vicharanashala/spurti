@@ -10,6 +10,7 @@ import { isFinalJourneyUnlocked, buildReplayHistory } from './components/replay/
 import './components/replay/replay.css';
 import { WeeklyLeaderboardDesktop } from './components/weekly-leaderboard/WeeklyLeaderboardDesktop.tsx';
 import './components/weekly-leaderboard/WeeklyLeaderboardDesktop.css';
+import { RankJourney } from './components/rank-system/RankJourney';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -279,7 +280,7 @@ function StudentView({ profile, onBack }) {
         </div>
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
-      <LevelStatus student={student} />
+      <RankJourney sp={Number(student.totalSp) || 0} profile={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <WeeklyLeaderboardDesktop email={student.email} profile={student} inline />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['replays','Replays']]} />

@@ -1,50 +1,76 @@
 /**
- * Spurti Levels, Trophy Leagues, Legend status, and biweekly onboarding groups.
+ * Spurti Ranks — gamified progression system inspired by ranked emblems.
+ * Pure functions, no DB writes. The student's current rank is derived
+ * from their total SP.
  *
- * These are DERIVED VIEWS over the existing SP system — pure functions, no DB,
- * no side effects. SP transactions and balances are never changed here.
- * Spec: research/05_experiments/spurti_levels_leagues/samagama_spurti_levels_leagues_spec.md
+ * Spec (May 2026 redesign): every intern starts at 100 SP and tops out at
+ * 1500 SP ("Master"). 16 named ranks across 6 tiers, distributed evenly
+ * along the 100–1500 span.
  */
 
-// Current SP -> Trophy League. Exact bands from the spec (§4).
-const LEAGUE_BANDS = [
-  [1500, Infinity, 'Legend'],
-  [1400, 1499, 'Diamond I'],
-  [1300, 1399, 'Diamond II'],
-  [1200, 1299, 'Diamond III'],
-  [1100, 1199, 'Platinum I'],
-  [1000, 1099, 'Platinum II'],
-  [900, 999, 'Platinum III'],
-  [800, 899, 'Gold I'],
-  [700, 799, 'Gold II'],
-  [600, 699, 'Gold III'],
-  [500, 599, 'Silver I'],
-  [400, 499, 'Silver II'],
-  [300, 399, 'Silver III'],
-  [200, 299, 'Bronze I'],
-  [100, 199, 'Bronze II'],
-  [0, 99, 'Bronze III'],
+const RANK_TABLE = [
+  { min: 1500, name: 'Master',     tier: 'master',  idx: 16 },
+  { min: 1400, name: 'Heroic I',    tier: 'heroic',  idx: 15 },
+  { min: 1300, name: 'Heroic II',   tier: 'heroic',  idx: 14 },
+  { min: 1200, name: 'Heroic III',  tier: 'heroic',  idx: 13 },
+  { min: 1100, name: 'Diamond I',   tier: 'diamond', idx: 12 },
+  { min: 1000, name: 'Diamond II',  tier: 'diamond', idx: 11 },
+  { min:  900, name: 'Diamond III', tier: 'diamond', idx: 10 },
+  { min:  800, name: 'Gold I',      tier: 'gold',    idx:  9 },
+  { min:  700, name: 'Gold II',     tier: 'gold',    idx:  8 },
+  { min:  600, name: 'Gold III',    tier: 'gold',    idx:  7 },
+  { min:  500, name: 'Silver I',    tier: 'silver',  idx:  6 },
+  { min:  400, name: 'Silver II',   tier: 'silver',  idx:  5 },
+  { min:  300, name: 'Silver III',  tier: 'silver',  idx:  4 },
+  { min:  200, name: 'Bronze I',    tier: 'bronze',  idx:  3 },
+  { min:  100, name: 'Bronze II',   tier: 'bronze',  idx:  2 },
+  { min:    0, name: 'Bronze III',  tier: 'bronze',  idx:  1 }
 ];
 
+export const STARTING_SP = 100;
+export const MAX_SP = 1500;
+export const RANKS = RANK_TABLE.slice().sort((a, b) => a.min - b.min);
+
+export function rankFor(sp) {
+  const v = Math.max(0, Math.min(MAX_SP, Number(sp) || 0));
+  // Iterate descending so the highest-matching rank wins (Bronze III is
+  // min=0, which would otherwise match every SP >= 0).
+  for (let i = RANKS.length - 1; i >= 0; i--) {
+    if (v >= RANKS[i].min) return RANKS[i];
+  }
+  return RANKS[0];
+}
+
+export function nextRank(sp) {
+  const v = Math.max(0, Math.min(MAX_SP, Number(sp) || 0));
+  // First rank whose minimum is strictly greater than the student's SP.
+  for (let i = 0; i < RANKS.length; i++) {
+    if (v < RANKS[i].min) return { rank: RANKS[i], spNeeded: RANKS[i].min - v };
+  }
+  return null;
+}
+
+// Legacy compatibility shim — old code calls leagueBand(currentSp).
+// Maps the new rank name back to a short label that the rest of the app
+// can still consume.
 export function leagueBand(currentSp) {
-  const sp = Math.max(0, Number(currentSp) || 0);
-  for (const [lo, hi, name] of LEAGUE_BANDS) if (sp >= lo && sp <= hi) return name;
-  return 'Bronze III';
+  return rankFor(currentSp).name;
 }
 
-// Level = lifetime achievement, never decreases. floor(highestSpEver / 100).
+// Legacy compatibility shim — levelFor(highestSpEver) used to mean
+// "level = floor(sp / 100)". The new system uses idx (1..16) instead.
+// Return idx so the existing UI shows the rank number, which is more
+// useful than a /100 level counter.
 export function levelFor(highestSpEver) {
-  return Math.floor(Math.max(0, Number(highestSpEver) || 0) / 100);
+  return rankFor(highestSpEver).idx;
 }
 
-// Legend Badge = highestSpEver >= 1500, permanent once unlocked.
+// Master = highestSpEver >= 1500, permanent once unlocked.
 export function legendBadge(highestSpEver) {
   return (Number(highestSpEver) || 0) >= 1500;
 }
 
-// Biweekly onboarding group from a date: day 1-15 -> first half, 16-end -> second half.
-// Returns e.g. "2026-06-01_to_2026-06-15". Uses UTC date parts (onboarding dates
-// in this system are stored at 09:00 IST = 03:30Z, so the UTC day matches intent).
+// Biweekly onboarding group (unchanged from before — same semantics).
 export function leaderboardGroup(onboardingDate) {
   if (!onboardingDate) return '';
   const d = new Date(onboardingDate);
