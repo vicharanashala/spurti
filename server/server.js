@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import leaderboardRouter from './routes/leaderboard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -91,6 +92,7 @@ function surveyPublic(cfg) {
 
 const app = express();
 const api = express.Router();
+api.use('/leaderboard', leaderboardRouter);
 const liveViewers = new Map();
 
 app.use(cors());
