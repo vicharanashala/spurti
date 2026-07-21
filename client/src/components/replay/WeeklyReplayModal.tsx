@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { StorySlide } from './StorySlide';
 import { buildWeeklyReplay } from './replayEngine';
+import { ShareAchievementModal } from './ShareAchievementModal';
 
 function makeSlides(data) {
   if (!data) return [];
@@ -19,31 +20,76 @@ export const WeeklyReplayModal = ({ open, onClose, profile, onOpenShare }) => {
   const data = useMemo(() => profile ? buildWeeklyReplay(profile) : null, [profile]);
   const slides = useMemo(() => makeSlides(data), [data]);
   const [idx, setIdx] = useState(0);
+  const [achvOpen, setAchvOpen] = useState(false);
   function go(next) {
     if (next === 'close') return onClose && onClose();
     if (next === 'prev') setIdx(i => Math.max(0, i - 1));
     if (next === 'next') setIdx(i => Math.min(slides.length - 1, i + 1));
   }
   function goNextAuto() { setIdx(i => Math.min(slides.length - 1, i + 1)); }
+
+  // Build the achievement payload from replay data + profile.
+  const achvPayload = useMemo(() => {
+    if (!profile) return null;
+    const studentName = profile.student?.name || 'Student';
+    const badges = Array.isArray(profile.badges) ? profile.badges : [];
+    const weeklySp = data?.spEarned ?? 0;
+    const weeklyRank = data?.highestRank ?? profile.student?.rank ?? '—';
+    const sessionsAttended = data?.sessionsAttended ?? 0;
+    const pollsAnswered = data?.pollsAnswered ?? 0;
+    const totalSp = profile.student?.totalSp ?? 0;
+    const cohortSize = profile.student?.cohortSize ?? '—';
+    const weekStart = data?.weekStartIso;
+    const weekEnd = data?.weekEndIso;
+    const fmtRange = (a, b) => {
+      if (!a || !b) return 'This Week';
+      const fa = (iso) => {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return '';
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      };
+      return `${fa(a)} – ${fa(b)}`;
+    };
+    const weekLabel = fmtRange(weekStart, weekEnd);
+    const title = (() => {
+      if (weeklySp >= 50) return '🏆 Spurti Legend';
+      if (weeklySp >= 30) return '🔥 Spurti Champion';
+      if (weeklySp >= 15) return '⚡ Spurti Achiever';
+      if (weeklySp >= 5)  return '🌱 Spurti Builder';
+      return '✨ Spurti Starter';
+    })();
+    return { studentName, weekLabel, weeklySp, weeklyRank, totalSp, cohortSize, badges, achievementTitle: title, sessionsAttended, pollsAnswered };
+  }, [profile, data]);
+
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div className="replay-modal" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
-          <div className="replay-modal__stage">
-            <AnimatePresence mode="wait">
-              {slides[idx] && (
-                <StorySlide key={idx} slide={slides[idx]} index={idx} total={slides.length} onNext={goNextAuto} onPrev={go} autoMs={slides[idx].autoMs} />
-              )}
-            </AnimatePresence>
-          </div>
-          {idx === slides.length - 1 && (
-            <div className="replay-modal__endbar">
-              <button type="button" className="replay-endbar__btn" onClick={() => onOpenShare && onOpenShare('weekly', data)}>📤 Share</button>
-              <button type="button" className="replay-endbar__btn is-primary" onClick={onClose}>Close</button>
+    <>
+      <AnimatePresence>
+        {open && (
+          <motion.div className="replay-modal" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
+            <div className="replay-modal__stage">
+              <AnimatePresence mode="wait">
+                {slides[idx] && (
+                  <StorySlide key={idx} slide={slides[idx]} index={idx} total={slides.length} onNext={goNextAuto} onPrev={go} autoMs={slides[idx].autoMs} />
+                )}
+              </AnimatePresence>
             </div>
-          )}
-        </motion.div>
+            {idx === slides.length - 1 && (
+              <div className="replay-modal__endbar">
+                <button type="button" className="replay-endbar__btn" onClick={() => onOpenShare && onOpenShare('weekly', data)}>📤 Share</button>
+                <button type="button" className="replay-endbar__btn is-primary" onClick={() => setAchvOpen(true)}>⭐ Share Achievement</button>
+                <button type="button" className="replay-endbar__btn" onClick={onClose}>Close</button>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+      {achvPayload && (
+        <ShareAchievementModal
+          open={achvOpen}
+          onClose={() => setAchvOpen(false)}
+          payload={achvPayload}
+        />
       )}
-    </AnimatePresence>
+    </>
   );
 };

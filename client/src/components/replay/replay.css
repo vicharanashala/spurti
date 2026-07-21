@@ -46,3 +46,268 @@
 .share-modal__btn { appearance: none; border: 1px solid #cbd5e1; background: #ffffff; color: #1e293b; padding: 8px 14px; border-radius: 999px; font-size: 12px; font-weight: 800; cursor: pointer; }
 .share-modal__btn.is-ghost { background: transparent; }
 .share-modal__btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ============================================================
+   Premium Share & Export Modal
+   ============================================================ */
+.share-achv {
+  position: fixed; inset: 0; z-index: 1100;
+  background: rgba(15, 23, 42, 0.78);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: grid; place-items: center;
+  padding: 16px;
+  overflow-y: auto;
+}
+.share-achv__inner {
+  position: relative;
+  width: min(720px, 100%);
+  background: #ffffff;
+  border-radius: 18px;
+  box-shadow: 0 30px 60px rgba(15, 23, 42, 0.35), 0 4px 12px rgba(15, 23, 42, 0.15);
+  padding: 20px 22px 22px;
+  display: grid; gap: 16px;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+.share-achv__close {
+  position: absolute; top: 10px; right: 12px;
+  width: 30px; height: 30px;
+  background: transparent; border: 0;
+  font-size: 22px; line-height: 1;
+  cursor: pointer; color: #6b7280;
+  border-radius: 50%;
+  transition: background 0.15s, color 0.15s;
+}
+.share-achv__close:hover { background: #f3f4f6; color: #1f2937; }
+
+.share-achv__head h2 {
+  margin: 0 0 4px;
+  font-size: 18px; font-weight: 800; color: #1f2937;
+}
+.share-achv__head p {
+  margin: 0; font-size: 12px; color: #6b7280;
+}
+
+.share-achv__preview {
+  display: grid; place-items: center;
+  padding: 8px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* ===== The capture target — premium LinkedIn-ready card ===== */
+.achv-card {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 1080 / 680;
+  padding: 28px 32px 22px;
+  border-radius: 16px;
+  color: #ffffff;
+  background:
+    radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.55) 0%, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(236, 72, 153, 0.45) 0%, transparent 55%),
+    linear-gradient(135deg, #0F172A 0%, #312E81 60%, #4C1D95 100%);
+  overflow: hidden;
+  isolation: isolate;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.45), 0 4px 12px rgba(15, 23, 42, 0.25);
+  display: grid;
+  grid-template-rows: auto auto 1fr auto auto;
+  gap: 14px;
+}
+.achv-card__decor {
+  position: absolute; border-radius: 50%; filter: blur(60px); pointer-events: none; z-index: -1;
+}
+.achv-card__decor--1 { top: -40px; left: -40px; width: 220px; height: 220px; background: rgba(56, 189, 248, 0.35); }
+.achv-card__decor--2 { bottom: -50px; right: -30px; width: 260px; height: 260px; background: rgba(244, 114, 182, 0.35); }
+.achv-card__decor--3 { top: 30%; left: 40%; width: 180px; height: 180px; background: rgba(167, 139, 250, 0.25); transform: translate(-50%, -50%); }
+
+.achv-card__top {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.achv-card__brand { display: flex; align-items: center; gap: 10px; }
+.achv-card__brand-mark {
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  font-weight: 900; font-size: 18px;
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.45);
+}
+.achv-card__brand-name { font-size: 13px; font-weight: 900; letter-spacing: 0.18em; }
+.achv-card__brand-tag { font-size: 9px; color: rgba(255, 255, 255, 0.75); letter-spacing: 0.04em; }
+.achv-card__week {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+}
+
+.achv-card__hero { text-align: center; }
+.achv-card__eyebrow {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.18em;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 6px;
+}
+.achv-card__title {
+  font-size: clamp(20px, 3vw, 28px);
+  font-weight: 900;
+  background: linear-gradient(135deg, #ffffff 0%, #FCD34D 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  margin-bottom: 4px;
+  line-height: 1.15;
+}
+.achv-card__student {
+  font-size: 16px; font-weight: 700;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.achv-card__stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.achv-card__stat {
+  padding: 10px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  text-align: center;
+}
+.achv-card__stat--sp {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.35), rgba(5, 150, 105, 0.45));
+  border-color: rgba(16, 185, 129, 0.4);
+}
+.achv-card__stat--rank {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.35), rgba(37, 99, 235, 0.45));
+  border-color: rgba(59, 130, 246, 0.4);
+}
+.achv-card__stat-label {
+  font-size: 9px; font-weight: 800;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.8);
+  margin-bottom: 4px;
+}
+.achv-card__stat-value {
+  font-size: 22px; font-weight: 900;
+  color: #ffffff; line-height: 1.1;
+}
+.achv-card__stat-foot {
+  font-size: 8.5px; font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+  margin-top: 2px;
+}
+
+.achv-card__badges { text-align: center; }
+.achv-card__badges-label {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.18em;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 6px;
+}
+.achv-card__badges-row {
+  display: flex; justify-content: center; flex-wrap: wrap; gap: 6px;
+}
+.achv-card__badge {
+  display: inline-flex; align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(252, 211, 77, 0.25), rgba(245, 158, 11, 0.35));
+  border: 1px solid rgba(252, 211, 77, 0.4);
+  color: #FCD34D;
+  font-size: 10px; font-weight: 700;
+}
+
+.achv-card__footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+}
+.achv-card__footer-mark {
+  font-size: 11px; font-weight: 900; letter-spacing: 0.18em;
+}
+.achv-card__footer-text {
+  font-size: 10px; color: rgba(255, 255, 255, 0.7);
+  font-style: italic;
+}
+.achv-card__footer-url {
+  font-size: 10px; font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
+  letter-spacing: 0.06em;
+}
+
+/* ===== Action area ===== */
+.share-achv__export {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+}
+.share-achv__btn {
+  appearance: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 13px; font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.share-achv__btn:active { transform: translateY(1px); }
+.share-achv__btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.share-achv__btn--primary {
+  background: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%);
+  color: #ffffff;
+  border-color: #4F46E5;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+}
+.share-achv__btn--primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #4F46E5 0%, #4338CA 100%);
+}
+
+.share-achv__share {
+  border-top: 1px solid #e5e7eb;
+  padding-top: 14px;
+}
+.share-achv__share-label {
+  display: block;
+  font-size: 10px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+.share-achv__share-grid {
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px;
+}
+.share-achv__share-btn {
+  appearance: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  padding: 10px 4px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  border-radius: 8px;
+  font-size: 9.5px; font-weight: 700;
+  color: #1f2937;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.share-achv__share-btn:hover { background: #f9fafb; border-color: #d1d5db; }
+.share-achv__share-btn:active { transform: translateY(1px); }
+.share-achv__share-btn.is-copied { background: #ECFDF5; border-color: #10B981; color: #047857; }
+.share-achv__share-ico {
+  display: grid; place-items: center;
+  width: 26px; height: 26px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f3f4f6, #e5e7eb);
+  color: #1f2937;
+  font-size: 13px; font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
+@media (max-width: 640px) {
+  .share-achv__inner { padding: 16px; }
+  .share-achv__share-grid { grid-template-columns: repeat(3, 1fr); }
+}
