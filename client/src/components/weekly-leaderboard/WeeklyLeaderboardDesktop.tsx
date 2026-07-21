@@ -6,6 +6,9 @@ import { RightRail } from './RightRail';
 import { Top10Popup, useAutoTop10 } from './Top10Popup';
 import { RegularUserCard } from './RegularUserCard';
 import { FreshWeekEmpty } from './FreshWeekEmpty';
+import { WeeklyChampionsPopup, wasChampionsDismissed, markChampionsDismissed } from '../weekly-recap/WeeklyChampionsPopup';
+import { AIRecoveryCoachPopup, wasCoachDismissed, markCoachDismissed } from '../weekly-recap/AIRecoveryCoachPopup';
+import '../weekly-recap/WeeklyRecap.css';
 
 // ============================================================
 // Weekly Leaderboard — Desktop Shell
@@ -171,6 +174,7 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [recap, setRecap] = useState(null);
 
   const fetchData = useCallback(async () => {
     if (!email) return;
@@ -193,7 +197,25 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
     document.documentElement.dataset.wlTheme = theme;
   }, [theme]);
 
+  // Fetch the weekly recap (last week's champions + this student's
+  // bottom-50 AI recovery plan if applicable). The recap populates
+  // the Monday-morning popups.
+  useEffect(() => {
+    if (!email) return;
+    let cancelled = false;
+    fetch(`${API}/weekly/recap?email=${encodeURIComponent(email)}`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('recap failed')))
+      .then(j => { if (!cancelled) setRecap(j); })
+      .catch(() => { /* silent — popups simply don't appear */ });
+    return () => { cancelled = true; };
+  }, [email]);
+
   const t10 = useAutoTop10(data);
+
+  // Weekly recap popups — Champions first (everyone), then AI Coach
+  // (only bottom-50 students). Dismissed flags are keyed on recapId
+  // (weekStart) so each popup shows only once per week.
+  const recapOpen = useWeeklyRecapPopups(email, recap);
 
   const body = (
     <div className="wl-body">
@@ -220,6 +242,19 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
       <div className={`wl-shell-inline wl-shell--${theme}`} data-theme={theme}>
         {body}
         <Top10Popup open={t10.open} onClose={t10.close} data={data} />
+        <WeeklyChampionsPopup
+          open={recapOpen.showChampions}
+          onClose={() => { markChampionsDismissed(recap?.recapId); recapOpen.closeChampions(); }}
+          recap={recap?.recap}
+          recapId={recap?.recapId}
+        />
+        <AIRecoveryCoachPopup
+          open={recapOpen.showCoach}
+          onClose={() => { markCoachDismissed(recap?.recapId); recapOpen.closeCoach(); }}
+          plan={recap?.plan}
+          recapId={recap?.recapId}
+          email={email}
+        />
       </div>
     );
   }
@@ -232,6 +267,63 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
         {body}
       </div>
       <Top10Popup open={t10.open} onClose={t10.close} data={data} />
+      <WeeklyChampionsPopup
+        open={recapOpen.showChampions}
+        onClose={() => { markChampionsDismissed(recap?.recapId); recapOpen.closeChampions(); }}
+        recap={recap?.recap}
+        recapId={recap?.recapId}
+      />
+      <AIRecoveryCoachPopup
+        open={recapOpen.showCoach}
+        onClose={() => { markCoachDismissed(recap?.recapId); recapOpen.closeCoach(); }}
+        plan={recap?.plan}
+        recapId={recap?.recapId}
+        email={email}
+      />
     </div>
   );
+}
+
+// ============================================================
+// useWeeklyRecapPopups
+// State machine for the Monday-morning recap experience:
+//   1. Champions popup (everyone) — opens first
+//   2. AI Coach popup (bottom-50 only) — opens after Champions closes
+// Each popup shows only once per week (recapId = weekStart key).
+// ============================================================
+function useWeeklyRecapPopups(email, recap) {
+  const [showChampions, setShowChampions] = useState(false);
+  const [showCoach, setShowCoach] = useState(false);
+
+  // When the recap arrives (or user changes), trigger the cascade.
+  useEffect(() => {
+    if (!recap || !recap.recap || !recap.recapId) return;
+    if (!email) return;
+    // Skip if both already dismissed this week.
+    const champDismissed = wasChampionsDismissed(recap.recapId);
+    const coachDismissed = wasCoachDismissed(recap.recapId);
+    if (champDismissed && (coachDismissed || !recap.plan)) return;
+
+    // Tiny delay so the dashboard mounts first — feels intentional.
+    const t = setTimeout(() => {
+      if (!champDismissed) setShowChampions(true);
+      // AI Coach opens after Champions closes (handled in closeChampions).
+      else if (!coachDismissed && recap.plan) setShowCoach(true);
+    }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recap?.recapId, recap?.plan, email]);
+
+  return {
+    showChampions,
+    showCoach,
+    closeChampions: () => {
+      setShowChampions(false);
+      // Cascade to AI Coach if applicable and not yet dismissed.
+      if (recap?.plan && recap?.recapId && !wasCoachDismissed(recap.recapId)) {
+        setTimeout(() => setShowCoach(true), 400);
+      }
+    },
+    closeCoach: () => setShowCoach(false)
+  };
 }

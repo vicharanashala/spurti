@@ -14,6 +14,8 @@ import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import weeklyRouter from './routes/weekly.js';
+import recapRouter from './routes/recap.js';
+import { startWeeklyRecapScheduler } from './services/weeklyRecapScheduler.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -598,6 +600,8 @@ app.use('/api', api);
 app.use('/spurti/api', api);
 app.use('/api/weekly', weeklyRouter);
 app.use('/spurti/api/weekly', weeklyRouter);
+app.use('/api/weekly', recapRouter);
+app.use('/spurti/api/weekly', recapRouter);
 
 if (fs.existsSync(clientDist)) {
   app.use('/spurti', express.static(clientDist));
@@ -609,6 +613,7 @@ if (fs.existsSync(clientDist)) {
 }
 
 mongoose.connect(MONGO_URI).then(() => {
+  startWeeklyRecapScheduler();
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
 }).catch((error) => {
   console.error(error);

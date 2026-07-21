@@ -1,0 +1,422 @@
+/* ============================================================
+   Weekly Recap — Champions Popup + AI Recovery Coach Popup
+   Calm blue/green/purple palette, soft gradients, glassmorphism.
+   No red, no harsh warnings. Apple-inspired typography.
+   ============================================================ */
+
+.rc-overlay {
+  position: fixed; inset: 0; z-index: 1300;
+  background: rgba(8, 12, 26, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: grid; place-items: center;
+  padding: 24px;
+  overflow-y: auto;
+}
+.rc-overlay__close {
+  position: absolute; top: 14px; right: 18px;
+  width: 32px; height: 32px;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  background: rgba(255, 255, 255, 0.8);
+  color: #475569;
+  font-size: 18px; line-height: 1;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 5;
+  transition: background 0.15s, transform 0.1s;
+}
+.rc-overlay__close:hover { background: rgba(99, 102, 241, 0.12); color: #4f46e5; }
+.rc-overlay__close:active { transform: scale(0.94); }
+
+/* ===== Weekly Champions Popup ===== */
+.rc-champ {
+  position: relative;
+  width: min(560px, 92vw);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background:
+    radial-gradient(at 0% 0%, rgba(251, 191, 36, 0.18) 0%, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(99, 102, 241, 0.18) 0%, transparent 55%),
+    linear-gradient(180deg, #fffefb 0%, #ffffff 100%);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 22px;
+  box-shadow: 0 30px 80px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+  padding: 24px 26px 22px;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #1f2937;
+}
+.rc-champ__head { text-align: center; margin-bottom: 16px; }
+.rc-champ__eyebrow {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase;
+  color: #d97706;
+  margin-bottom: 6px;
+}
+.rc-champ__title {
+  margin: 0 0 6px;
+  font-size: 24px; font-weight: 900;
+  letter-spacing: -0.01em;
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #b45309 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  line-height: 1.15;
+}
+.rc-champ__emoji {
+  display: inline-block;
+  font-size: 26px;
+  margin-right: 4px;
+  -webkit-text-fill-color: initial;
+  background: none;
+  color: initial;
+}
+.rc-champ__sub {
+  margin: 0 auto;
+  max-width: 460px;
+  font-size: 12.5px;
+  color: #475569;
+  line-height: 1.5;
+}
+.rc-champ__stamp {
+  position: absolute; top: 14px; left: 18px;
+  font-size: 8.5px; font-weight: 800; letter-spacing: 0.18em;
+  color: rgba(217, 119, 6, 0.6);
+  text-transform: uppercase;
+}
+
+.rc-champ__list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 6px;
+  margin-bottom: 18px;
+}
+.rc-champ__row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(99, 102, 241, 0.05);
+  border: 1px solid rgba(99, 102, 241, 0.12);
+  font-size: 12px;
+}
+.rc-champ__row.is-gold {
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.22) 0%, rgba(245, 158, 11, 0.12) 100%);
+  border: 1.5px solid rgba(251, 191, 36, 0.5);
+  box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.15), 0 4px 14px rgba(251, 191, 36, 0.18);
+  animation: rc-champ-gold-pulse 2.6s ease-in-out infinite;
+}
+@keyframes rc-champ-gold-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.15), 0 4px 14px rgba(251, 191, 36, 0.18); }
+  50%      { box-shadow: 0 0 0 4px rgba(251, 191, 36, 0.3), 0 4px 20px rgba(251, 191, 36, 0.3); }
+}
+.rc-champ__rank {
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border-radius: 8px;
+  font-size: 11px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.7);
+  color: #1f2937;
+}
+.rc-champ__rank--p1 {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  color: #1f1500;
+  box-shadow: 0 4px 10px rgba(251, 191, 36, 0.4);
+}
+.rc-champ__rank--p2 {
+  background: linear-gradient(135deg, #e5e7eb 0%, #9ca3af 100%);
+  color: #1f2937;
+  box-shadow: 0 3px 8px rgba(156, 163, 175, 0.3);
+}
+.rc-champ__rank--p3 {
+  background: linear-gradient(135deg, #fb923c 0%, #c2410c 100%);
+  color: #fff;
+  box-shadow: 0 3px 8px rgba(251, 146, 60, 0.3);
+}
+.rc-champ__name {
+  font-weight: 700; color: #1f2937;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rc-champ__sp {
+  font-weight: 900; color: #059669;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+.rc-champ__badge {
+  display: inline-flex; align-items: center;
+  font-size: 9.5px; font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.rc-champ__pct {
+  font-weight: 800;
+  color: #4f46e5;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.rc-champ__foot {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.06), rgba(99, 102, 241, 0.06));
+  border: 1px solid rgba(99, 102, 241, 0.18);
+}
+.rc-champ__new { flex: 1; min-width: 0; }
+.rc-champ__new-eyebrow {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
+  color: #047857;
+  margin-bottom: 3px;
+}
+.rc-champ__new-text {
+  font-size: 12px; color: #1e293b; line-height: 1.4;
+  font-weight: 600;
+}
+.rc-champ__btn {
+  appearance: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 10px 18px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 12px; font-weight: 800;
+  cursor: pointer;
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+  white-space: nowrap;
+  transition: background 0.15s, transform 0.1s;
+}
+.rc-champ__btn:hover { filter: brightness(1.06); }
+.rc-champ__btn:active { transform: translateY(1px); }
+
+/* ===== AI Recovery Coach Popup ===== */
+.rc-coach {
+  position: relative;
+  width: min(620px, 94vw);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background:
+    radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.18) 0%, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.16) 0%, transparent 55%),
+    linear-gradient(180deg, #f0f9ff 0%, #ffffff 100%);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 22px;
+  box-shadow: 0 30px 80px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+  padding: 22px 26px 22px;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #1f2937;
+}
+.rc-coach__head { text-align: center; margin-bottom: 14px; }
+.rc-coach__brain {
+  font-size: 30px;
+  filter: drop-shadow(0 4px 14px rgba(56, 189, 248, 0.4));
+  margin-bottom: 6px;
+}
+.rc-coach__title {
+  margin: 0 0 6px;
+  font-size: 22px; font-weight: 900;
+  letter-spacing: -0.01em;
+  background: linear-gradient(135deg, #38bdf8 0%, #8b5cf6 50%, #10b981 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  line-height: 1.15;
+}
+.rc-coach__sub {
+  margin: 0 auto;
+  font-size: 12.5px;
+  color: #475569;
+  line-height: 1.5;
+}
+.rc-coach__sub-h {
+  margin-top: 6px;
+  font-size: 11.5px; font-weight: 700;
+  color: #1e40af;
+  font-style: italic;
+}
+
+.rc-coach__observations {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 8px 0 14px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(56, 189, 248, 0.06);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+}
+.rc-coach__observation {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 11.5px;
+  color: #1e293b;
+  line-height: 1.5;
+}
+.rc-coach__observation-icon {
+  color: #38bdf8; font-weight: 800;
+  flex-shrink: 0;
+}
+
+.rc-coach__plan-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(56, 189, 248, 0.18);
+}
+.rc-coach__plan-eyebrow {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
+  color: #4f46e5;
+}
+.rc-coach__plan-counter {
+  font-size: 10px; font-weight: 700;
+  color: #1e293b;
+  background: rgba(56, 189, 248, 0.1);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.rc-coach__plan-counter b { color: #4f46e5; font-weight: 900; }
+
+.rc-coach__plan {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.rc-coach__day {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(56, 189, 248, 0.15);
+}
+.rc-coach__day-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 10px; font-weight: 800;
+  color: #4f46e5;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.rc-coach__day-count {
+  font-size: 8.5px; font-weight: 700;
+  color: #94a3b8;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.rc-coach__day-tasks {
+  display: flex; flex-direction: column; gap: 3px;
+}
+.rc-coach__task {
+  appearance: none;
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  font-size: 10.5px;
+  color: #1e293b;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
+}
+.rc-coach__task:hover { background: rgba(56, 189, 248, 0.06); }
+.rc-coach__task.is-done {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.18), rgba(5, 150, 105, 0.06));
+  border-color: rgba(16, 185, 129, 0.45);
+  color: #047857;
+}
+.rc-coach__task.is-done .rc-coach__task-label { text-decoration: line-through; opacity: 0.85; }
+.rc-coach__task-box {
+  width: 14px; height: 14px;
+  display: grid; place-items: center;
+  border-radius: 4px;
+  border: 1.5px solid #94a3b8;
+  background: transparent;
+  color: transparent;
+  font-size: 9px; font-weight: 900;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.rc-coach__task.is-done .rc-coach__task-box {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  border-color: #10b981;
+  color: #fff;
+}
+.rc-coach__task-label { line-height: 1.3; }
+
+.rc-coach__outcome {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.06), rgba(139, 92, 246, 0.06));
+  border: 1px solid rgba(56, 189, 248, 0.2);
+}
+.rc-coach__outcome-eyebrow {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
+  color: #6366f1;
+  margin-bottom: 8px;
+}
+.rc-coach__outcome-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  margin-bottom: 8px;
+}
+.rc-coach__outcome-stat {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+}
+.rc-coach__outcome-label {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: #64748b;
+}
+.rc-coach__outcome-val {
+  font-size: 18px; font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.rc-coach__outcome-val--blue   { color: #2563eb; }
+.rc-coach__outcome-val--green  { color: #059669; }
+.rc-coach__outcome-val--purple { color: #7c3aed; }
+.rc-coach__message {
+  font-size: 11.5px; font-weight: 600;
+  color: #1e40af;
+  font-style: italic;
+  text-align: center;
+  padding-top: 4px;
+}
+
+.rc-coach__actions {
+  display: flex; gap: 10px; justify-content: center;
+  padding-top: 4px;
+}
+.rc-coach__btn {
+  appearance: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 12px; font-weight: 800;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s, transform 0.1s;
+}
+.rc-coach__btn:active { transform: translateY(1px); }
+.rc-coach__btn--primary {
+  background: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3);
+}
+.rc-coach__btn--primary:hover { filter: brightness(1.06); }
+.rc-coach__btn--ghost {
+  background: rgba(255, 255, 255, 0.7);
+  color: #475569;
+  border-color: rgba(15, 23, 42, 0.1);
+}
+.rc-coach__btn--ghost:hover { background: rgba(15, 23, 42, 0.04); color: #1f2937; }
+
+@media (max-width: 640px) {
+  .rc-champ__row { grid-template-columns: 28px 1fr auto; row-gap: 4px; }
+  .rc-champ__row .rc-champ__badge { grid-column: 2 / 3; }
+  .rc-champ__row .rc-champ__pct { grid-column: 3 / 4; }
+  .rc-coach__plan { grid-template-columns: 1fr; }
+  .rc-coach__outcome-grid { grid-template-columns: 1fr; }
+}
