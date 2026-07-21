@@ -63,13 +63,25 @@ function App() {
     return () => { active = false; };
   }, []);
 
+  const refreshProfile = async () => {
+    try {
+      const meRes = await fetch(`${API}/me`);
+      if (meRes.ok) {
+        const data = await meRes.json();
+        if (data.authenticated && data.profile) {
+          setProfile(data.profile);
+        }
+      }
+    } catch (e) {}
+  };
+
   if (loading) {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
   }
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} onRefreshProfile={refreshProfile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -262,13 +274,13 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onRefreshProfile, onBack }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
   return (
-    <main className="page compact">
+    <main className={`page compact ${student.isCouncilMember ? 'council-member-layout' : ''}`}>
       <header className="topbar">
         {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
         <div>
@@ -279,10 +291,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['council', 'Student Council']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'council' && <StudentCouncilView profile={profile} onRefreshProfile={onRefreshProfile} />}
     </main>
   );
 }
@@ -416,6 +429,8 @@ function buildBadges(profile) {
   if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
   if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
   if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
+  if (profile.student.isEligibleForCouncil) badges.push('🎖 Eligible for Student Council');
+  if (profile.student.isCouncilMember) badges.push('👑 Student Council');
   return badges.length ? badges : ['Getting Started'];
 }
 
@@ -573,7 +588,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students'], ['council', 'Student Council']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -593,6 +608,7 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
+      {tab === 'council' && <AdminCouncilPanel stats={stats} auth={auth} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
   );
@@ -846,5 +862,752 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
+
+const maskEmail = (email) => {
+  if (!email || !email.includes('@')) return email;
+  const [local, domain] = email.split('@');
+  if (local.length <= 3) return `***@${domain}`;
+  return `${local.slice(0, 3)}***@${domain}`;
+};
+
+function StudentCouncilView({ profile, onRefreshProfile }) {
+  const { student } = profile;
+  const council = student.studentCouncil || {};
+  const [nominees, setNominees] = useState([]);
+  const [statement, setStatement] = useState('');
+  const [nomineeEmail, setNomineeEmail] = useState('');
+  const [submittingNomination, setSubmittingNomination] = useState(false);
+  const [refining, setRefining] = useState(false);
+  const [nominationMsg, setNominationMsg] = useState('');
+  const [votingMsg, setVotingMsg] = useState('');
+  
+  const [suggestionType, setSuggestionType] = useState('platformImprovement');
+  const [suggestionContent, setSuggestionContent] = useState('');
+  const [submittingSuggestion, setSubmittingSuggestion] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+  
+  const [rewardTracks, setRewardTracks] = useState([]);
+  const [showCertificate, setShowCertificate] = useState(false);
+  
+  const [electedMembers, setElectedMembers] = useState([]);
+  const [concludedSeasonName, setConcludedSeasonName] = useState('');
+
+  const fetchNominees = async () => {
+    try {
+      const res = await fetch(`${API}/student-council/nominees`);
+      if (res.ok) setNominees(await res.json());
+    } catch (e) {}
+  };
+
+  const fetchElectedMembers = async () => {
+    try {
+      const res = await fetch(`${API}/student-council/members`);
+      if (res.ok) {
+        const data = await res.json();
+        setElectedMembers(data.members || []);
+        setConcludedSeasonName(data.seasonName || '');
+      }
+    } catch (e) {}
+  };
+
+  const fetchSuggestions = async () => {
+    try {
+      const res = await fetch(`${API}/student-council/suggestions?email=${encodeURIComponent(student.email)}`);
+      if (res.ok) setSuggestions(await res.json());
+    } catch (e) {}
+  };
+
+  const fetchRewardTracks = async () => {
+    try {
+      const res = await fetch(`${API}/student-council/reward-tracks?email=${encodeURIComponent(student.email)}`);
+      if (res.ok) setRewardTracks(await res.json());
+    } catch (e) {}
+  };
+
+  useEffect(() => {
+    fetchNominees();
+    fetchElectedMembers();
+    if (council.electedInPreviousSeason) {
+      fetchSuggestions();
+      fetchRewardTracks();
+    }
+  }, [council.electedInPreviousSeason]);
+
+  const handleNominate = async (e) => {
+    e.preventDefault();
+    setSubmittingNomination(true);
+    setNominationMsg('');
+    try {
+      const res = await fetch(`${API}/student-council/nominate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nomineeEmail, statement })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Nomination failed');
+      setNominationMsg('Nomination submitted successfully!');
+      setStatement('');
+      setNomineeEmail('');
+      if (onRefreshProfile) onRefreshProfile();
+      fetchNominees();
+    } catch (err) {
+      setNominationMsg(err.message);
+    } finally {
+      setSubmittingNomination(false);
+    }
+  };
+
+  const handleRefineStatement = async () => {
+    if (!statement.trim()) return;
+    setRefining(true);
+    setNominationMsg('');
+    try {
+      const res = await fetch(`${API}/student-council/nomination/refine-statement`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ statement })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Refinement failed');
+      setStatement(data.refined);
+      setNominationMsg('Statement refined locally!');
+    } catch (err) {
+      setNominationMsg(err.message);
+    } finally {
+      setRefining(false);
+    }
+  };
+
+  const handleVote = async (nomineeId) => {
+    setVotingMsg('');
+    try {
+      const res = await fetch(`${API}/student-council/vote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nomineeId })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Voting failed');
+      setVotingMsg('Your vote has been cast successfully!');
+      if (onRefreshProfile) onRefreshProfile();
+      fetchNominees();
+    } catch (err) {
+      setVotingMsg(err.message);
+    }
+  };
+
+  const handleSuggestionSubmit = async (e) => {
+    e.preventDefault();
+    setSubmittingSuggestion(true);
+    try {
+      const res = await fetch(`${API}/student-council/suggestions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: suggestionType, content: suggestionContent })
+      });
+      if (res.ok) {
+        setSuggestionContent('');
+        fetchSuggestions();
+      }
+    } catch (err) {}
+    setSubmittingSuggestion(false);
+  };
+
+  const handleSuggestionUpvote = async (id) => {
+    try {
+      const res = await fetch(`${API}/student-council/suggestions/${id}/upvote`, { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) fetchSuggestions();
+    } catch (err) {}
+  };
+
+  const handleTrackVote = async (id) => {
+    try {
+      const res = await fetch(`${API}/student-council/reward-tracks/${id}/vote`, { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) fetchRewardTracks();
+    } catch (err) {}
+  };
+
+  const spTarget = council.activeSeason?.minSpRequired || 500;
+  const endorsementsTarget = council.activeSeason?.minEndorsementsRequired || 40;
+  
+  const hasSp = council.seasonSp >= spTarget;
+  const hasEndorsements = council.endorsementsCount >= endorsementsTarget;
+  const isClean = !council.hasSpamPenalties && !council.hasDisciplinaryActions;
+
+  return (
+    <div className="council-container">
+      <section className="panel council-hall">
+        <h2>👑 Elected Student Council - {concludedSeasonName || 'Current Season'}</h2>
+        <p className="muted">These students represent the community and provide structured feedback to platform coordinators.</p>
+        
+        {electedMembers.length === 0 ? (
+          <div className="empty-state">No student council has been elected yet. Let the nominations begin!</div>
+        ) : (
+          <div className="elected-grid">
+            {electedMembers.map(member => {
+              const isMe = member._id === student._id;
+              return (
+                <div key={member._id} className={`elected-card ${isMe ? 'elected-me' : ''}`}>
+                  <div className="elected-badge">👑 Council Member</div>
+                  <h3>{member.name}</h3>
+                  <p className="masked-email">{member.maskedEmail}</p>
+                  
+                  <div className="elected-stats">
+                    <span>Level {member.level}</span>
+                    <span>{member.totalSp} SP</span>
+                  </div>
+
+                  <p className="statement">"{member.nominationStatement}"</p>
+
+                  {isMe && (
+                    <button className="primary certificate-btn" onClick={() => setShowCertificate(true)}>
+                      🎖 View Digital Certificate
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {council.electedInPreviousSeason && (
+        <section className="panel council-advisory">
+          <h2>📝 Council Room & Advisory Tasks</h2>
+          <p className="lead" style={{ marginBottom: '1.5rem' }}>As a Student Council member, you can suggest quests, platform improvements, and vote on seasonal reward tracks.</p>
+
+          <div className="advisory-grid">
+            <div className="advisory-form-container">
+              <h3>Submit Advisory Proposal</h3>
+              <form onSubmit={handleSuggestionSubmit} className="login-form suggestion-form">
+                <select value={suggestionType} onChange={e => setSuggestionType(e.target.value)}>
+                  <option value="weeklyQuest">Suggest Weekly Quest</option>
+                  <option value="communityChallenge">Suggest Community Challenge</option>
+                  <option value="structuredFeedback">Structured Feedback for Admins</option>
+                  <option value="platformImprovement">Recommend Platform Improvement</option>
+                </select>
+                <textarea 
+                  value={suggestionContent} 
+                  onChange={e => setSuggestionContent(e.target.value)} 
+                  placeholder="Describe your suggestion or feedback in detail..." 
+                  required
+                />
+                <button type="submit" className="primary" disabled={submittingSuggestion}>
+                  {submittingSuggestion ? 'Submitting...' : 'Submit Suggestion'}
+                </button>
+              </form>
+            </div>
+
+            <div className="advisory-list-container">
+              <h3>Advisory Suggestions Feed</h3>
+              <div className="suggestions-list">
+                {suggestions.length === 0 ? <p className="muted">No suggestions submitted yet.</p> : suggestions.map(s => (
+                  <div key={s._id} className="suggestion-item">
+                    <div className="item-head">
+                      <strong>{s.type === 'weeklyQuest' ? 'Quest' : s.type === 'communityChallenge' ? 'Challenge' : s.type === 'structuredFeedback' ? 'Feedback' : 'Improvement'}</strong>
+                      <span>by {s.studentName}</span>
+                    </div>
+                    <p className="item-content">{s.content}</p>
+                    <button className={`secondary upvote-btn ${s.voted ? 'voted' : ''}`} onClick={() => handleSuggestionUpvote(s._id)}>
+                      ▲ Support ({s.votesCount})
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="advisory-tracks-container" style={{ gridColumn: 'span 2' }}>
+              <h3>Vote on Reward Tracks</h3>
+              <p className="muted" style={{ marginBottom: '1rem' }}>Support the rewards track you want to activate for the next season.</p>
+              <div className="tracks-list">
+                {rewardTracks.map(track => (
+                  <div key={track._id} className={`track-card ${track.voted ? 'selected-track' : ''}`}>
+                    <h4>{track.name}</h4>
+                    <p>{track.description}</p>
+                    <div className="track-items">
+                      {track.items.map(item => <span key={item} className="track-item-badge">{item}</span>)}
+                    </div>
+                    <button className={`primary track-vote-btn ${track.voted ? 'voted' : ''}`} onClick={() => handleTrackVote(track._id)}>
+                      {track.voted ? 'Voted' : 'Vote Track'} ({track.votesCount})
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {council.activeSeason ? (
+        <section className="panel council-eligibility">
+          <h2>🎖 Current Election Season: {council.activeSeason.name}</h2>
+          
+          <div className="checklist-nomination-grid">
+            <div className="eligibility-checklist">
+              <h3>Eligibility Checklist</h3>
+              <ul className="checklist">
+                <li className={hasSp ? 'completed' : 'incomplete'}>
+                  {hasSp ? '✅' : '❌'} Earn at least {spTarget} SP during the season (Current: <strong>{council.seasonSp} SP</strong>)
+                </li>
+                <li className={hasEndorsements ? 'completed' : 'incomplete'}>
+                  {hasEndorsements ? '✅' : '❌'} Receive endorsements for at least {endorsementsTarget}/53 Matrix Mystics questions (Current: <strong>{council.endorsementsCount}/53</strong>)
+                </li>
+                <li className={isClean ? 'completed' : 'incomplete'}>
+                  {isClean ? '✅' : '❌'} No spam penalties or disciplinary actions (Status: <strong>{isClean ? 'Clean' : 'Penalty Registered'}</strong>)
+                </li>
+              </ul>
+              {student.isEligibleForCouncil ? (
+                <div className="elig-badge">🎖 You are eligible to run in the election!</div>
+              ) : (
+                <p className="error-note">You must meet all conditions above to unlock nomination.</p>
+              )}
+            </div>
+
+            <div className="nomination-form-box">
+              <h3>Submit Nomination Campaign</h3>
+              {council.isNominated ? (
+                <div className="nomination-success-card">
+                  <p><strong>You are officially running in this election!</strong></p>
+                  <div className="campaign-card-preview">
+                    <h4>{student.name}</h4>
+                    <p className="campaign-stats">Season SP: <strong>{council.seasonSp}</strong> | Endorsements: <strong>{council.endorsementsCount}/53</strong></p>
+                    <p className="statement">"{council.nominationStatement}"</p>
+                    {council.nominatedBy && <p className="nominated-by">Nominated by classmate: {maskEmail(council.nominatedBy)}</p>}
+                  </div>
+                </div>
+              ) : student.isEligibleForCouncil ? (
+                <form onSubmit={handleNominate} className="login-form nom-form">
+                  <input 
+                    type="email" 
+                    value={nomineeEmail} 
+                    onChange={e => setNomineeEmail(e.target.value)} 
+                    placeholder="Nominee email (leave blank to nominate yourself)"
+                  />
+                  <textarea 
+                    value={statement} 
+                    onChange={e => setStatement(e.target.value)} 
+                    placeholder="Submit a short statement describing why you want to represent the community (max 150 words)..."
+                    maxLength={500}
+                    required
+                  />
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    <button type="submit" className="primary" disabled={submittingNomination}>
+                      {submittingNomination ? 'Submitting...' : 'Submit Nomination'}
+                    </button>
+                    <button type="button" className="secondary ai-btn" onClick={handleRefineStatement} disabled={refining || !statement.trim()}>
+                      {refining ? 'Refining...' : '✨ Polish statement'}
+                    </button>
+                  </div>
+                  {nominationMsg && <p className="nomination-msg">{nominationMsg}</p>}
+                </form>
+              ) : (
+                <div className="nomination-locked-card">
+                  <p className="muted">Nomination is locked until you meet all eligibility criteria above.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      ) : (
+        <section className="panel council-eligibility empty">
+          <h2>Elections Closed</h2>
+          <p className="muted">There is no active election season currently running. Check back later!</p>
+        </section>
+      )}
+
+      {council.activeSeason && (
+        <section className="panel nominees-campaigns">
+          <h2>🗳 Vote for Candidates</h2>
+          <p className="muted">Review the campaign cards and vote based on contribution and statement. You can vote only once per season.</p>
+          {votingMsg && <p className="voting-msg">{votingMsg}</p>}
+
+          {nominees.length === 0 ? (
+            <div className="empty-state">No nominees have registered campaign cards yet. Be the first!</div>
+          ) : (
+            <div className="nominees-grid">
+              {nominees.map(nominee => {
+                const isVoterMe = nominee.studentId === student._id;
+                return (
+                  <div key={nominee._id} className="campaign-card">
+                    <h3>{nominee.name}</h3>
+                    <p className="masked-email">{nominee.maskedEmail}</p>
+
+                    <div className="campaign-metrics">
+                      <div className="metric-box">
+                        <span>Season SP</span>
+                        <strong>{nominee.seasonSp}</strong>
+                      </div>
+                      <div className="metric-box">
+                        <span>Endorsements</span>
+                        <strong>{nominee.endorsementsCount}/53</strong>
+                      </div>
+                      <div className="metric-box">
+                        <span>Votes</span>
+                        <strong>{nominee.votesCount}</strong>
+                      </div>
+                    </div>
+
+                    <div className="personal-statement">
+                      <strong>Personal Statement:</strong>
+                      <p>"{nominee.nominationStatement}"</p>
+                    </div>
+
+                    <button 
+                      className="primary vote-btn" 
+                      onClick={() => handleVote(nominee._id)}
+                      disabled={isVoterMe}
+                      title={isVoterMe ? "You cannot vote for yourself." : ""}
+                    >
+                      Cast Vote
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {showCertificate && (
+        <div className="overlay modal-overlay" onClick={() => setShowCertificate(false)}>
+          <div className="certificate-modal" onClick={e => e.stopPropagation()}>
+            <button className="close-btn" onClick={() => setShowCertificate(false)}>x</button>
+            <div className="certificate-border">
+              <div className="certificate-inner">
+                <div className="certificate-header">
+                  <span className="gold-seal">★</span>
+                  <h1>CERTIFICATE OF EXCELLENCE</h1>
+                  <h2>STUDENT COUNCIL MEMBER</h2>
+                </div>
+                <div className="certificate-body">
+                  <p>This is proudly presented to</p>
+                  <h3>{student.name}</h3>
+                  <p className="cert-desc">
+                    for outstanding leadership, peer mentorship, and community-driven excellence. 
+                    Elected as an official Student Council representative by the student cohort during the
+                  </p>
+                  <h4>{concludedSeasonName || 'Student Council'} Season</h4>
+                  <p className="cert-desc2">
+                    in the VLED Summership Internship Program, IIT Ropar.
+                  </p>
+                </div>
+                <div className="certificate-footer">
+                  <div className="signature">
+                    <span className="sign-line">Rohit</span>
+                    <span>VLED Coordinator</span>
+                  </div>
+                  <div className="date-block">
+                    <span className="date-line">{new Date(electedMembers.find(m => m._id === student._id)?.certificateDate || new Date()).toLocaleDateString()}</span>
+                    <span>Date of Award</span>
+                  </div>
+                  <div className="signature">
+                    <span className="sign-line">Samagama Gateway</span>
+                    <span>Platform Coordinator</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminCouncilPanel({ stats, auth }) {
+  const headers = adminHeaders(auth);
+  const [activeSeason, setActiveSeason] = useState(null);
+  const [lastConcluded, setLastConcluded] = useState(null);
+  const [newSeasonName, setNewSeasonName] = useState('');
+  const [cap, setCap] = useState(1000);
+  const [size, setSize] = useState(5);
+  const [reqMM, setReqMM] = useState(40);
+  const [reqSP, setReqSP] = useState(500);
+
+  const [students, setStudents] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [mmInput, setMmInput] = useState('');
+  const [hasSpam, setHasSpam] = useState(false);
+  const [hasDisc, setHasDisc] = useState(false);
+
+  const [insights, setInsights] = useState('');
+  const [loadingInsights, setLoadingInsights] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const fetchSeasonData = async () => {
+    try {
+      const statusRes = await fetch(`${API}/student-council/status`);
+      if (statusRes.ok) {
+        const data = await statusRes.json();
+        setActiveSeason(data.activeSeason);
+        if (data.activeSeason) {
+          setCap(data.activeSeason.maxSpCapForScore || 1000);
+          setSize(data.activeSeason.councilSize || 5);
+          setReqMM(data.activeSeason.minEndorsementsRequired || 40);
+          setReqSP(data.activeSeason.minSpRequired || 500);
+        }
+      }
+      const concludedRes = await fetch(`${API}/student-council/members`);
+      if (concludedRes.ok) {
+        const data = await concludedRes.json();
+        setLastConcluded(data.seasonName ? data : null);
+      }
+    } catch (e) {}
+  };
+
+  const fetchStudents = async () => {
+    try {
+      const res = await fetch(`${API}/admin/students-by-status?status=active&limit=1000`, { headers });
+      if (res.ok) setStudents(await res.json());
+    } catch (e) {}
+  };
+
+  useEffect(() => {
+    fetchSeasonData();
+    fetchStudents();
+  }, []);
+
+  const handleStartSeason = async (e) => {
+    e.preventDefault();
+    setMessage('');
+    try {
+      const res = await fetch(`${API}/admin/student-council/season/start`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newSeasonName,
+          maxSpCapForScore: cap,
+          councilSize: size,
+          minEndorsementsRequired: reqMM,
+          minSpRequired: reqSP
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to start season.');
+      setMessage(`Started new season: ${data.name}`);
+      setNewSeasonName('');
+      fetchSeasonData();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const handleSaveConfig = async (e) => {
+    e.preventDefault();
+    setMessage('');
+    try {
+      const res = await fetch(`${API}/admin/student-council/season/config`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          maxSpCapForScore: cap,
+          councilSize: size,
+          minEndorsementsRequired: reqMM,
+          minSpRequired: reqSP
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save config.');
+      setMessage('Configuration updated.');
+      fetchSeasonData();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const handleUpdateStudent = async (e) => {
+    e.preventDefault();
+    if (!selectedStudent) return;
+    setMessage('');
+    const endorsements = mmInput.split(',').map(s => Number(s.trim())).filter(n => !isNaN(n) && n >= 1 && n <= 53);
+
+    try {
+      const res = await fetch(`${API}/admin/student-council/student-data`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentId: selectedStudent._id,
+          matrixMysticsEndorsements: endorsements,
+          hasSpamPenalties: hasSpam,
+          hasDisciplinaryActions: hasDisc
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update student.');
+      setMessage(`Updated data for ${selectedStudent.name}.`);
+      setSelectedStudent(null);
+      setMmInput('');
+      setHasSpam(false);
+      setHasDisc(false);
+      fetchStudents();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const handleConcludeSeason = async () => {
+    if (!window.confirm("Are you sure you want to conclude the current election season? This will award +50 SP and conclusion metrics.")) return;
+    setMessage('');
+    try {
+      const res = await fetch(`${API}/admin/student-council/conclude`, {
+        method: 'POST',
+        headers
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to conclude election.');
+      setMessage(data.message);
+      fetchSeasonData();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const handleLoadInsights = async () => {
+    setLoadingInsights(true);
+    setInsights('');
+    try {
+      const res = await fetch(`${API}/admin/student-council/insights`, { headers });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to get insights.');
+      setInsights(data.insights);
+    } catch (err) {
+      setInsights('Error: ' + err.message);
+    } finally {
+      setLoadingInsights(false);
+    }
+  };
+
+  const filteredStudents = students.filter(s => 
+    s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    s.email.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  return (
+    <div className="admin-council-panel">
+      {message && <div className="admin-msg-box" style={{ padding: '10px', background: 'var(--accent)', color: 'white', borderRadius: '4px', marginBottom: '1rem' }}>{message}</div>}
+
+      <div className="admin-grid-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+        <section className="panel">
+          <h3>Elections Controls & Status</h3>
+          {activeSeason ? (
+            <div className="season-status-box">
+              <p>Active Season: <strong>{activeSeason.name}</strong></p>
+              <p>Start Date: <strong>{new Date(activeSeason.startDate).toLocaleString()}</strong></p>
+              
+              <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
+                <button className="primary" onClick={handleConcludeSeason}>Conclude Election & Elect Council</button>
+              </div>
+
+              <form onSubmit={handleSaveConfig} className="login-form" style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <h4>Update Season Settings</h4>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>SP Cap for Council Score
+                  <input type="number" value={cap} onChange={e => setCap(Number(e.target.value))} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>Council Size (Max elected)
+                  <input type="number" value={size} onChange={e => setSize(Number(e.target.value))} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>Min SP Required
+                  <input type="number" value={reqSP} onChange={e => setReqSP(Number(e.target.value))} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>Min MM Endorsements Required
+                  <input type="number" value={reqMM} onChange={e => setReqMM(Number(e.target.value))} />
+                </label>
+                <button type="submit" className="secondary" style={{ marginTop: '0.5rem' }}>Save Config</button>
+              </form>
+            </div>
+          ) : (
+            <form onSubmit={handleStartSeason} className="login-form" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <p className="muted">No active season. Start a new season to trigger eligibility, nominations, and voting.</p>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>Season Name (e.g. Bronze Season)
+                <input type="text" value={newSeasonName} onChange={e => setNewSeasonName(e.target.value)} required />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>SP Cap for Council Score
+                <input type="number" value={cap} onChange={e => setCap(Number(e.target.value))} />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>Council Size (Max elected)
+                <input type="number" value={size} onChange={e => setSize(Number(e.target.value))} />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>Min SP Required
+                <input type="number" value={reqSP} onChange={e => setReqSP(Number(e.target.value))} />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>Min MM Endorsements Required
+                <input type="number" value={reqMM} onChange={e => setReqMM(Number(e.target.value))} />
+              </label>
+              <button type="submit" className="primary" style={{ marginTop: '0.5rem' }}>Start Election Season</button>
+            </form>
+          )}
+        </section>
+
+        <section className="panel">
+          <h3>Student Eligibility Data Editor</h3>
+          <p className="muted" style={{ marginBottom: '1rem' }}>Manage a student's Matrix Mystics endorsed questions (1-53) and disciplinary flags for the current season.</p>
+          
+          <input 
+            type="text" 
+            placeholder="Search student by name/email..." 
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            style={{ marginBottom: '0.5rem', width: '100%', padding: '8px' }}
+          />
+
+          <div className="student-scroll-box" style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '4px', padding: '4px', marginBottom: '1rem' }}>
+            {filteredStudents.slice(0, 15).map(s => (
+              <button key={s._id} className="student-select-row" onClick={() => setSelectedStudent(s)} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px', border: 'none', background: selectedStudent?._id === s._id ? 'var(--accent)' : 'none', color: selectedStudent?._id === s._id ? 'white' : 'inherit', cursor: 'pointer', borderRadius: '2px' }}>
+                {s.name} ({s.email})
+              </button>
+            ))}
+          </div>
+
+          {selectedStudent && (
+            <form onSubmit={handleUpdateStudent} className="login-form" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <h4>Editing: {selectedStudent.name}</h4>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>Endorsed Questions (comma separated numbers 1-53)
+                <input 
+                  type="text" 
+                  value={mmInput} 
+                  onChange={e => setMmInput(e.target.value)} 
+                  placeholder="e.g. 1,2,5,10,40"
+                />
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                <input type="checkbox" checked={hasSpam} onChange={e => setHasSpam(e.target.checked)} />
+                Has Spam Penalty
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                <input type="checkbox" checked={hasDisc} onChange={e => setHasDisc(e.target.checked)} />
+                Has Disciplinary Action
+              </label>
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                <button type="submit" className="primary">Update Data</button>
+                <button type="button" className="secondary" onClick={() => setSelectedStudent(null)}>Cancel</button>
+              </div>
+            </form>
+          )}
+        </section>
+
+        <section className="panel wide-admin-panel" style={{ gridColumn: 'span 2' }}>
+          <h3>📋 Coordinator Suggestions Report</h3>
+          <p className="muted" style={{ marginBottom: '1rem' }}>Summarize, categorize, and action suggestions submitted by the elected council members offline.</p>
+          <button className="primary" onClick={handleLoadInsights} disabled={loadingInsights}>
+            {loadingInsights ? 'Analyzing Suggestions...' : 'Generate Suggestions Report'}
+          </button>
+          
+          {insights && (
+            <div className="insights-report" style={{ marginTop: '1rem', whiteSpace: 'pre-line', padding: '1rem', background: '#1e293b', color: '#f1f5f9', borderLeft: '4px solid gold', borderRadius: '4px', fontSize: '14px', lineHeight: '1.6' }}>
+              {insights}
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);
