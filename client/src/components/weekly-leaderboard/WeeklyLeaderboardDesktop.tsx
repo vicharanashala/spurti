@@ -5,7 +5,6 @@ import { WeeklyLeaderboard } from './WeeklyLeaderboard';
 import { RightRail } from './RightRail';
 import { Top10Popup, useAutoTop10 } from './Top10Popup';
 import { RegularUserCard } from './RegularUserCard';
-import { Bottom50Experience } from './Bottom50Experience';
 import { FreshWeekEmpty } from './FreshWeekEmpty';
 
 // ============================================================
@@ -204,9 +203,6 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
         )}
         {data?.bucket === 'regular' && data?.me?.weeklySp > 0 && (
           <RegularUserCard data={data} profile={profile} onViewLeaderboard={() => {}} />
-        )}
-        {data?.bucket === 'bottom50' && data?.me?.weeklySp > 0 && (
-          <Bottom50Experience data={data} profile={profile} />
         )}
         <WeeklyLeaderboard data={data} />
       </CenterColumn>
