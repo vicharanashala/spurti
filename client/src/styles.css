@@ -1290,6 +1290,7 @@ input {
   stroke: #fff;
   stroke-width: 1.5;
   cursor: crosshair;
+}
 /* N17-FIX: removed '.chart-dot:hover { r: 5; }' — SVG 'r' is not a valid CSS
  * property in standard CSS (only works in Chrome as a non-standard extension).
  * Hover state is handled by the SpTrendChart JS tooltip logic instead. */
