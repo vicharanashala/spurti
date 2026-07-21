@@ -266,6 +266,7 @@ function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
+  const achievementGallery = useMemo(() => buildAchievementGallery(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
   return (
     <main className="page compact">
@@ -278,11 +279,14 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
+      <MilestoneCertificate student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['achievements','Achievements'], ['redeem','Redeem SP']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'achievements' && <AchievementGallery gallery={achievementGallery} />}
+      {tab === 'redeem' && <RedemptionMarketplace student={student} />}
     </main>
   );
 }
@@ -385,11 +389,151 @@ function StudentPulse({ profile, badges, nextActions }) {
         <span>SP trend</span>
         <Sparkline points={trend} />
       </div>
+      <WeeklyGoalWidget
+        student={profile.student}
+        weeklyGoal={profile.student.weeklyGoal}
+        onGoalUpdated={(updatedGoal) => {
+          profile.student.weeklyGoal = updatedGoal;
+          window.location.reload();
+        }}
+      />
+      <ForecastWidget forecast={profile.student.forecast} currentSp={student.totalSp} />
       <div className="pulse-card wide-pulse">
         <span>What to do next</span>
         <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
       </div>
     </section>
+  );
+}
+
+function WeeklyGoalWidget({ student, weeklyGoal, onGoalUpdated }) {
+  const [editing, setEditing] = useState(false);
+  const [inputValue, setInputValue] = useState(weeklyGoal?.targetSp || '');
+  const [saving, setSaving] = useState(false);
+
+  const target = weeklyGoal?.targetSp || 0;
+  const earned = weeklyGoal?.spEarnedThisWeek || 0;
+  const pct = weeklyGoal?.progressPct || 0;
+
+  const saveGoal = async () => {
+    const value = Number(inputValue);
+    if (!Number.isFinite(value) || value < 0) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API}/goal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: student.email, targetSp: value })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        onGoalUpdated(data.student.weeklyGoal);
+        setEditing(false);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="pulse-card wide-pulse">
+      <span>Weekly Goal</span>
+      {target === 0 && !editing ? (
+        <div className="goal-setup">
+          <p className="muted">Set a weekly SP target to track your pace.</p>
+          <button className="secondary" onClick={() => setEditing(true)}>Set a goal</button>
+        </div>
+      ) : editing ? (
+        <div className="goal-setup">
+          <input
+            type="number"
+            min="0"
+            value={inputValue}
+            onChange={e => setInputValue(e.target.value)}
+            placeholder="Target SP for this week"
+          />
+          <button className="primary" disabled={saving} onClick={saveGoal}>
+            {saving ? 'Saving...' : 'Save goal'}
+          </button>
+          <button className="secondary" onClick={() => setEditing(false)}>Cancel</button>
+        </div>
+      ) : (
+        <div className="goal-progress">
+          <p>{earned} / {target} SP this week</p>
+          <div className="progress-bar">
+            <div className="progress-fill" style={{ width: `${pct}%` }} />
+          </div>
+          <p className="muted">
+            {pct >= 100 ? 'Goal achieved! Great work.' : `${pct}% of the way there.`}
+          </p>
+          <button className="secondary" onClick={() => { setInputValue(target); setEditing(true); }}>Edit goal</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ForecastWidget({ forecast, currentSp }) {
+  const [goalInput, setGoalInput] = useState('');
+  const [requiredPace, setRequiredPace] = useState(null);
+
+  const { completedSessions, remainingSessions, avgSpPerSession, projectedFinalSp } = forecast;
+
+  const calculateRequiredPace = () => {
+    const goal = Number(goalInput);
+    if (!Number.isFinite(goal) || goal <= currentSp) {
+      setRequiredPace(null);
+      return;
+    }
+    if (remainingSessions === 0) {
+      setRequiredPace('no-sessions-left');
+      return;
+    }
+    const needed = (goal - currentSp) / remainingSessions;
+    setRequiredPace(Math.round(needed * 10) / 10);
+  };
+
+  return (
+    <div className="pulse-card wide-pulse">
+      <span>SP Forecast</span>
+      <div className="forecast-stats">
+        <div className="forecast-stat">
+          <b>{avgSpPerSession}</b>
+          <em>avg SP / session so far</em>
+        </div>
+        <div className="forecast-stat">
+          <b>{remainingSessions}</b>
+          <em>sessions remaining</em>
+        </div>
+        <div className="forecast-stat">
+          <b>{projectedFinalSp}</b>
+          <em>projected final SP</em>
+        </div>
+      </div>
+      <p className="muted">
+        Based on your pace across {completedSessions} completed sessions, you're on track to finish around
+        {' '}<strong>{projectedFinalSp} SP</strong>.
+      </p>
+      <div className="forecast-goal">
+        <input
+          type="number"
+          min="0"
+          value={goalInput}
+          onChange={e => setGoalInput(e.target.value)}
+          placeholder="Enter a target SP"
+        />
+        <button className="secondary" onClick={calculateRequiredPace}>Check pace needed</button>
+      </div>
+      {requiredPace === 'no-sessions-left' && (
+        <p className="error">No sessions remain — this goal isn't reachable this cohort.</p>
+      )}
+      {typeof requiredPace === 'number' && (
+        <p className={requiredPace > avgSpPerSession * 1.5 ? 'error' : 'muted'}>
+          You'll need about <strong>{requiredPace} SP/session</strong> for your remaining {remainingSessions} sessions
+          {requiredPace > avgSpPerSession * 1.5 ? ' — that\'s a big jump from your current pace.' : ' — achievable at a slightly better pace.'}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -418,6 +562,49 @@ function buildBadges(profile) {
   if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
   return badges.length ? badges : ['Getting Started'];
 }
+// Full achievement gallery — every possible badge, with locked/unlocked status.
+// Unlike buildBadges() (which only lists what's earned), this shows the complete
+// set so students can see what they're working toward.
+function buildAchievementGallery(profile) {
+  const { student, cohort, attendance, polls } = profile;
+  const qualifiedPct = attendance.length ? attendance.filter(a => a.qualified).length / attendance.length : 0;
+  const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
+  const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
+  const pollPct = pollTotal ? pollAttempted / pollTotal : 0;
+
+  return [
+    {
+      key: 'top50', name: 'Top 50', icon: '🏆',
+      description: 'Rank in the top 50 of the cohort leaderboard.',
+      unlocked: student.rank !== null && student.rank <= 50
+    },
+    {
+      key: 'top10', name: 'Top 10', icon: '🥇',
+      description: 'Rank in the top 10 of the cohort leaderboard.',
+      unlocked: student.rank !== null && student.rank <= 10
+    },
+    {
+      key: 'consistent', name: 'Consistent Attendee', icon: '📅',
+      description: 'Qualify for attendance in at least 75% of sessions.',
+      unlocked: qualifiedPct >= 0.75
+    },
+    {
+      key: 'pollChampion', name: 'Poll Champion', icon: '📊',
+      description: 'Attempt at least 75% of all poll questions.',
+      unlocked: pollPct >= 0.75
+    },
+    {
+      key: 'aboveAverage', name: 'Above Average', icon: '📈',
+      description: 'Have more SP than the cohort average.',
+      unlocked: student.totalSp >= cohort.averageSp
+    },
+    {
+      key: 'legend', name: 'Legend Badge', icon: '🌟',
+      description: 'Reach 1500 SP at least once during the internship.',
+      unlocked: Boolean(student.legendBadgeUnlocked)
+    }
+  ];
+}
 
 function buildNextActions(profile) {
   const actions = [];
@@ -426,6 +613,196 @@ function buildNextActions(profile) {
   if (profile.polls.some(p => p.missedQuestions > 0)) actions.push('Attempt every poll question to avoid poll debit.');
   actions.push('Check your SP Bank after each session to understand every credit and debit.');
   return actions.slice(0, 4);
+}
+function MilestoneCertificate({ student }) {
+  const canvasRef = useRef(null);
+  const eligible = student.legendBadgeUnlocked || (student.rank !== null && student.rank <= 10);
+  const milestoneText = student.legendBadgeUnlocked
+    ? 'Legend Badge — 1500+ Spurti Points'
+    : `Top 10 Cohort Rank — #${student.rank}`;
+
+  useEffect(() => {
+    if (!eligible || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+
+    const gradient = ctx.createLinearGradient(0, 0, W, H);
+    gradient.addColorStop(0, '#0f2418');
+    gradient.addColorStop(1, '#1a1a1a');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.strokeStyle = '#4caf50';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(20, 20, W - 40, H - 40);
+    ctx.strokeStyle = '#8bc34a';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(32, 32, W - 64, H - 64);
+
+    ctx.fillStyle = '#8bc34a';
+    ctx.font = 'bold 22px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('SPURTI MOTIVATION ENGINE', W / 2, 90);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 36px Arial';
+    ctx.fillText('Certificate of Achievement', W / 2, 150);
+
+    ctx.font = '18px Arial';
+    ctx.fillStyle = '#cccccc';
+    ctx.fillText('This certifies that', W / 2, 210);
+
+    ctx.font = 'bold 32px Arial';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(student.name, W / 2, 260);
+
+    ctx.font = '20px Arial';
+    ctx.fillStyle = '#8bc34a';
+    ctx.fillText('has achieved', W / 2, 300);
+
+    ctx.font = 'bold 26px Arial';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(milestoneText, W / 2, 340);
+
+    ctx.font = '16px Arial';
+    ctx.fillStyle = '#bbbbbb';
+    ctx.fillText(`Total SP: ${student.totalSp} · ${new Date().toLocaleDateString()}`, W / 2, 390);
+  }, [eligible, student, milestoneText]);
+
+  if (!eligible) return null;
+
+  const downloadCertificate = () => {
+    const canvas = canvasRef.current;
+    const link = document.createElement('a');
+    link.download = `spurti-certificate-${student.name.replace(/\s+/g, '-')}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  };
+
+  const shareOnLinkedIn = () => {
+    const text = encodeURIComponent(`I just earned ${milestoneText} on Spurti! 🎉`);
+    const url = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(window.location.origin)}&text=${text}`;
+    window.open(url, '_blank');
+  };
+
+  return (
+    <section className="panel">
+      <h2>Milestone Certificate</h2>
+      <canvas ref={canvasRef} width={600} height={420} className="certificate-canvas" />
+      <div className="certificate-actions">
+        <button className="primary" onClick={downloadCertificate}>Download Certificate</button>
+        <button className="secondary" onClick={shareOnLinkedIn}>Share on LinkedIn</button>
+      </div>
+    </section>
+  );
+}
+
+function RedemptionMarketplace({ student }) {
+  const [catalog, setCatalog] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [redeeming, setRedeeming] = useState(null);
+  const [message, setMessage] = useState('');
+  const [currentSp, setCurrentSp] = useState(student.totalSp);
+
+  useEffect(() => {
+    fetch(`${API}/rewards/catalog`).then(r => r.json()).then(setCatalog).catch(() => {});
+    loadHistory();
+  }, []);
+
+  const loadHistory = () => {
+    fetch(`${API}/redeem/history?email=${encodeURIComponent(student.email)}`)
+      .then(r => r.json())
+      .then(setHistory)
+      .catch(() => {});
+  };
+
+  const redeem = async (reward) => {
+    if (currentSp < reward.cost) return;
+    setRedeeming(reward.id);
+    setMessage('');
+    try {
+      const res = await fetch(`${API}/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: student.email, rewardId: reward.id })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage(data.error || 'Redemption failed.');
+        return;
+      }
+      setCurrentSp(data.profile.student.totalSp);
+      setMessage(`Redeemed ${reward.name}! Our team will follow up with next steps.`);
+      loadHistory();
+    } catch {
+      setMessage('Network error — please try again.');
+    } finally {
+      setRedeeming(null);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Redeem SP</h2>
+        <span className="muted">Balance: {currentSp} SP</span>
+      </div>
+      {message && <p className={message.includes('Redeemed') ? 'muted' : 'error'}>{message}</p>}
+      <div className="reward-grid">
+        {catalog.map(reward => {
+          const affordable = currentSp >= reward.cost;
+          return (
+            <div key={reward.id} className={`reward-card ${affordable ? '' : 'unaffordable'}`}>
+              <strong>{reward.name}</strong>
+              <span>{reward.cost} SP</span>
+              <button
+                className="primary"
+                disabled={!affordable || redeeming === reward.id}
+                onClick={() => redeem(reward)}
+              >
+                {redeeming === reward.id ? 'Redeeming...' : affordable ? 'Redeem' : 'Not enough SP'}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {history.length > 0 && (
+        <div className="redemption-history">
+          <h3>Your Redemption History</h3>
+          {history.map(h => (
+            <div key={h._id} className="redemption-row">
+              <span>{h.rewardName}</span>
+              <span>-{h.cost} SP</span>
+              <span>{new Date(h.requestedAt).toLocaleDateString()}</span>
+              <span className={`status-${h.status}`}>{h.status}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AchievementGallery({ gallery }) {
+  const unlockedCount = gallery.filter(b => b.unlocked).length;
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Achievements</h2>
+        <span className="muted">{unlockedCount}/{gallery.length} unlocked</span>
+      </div>
+      <div className="achievement-grid">
+        {gallery.map(badge => (
+          <div key={badge.key} className={`achievement-card ${badge.unlocked ? 'unlocked' : 'locked'}`}>
+            <span className="achievement-icon">{badge.unlocked ? badge.icon : '🔒'}</span>
+            <strong>{badge.name}</strong>
+            <p>{badge.description}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function Tabs({ tab, setTab, tabs }) {
