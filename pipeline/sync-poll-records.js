@@ -21,6 +21,18 @@ const POLL_RE = /answered (\d+) of (\d+) poll questions/;
   const students = await db.collection('students').find({}, { projection: { _id: 1, email: 1 } }).toArray();
   const studentById = new Map(students.map(s => [s.email.toLowerCase().trim(), s._id]));
 
+  // Spandan-era poll counts (>= cutoff): the reason is short and correctness-based,
+  // so it doesn't carry "answered X of Y". Take participation straight from the
+  // spandan_polls mirror, joined to each poll txn by (email, date).
+  const CUTOFF = process.env.SPANDAN_CUTOFF || '2026-07-16';
+  const spByEmailDate = new Map();
+  for (const sp of await db.collection('spandan_polls').find({ date: { $gte: CUTOFF } }).toArray()) {
+    for (const x of sp.students || []) {
+      const e = String(x.email || '').toLowerCase().trim(); if (!e) continue;
+      spByEmailDate.set(e + '|' + sp.date, { attempted: x.questionsAnswered || 0, total: sp.totalQuestions || 0 });
+    }
+  }
+
   const txns = await db.collection('sptransactions')
     .find({ category: 'poll' })
     .toArray();
@@ -32,9 +44,16 @@ const POLL_RE = /answered (\d+) of (\d+) poll questions/;
     const sessionLabel = tx.sessionLabel || '';
     if (!sessionLabel) { skipped++; continue; }
 
-    const m = POLL_RE.exec(tx.reason || '');
-    const attemptedQuestions = m ? Number(m[1]) : 0;
-    const totalQuestions = m ? Number(m[2]) : 0;
+    const date = tx.dateTime ? new Date(tx.dateTime).toISOString().slice(0, 10) : '';
+    const spd = spByEmailDate.get(email + '|' + date);
+    let attemptedQuestions, totalQuestions;
+    if (spd) {
+      attemptedQuestions = spd.attempted; totalQuestions = spd.total;   // Spandan participation
+    } else {
+      const m = POLL_RE.exec(tx.reason || '');                          // legacy Zoom reason
+      attemptedQuestions = m ? Number(m[1]) : 0;
+      totalQuestions = m ? Number(m[2]) : 0;
+    }
     const missedQuestions = Math.max(0, totalQuestions - attemptedQuestions);
     const studentId = studentById.get(email) || null;
 
