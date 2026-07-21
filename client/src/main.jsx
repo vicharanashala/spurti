@@ -15,31 +15,13 @@ const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : ''
 const API = `${APP_BASE}/api`;
 
 function App() {
-  // Preview mode (?preview=1) lets anyone land on the dashboard with a fake
-  // student profile so the weekly leaderboard can be inspected without going
-  // through the Samagama auth flow. Falls back to the search/confirm flow
-  // otherwise.
-  const urlParams = new URLSearchParams(window.location.search);
-  const isPreviewMode = urlParams.get('preview') === '1' || urlParams.get('view') === 'weekly-desktop';
-  const [view, setView] = useState(() => isPreviewMode ? 'student-preview' : (urlParams.get('admin') === '1' ? 'admin-login' : 'landing'));
-  const [profile, setProfile] = useState(() => isPreviewMode ? { student: {
-    name: 'A D S ABHISHEK',
-    email: 'addaduguru.durga2024@vitstudent.ac.in',
-    totalSp: 580,
-    rank: 8,
-    cohortSize: 1323,
-    level: 4,
-    trophyLeague: 'Silver I',
-    legendBadgeUnlocked: false,
-    leaderboardGroup: 'g1',
-    leaderboardGroupLabel: 'Group 1',
-    surveyCompleted: true
-  }} : null);
+  const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('admin') === '1' ? 'admin-login' : 'landing');
+  const [profile, setProfile] = useState(null);
   const [excused, setExcused] = useState(null);
   const [admin, setAdmin] = useState(null);
   const [adminAuth, setAdminAuth] = useState(null);
   const [config, setConfig] = useState({ allowStudentSearch: true });
-  const [loading, setLoading] = useState(!isPreviewMode);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!profile?.student) return;
@@ -92,9 +74,6 @@ function App() {
 
   if (loading) {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
-  }
-  if ((view === 'student' || view === 'student-preview') && profile && new URLSearchParams(window.location.search).get('view') === 'weekly-desktop') {
-    return <WeeklyLeaderboardDesktop email={profile.student.email} profile={profile.student} />;
   }
   if (view === 'student' && profile) {
     return (
@@ -895,6 +874,7 @@ function SurveyModal({ survey, student, onDone }) {
 function ReplaySection({ profile }) {
   const [weeklyOpen, setWeeklyOpen] = useState(false);
   const [finalOpen, setFinalOpen] = useState(false);
+  const [lbOpen, setLbOpen] = useState(false);
   const [share, setShare] = useState(null);
   const [unlocked, setUnlocked] = useState(false);
   useEffect(() => {
@@ -905,6 +885,9 @@ function ReplaySection({ profile }) {
     <>
       <div className="entry-pill-row">
         <EntryPill kind="weekly" onClick={() => setWeeklyOpen(true)} />
+        <span style={{ display: 'inline-block', marginLeft: 10 }}>
+          <EntryPill kind="leaderboard" onClick={() => setLbOpen(true)} />
+        </span>
         {unlocked && (
           <span style={{ display: 'inline-block', marginLeft: 10 }}>
             <EntryPill kind="final" onClick={() => setFinalOpen(true)} />
@@ -920,6 +903,12 @@ function ReplaySection({ profile }) {
           profile={profile}
           onClose={() => setShare(null)}
         />
+      )}
+      {lbOpen && (
+        <div className="wl-overlay" role="dialog" aria-modal="true" aria-label="Weekly Leaderboard">
+          <button type="button" className="wl-overlay__close" onClick={() => setLbOpen(false)} aria-label="Close leaderboard">×</button>
+          <WeeklyLeaderboardDesktop email={profile.student.email} profile={profile.student} />
+        </div>
       )}
     </>
   );
