@@ -12,12 +12,22 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import RewardRedemption from './models/RewardRedemption.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
 const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || 'dled@iitrpr.ac.in');
+// Fixed reward catalog for the SP Redemption Marketplace. Keeping this as a
+// server-side constant (not DB-driven) keeps costs authoritative — the client
+// can never submit its own price for a reward.
+const REWARD_CATALOG = [
+  { id: 'resume-review', name: 'Resume Review', cost: 150 },
+  { id: 'swag-kit', name: 'Spurti Swag Kit', cost: 100 },
+  { id: 'course-discount', name: 'Course Discount Code', cost: 200 },
+  { id: 'mentor-session', name: 'Priority Mentor Session', cost: 250 }
+];
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'vled-local-admin';
 
 // Survey triangulation pop-up(s). All driven by env so the form link / mode can
@@ -95,6 +105,16 @@ const liveViewers = new Map();
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+
+// Returns the start (Monday 00:00) of the current week, for weekly goal tracking.
+function weekStart(date = new Date()) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = (day === 0 ? 6 : day - 1);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - diff);
+  return d;
+}
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
@@ -178,13 +198,14 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents, sessions] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
+    Session.find().lean()
   ]);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
@@ -195,6 +216,30 @@ async function studentPayload(student) {
   // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
   const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
   const myGroup = leaderboardGroup(student.internshipStartDate);
+  // Weekly Goal Tracker — SP earned since the start of the current week.
+  const currentWeekStart = weekStart();
+  const spEarnedThisWeek = transactions
+    .filter(tx => new Date(tx.dateTime) >= currentWeekStart)
+    .reduce((sum, tx) => sum + Number(tx.appliedDelta || 0), 0);
+  const weeklyGoalSp = Number(student.weeklyGoalSp) || 0;
+
+  // SP Forecast — projects final SP based on average pace across completed sessions.
+  const now = new Date();
+  const completedSessions = sessions.filter(s => new Date(s.endDateTime) <= now);
+  const remainingSessions = sessions.filter(s => new Date(s.endDateTime) > now);
+  const earnedFromSessions = transactions
+    .filter(tx => tx.category === 'attendance' || tx.category === 'poll')
+    .reduce((sum, tx) => sum + Number(tx.appliedDelta || 0), 0);
+  const avgSpPerSession = completedSessions.length
+    ? Math.round((earnedFromSessions / completedSessions.length) * 10) / 10
+    : 0;
+  const projectedFinalSp = Math.round(student.totalSp + (avgSpPerSession * remainingSessions.length));
+  const forecast = {
+    completedSessions: completedSessions.length,
+    remainingSessions: remainingSessions.length,
+    avgSpPerSession,
+    projectedFinalSp
+  };
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
   const mapRow = (row, index) => ({
     rank: index + 1,
@@ -225,7 +270,14 @@ async function studentPayload(student) {
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      poll2Completed: Boolean(student.poll2Completed),
+      forecast,
+      weeklyGoal: {
+        targetSp: weeklyGoalSp,
+        spEarnedThisWeek,
+        progressPct: weeklyGoalSp > 0 ? Math.min(100, Math.round((spEarnedThisWeek / weeklyGoalSp) * 100)) : 0,
+        weekStart: currentWeekStart
+      }
     },
     transactions,
     polls,
@@ -305,6 +357,70 @@ api.post('/confirm', async (req, res) => {
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
   res.json(await studentPayload(student));
+});
+
+api.post('/goal', async (req, res) => {
+  const { email, targetSp } = req.body || {};
+  const normalized = normalizeEmail(email);
+  const target = Number(targetSp);
+  if (!normalized || !Number.isFinite(target) || target < 0) {
+    return res.status(400).json({ error: 'email and a valid targetSp are required' });
+  }
+  const student = await Student.findOne({ $or: [{ email: normalized }, { alternateEmail: normalized }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  student.weeklyGoalSp = Math.round(target);
+  student.weeklyGoalSetAt = new Date();
+  await student.save();
+  res.json(await studentPayload(student));
+});
+
+api.get('/rewards/catalog', (_req, res) => res.json(REWARD_CATALOG));
+
+api.post('/redeem', async (req, res) => {
+  const { email, rewardId } = req.body || {};
+  const normalized = normalizeEmail(email);
+  const reward = REWARD_CATALOG.find(r => r.id === rewardId);
+  if (!normalized || !reward) {
+    return res.status(400).json({ error: 'email and a valid rewardId are required' });
+  }
+  const student = await Student.findOne({ $or: [{ email: normalized }, { alternateEmail: normalized }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (student.totalSp < reward.cost) {
+    return res.status(400).json({ error: 'Not enough SP for this reward' });
+  }
+
+  const newBalance = student.totalSp - reward.cost;
+  student.totalSp = newBalance;
+  await student.save();
+
+  await SPTransaction.create({
+    email: student.email,
+    studentId: student._id,
+    category: 'manual',
+    deltaMode: 'absolute',
+    deltaValue: -reward.cost,
+    appliedDelta: -reward.cost,
+    balanceAfter: newBalance,
+    reason: `Redeemed: ${reward.name}`,
+    dateTime: new Date()
+  });
+
+  const redemption = await RewardRedemption.create({
+    email: student.email,
+    studentId: student._id,
+    rewardId: reward.id,
+    rewardName: reward.name,
+    cost: reward.cost
+  });
+
+  res.json({ redemption, profile: await studentPayload(student) });
+});
+
+api.get('/redeem/history', async (req, res) => {
+  const email = normalizeEmail(req.query.email);
+  if (!email) return res.status(400).json({ error: 'email is required' });
+  const history = await RewardRedemption.find({ email }).sort({ requestedAt: -1 }).lean();
+  res.json(history);
 });
 
 api.get('/leaderboard', async (req, res) => {
