@@ -8,6 +8,8 @@ import { FinalJourneyModal } from './components/replay/FinalJourneyModal.tsx';
 import { ShareCard } from './components/replay/ShareCard.tsx';
 import { isFinalJourneyUnlocked, buildReplayHistory } from './components/replay/replayEngine';
 import './components/replay/replay.css';
+import { WeeklyLeaderboardDesktop } from './components/weekly-leaderboard/WeeklyLeaderboardDesktop.tsx';
+import './components/weekly-leaderboard/WeeklyLeaderboardDesktop.css';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -72,6 +74,9 @@ function App() {
 
   if (loading) {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
+  }
+  if (view === 'student' && profile && new URLSearchParams(window.location.search).get('view') === 'weekly-desktop') {
+    return <WeeklyLeaderboardDesktop email={profile.student.email} profile={profile.student} />;
   }
   if (view === 'student' && profile) {
     return (

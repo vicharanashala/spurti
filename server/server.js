@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import weeklyRouter from './routes/weekly.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -595,6 +596,8 @@ function last24Hours(now) {
 
 app.use('/api', api);
 app.use('/spurti/api', api);
+app.use('/api/weekly', weeklyRouter);
+app.use('/spurti/api/weekly', weeklyRouter);
 
 if (fs.existsSync(clientDist)) {
   app.use('/spurti', express.static(clientDist));
