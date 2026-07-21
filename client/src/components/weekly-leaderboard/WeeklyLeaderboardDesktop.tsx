@@ -8,8 +8,6 @@ import { RegularUserCard } from './RegularUserCard';
 import { FreshWeekEmpty } from './FreshWeekEmpty';
 import { WeeklyChampionsPopup, wasChampionsDismissed, markChampionsDismissed } from '../weekly-recap/WeeklyChampionsPopup';
 import { AIRecoveryCoachPopup, wasCoachDismissed, markCoachDismissed } from '../weekly-recap/AIRecoveryCoachPopup';
-import { WeeklyGoalCard } from '../weekly-recap/WeeklyGoalCard';
-import '../weekly-recap/WeeklyGoalCard.css';
 import '../weekly-recap/WeeklyRecap.css';
 
 // ============================================================
@@ -220,25 +218,20 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
   const recapOpen = useWeeklyRecapPopups(email, recap);
 
   const body = (
-    <>
-      {/* Full-width Weekly Goal Card — sits below the topbar, above the
-          3-col body grid. Spec: "Display the card below the top navigation" */}
-      <WeeklyGoalCard recapData={recap} profile={profile} />
-      <div className="wl-body">
-        <CenterColumn data={data} loading={loading} error={error} onRetry={fetchData}>
-          {data?.me?.weeklySp === 0 && data?.week?.phase !== 'calculating' && (
-            <FreshWeekEmpty data={data} />
-          )}
-          {data?.bucket === 'regular' && data?.me?.weeklySp > 0 && (
-            <RegularUserCard data={data} profile={profile} onViewLeaderboard={() => {}} />
-          )}
-          <WeeklyLeaderboard data={data} />
-        </CenterColumn>
-        <RightColumn data={data}>
-          <RightRail data={data} profile={profile} />
-        </RightColumn>
-      </div>
-    </>
+    <div className="wl-body">
+      <CenterColumn data={data} loading={loading} error={error} onRetry={fetchData}>
+        {data?.me?.weeklySp === 0 && data?.week?.phase !== 'calculating' && (
+          <FreshWeekEmpty data={data} />
+        )}
+        {data?.bucket === 'regular' && data?.me?.weeklySp > 0 && (
+          <RegularUserCard data={data} profile={profile} onViewLeaderboard={() => {}} />
+        )}
+        <WeeklyLeaderboard data={data} />
+      </CenterColumn>
+      <RightColumn data={data}>
+        <RightRail data={data} profile={profile} />
+      </RightColumn>
+    </div>
   );
 
   if (inline) {
