@@ -593,29 +593,29 @@ function MyJourney({ student, setTab }) {
           </div>
         </section>
 
-        {/* Phase 3 — SPA (placeholder) */}
+        {/* Phase 3 — SPA (data + SP rule pending Samagama) */}
         <section className="jr-card phase-spa">
-          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-soon">SP soon</span></div>
+          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-soon">Coming soon</span></div>
           <p className="jr-sub">53-problem set · plan: by {fmtDate(data.plan.spaBy)}</p>
-          <div className="jr-big"><strong>{spa.solved}</strong><span>/ {spa.total} solved</span></div>
-          <div className="jr-progress"><i style={{ width: `${spaPct}%` }} /></div>
-          <div className="jr-splits">
-            <span className="jr-pill">{spa.spaPoints} SPA points</span>
-            <span className="jr-pill muted">SP rule pending Samagama data</span>
-          </div>
+          {spa.pending
+            ? <p className="cm-soon">Your Matrix Mystics progress and SP will appear here soon — we’re wiring up the data.</p>
+            : <>
+                <div className="jr-big"><strong>{spa.solved}</strong><span>/ {spa.total} solved</span></div>
+                <div className="jr-progress"><i style={{ width: `${spaPct}%` }} /></div>
+                <div className="jr-splits"><span className="jr-pill">{spa.spaPoints} SPA points</span></div>
+              </>}
         </section>
 
-        {/* Phase 4 — Projects (placeholder) */}
+        {/* Phase 4 — Projects (data + SP rule pending Samagama) */}
         <section className="jr-card phase-project">
-          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">SP soon</span></div>
+          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">Coming soon</span></div>
           <p className="jr-sub">Pull requests · plan: by {fmtDate(data.plan.projectBy)}</p>
-          <div className="jr-stats">
-            <div><strong>{projects.prsRaised}</strong><span>PRs raised</span></div>
-            <div><strong>{projects.prsMerged}</strong><span>PRs merged</span></div>
-          </div>
-          <div className="jr-splits">
-            <span className="jr-pill muted">SP rule pending Samagama data</span>
-          </div>
+          {projects.pending
+            ? <p className="cm-soon">Your project PRs and SP will appear here soon — we’re wiring up the data.</p>
+            : <div className="jr-stats">
+                <div><strong>{projects.prsRaised}</strong><span>PRs raised</span></div>
+                <div><strong>{projects.prsMerged}</strong><span>PRs merged</span></div>
+              </div>}
         </section>
       </div>
     </div>
