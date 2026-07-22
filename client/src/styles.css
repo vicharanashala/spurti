@@ -514,3 +514,87 @@ input {
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
+
+/* Custom Styles for Streak, Shield, Goals, and Nudges */
+.nudges-banner {
+  background: #fef2f2;
+  border: 1px solid #fee2e2;
+  border-left: 5px solid #ef4444;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+.nudge-title { font-weight: bold; color: #991b1b; margin-bottom: 8px; }
+.nudge-message { margin: 4px 0; color: #7f1d1d; font-style: italic; }
+.nudge-time { font-size: 11px; color: #991b1b; font-weight: normal; }
+
+.goals-section {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 24px;
+}
+.goal-banner {
+  display: flex;
+  justify-content: space-between;
+  background: #f1f5f9;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-size: 15px;
+  margin-bottom: 16px;
+}
+.reflection-form { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.reflection-textarea {
+  font-family: inherit;
+  font-size: 14px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  resize: vertical;
+}
+.reflection-completed {
+  background: #f0fdf4;
+  border: 1px solid #dcfce7;
+  border-radius: 6px;
+  padding: 16px;
+}
+.success-note { color: #166534; font-weight: 600; margin-bottom: 8px; }
+.reflection-quote { margin: 0; padding-left: 12px; border-left: 3px solid #22c55e; color: #1e293b; font-style: italic; }
+.reflections-history { margin-top: 24px; }
+.text-preview { max-width: 300px; display: inline-block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+
+.shop-grid { display: grid; gap: 16px; }
+.shop-card {
+  background: #fbfbfe;
+  border: 1px solid #e0e0f5;
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+  max-width: 480px;
+  margin: 0 auto;
+}
+.shield-icon { font-size: 48px; margin-bottom: 12px; }
+.shop-card .price { font-size: 28px; font-weight: bold; color: #3b82f6; margin: 8px 0; }
+.shop-card .desc { font-size: 14px; line-height: 1.5; margin-bottom: 16px; }
+.status-indicators {
+  display: flex;
+  justify-content: space-around;
+  background: #f1f5f9;
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 20px;
+  font-size: 14px;
+}
+
+.level-tile.league.tier-bronze { background: #fff7ed; border-color: #ffedd5; color: #c2410c; }
+.level-tile.league.tier-silver { background: #f1f5f9; border-color: #e2e8f0; color: #475569; }
+.level-tile.league.tier-gold { background: #fefcbf; border-color: #fef08a; color: #854d0e; }
+.recovery-mission-card {
+  border-left: 5px solid #eab308 !important;
+  background: #fefce8 !important;
+}
+.recovery-mission-card span { color: #854d0e !important; }
+.recovery-mission-card strong { color: #a16207 !important; }
+.recovery-mission-card p { color: #713f12 !important; }

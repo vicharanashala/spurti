@@ -12,6 +12,7 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import Reflection from './models/Reflection.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -144,6 +145,12 @@ async function getSamagamaUser(chatengineToken) {
 }
 
 async function studentEmailFromRequest(req) {
+  console.log('Incoming headers:', req.headers);
+  if (ALLOW_STUDENT_SEARCH && req.headers['x-student-email']) {
+    const resolved = normalizeEmail(req.headers['x-student-email']);
+    console.log('Resolved email from header:', resolved);
+    return resolved;
+  }
   const cookies = parseCookies(req.headers.cookie || '');
   const data = await getSamagamaUser(cookies.chatengine_token);
   // Samagama's /api/auth/me nests the user as { user: { email, ... } };
@@ -175,16 +182,26 @@ function excusedPayload(student) {
   };
 }
 
+function getWeekLabel(startDate) {
+  if (!startDate) return 'Week 1';
+  const start = new Date(startDate);
+  const diffTime = Math.max(0, Date.now() - start);
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  const weekNum = Math.floor(diffDays / 7) + 1;
+  return `Week ${weekNum}`;
+}
+
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents, reflections] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
+    Reflection.find({ email }).sort({ createdAt: -1 }).lean()
   ]);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
@@ -225,11 +242,19 @@ async function studentPayload(student) {
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      poll2Completed: Boolean(student.poll2Completed),
+      currentStreak: student.currentStreak || 0,
+      longestStreak: student.longestStreak || 0,
+      shieldsCount: student.shieldsCount || 0,
+      shieldAutoApply: student.shieldAutoApply !== false,
+      nudges: student.nudges || [],
+      recoveryMission: student.recoveryMission || { active: false, sessionCountTarget: 3, sessionCountCurrent: 0, pointsToRecover: 15, createdAt: null }
     },
     transactions,
     polls,
     attendance,
+    reflections,
+    currentWeekLabel: getWeekLabel(student.internshipStartDate),
     cohort: {
       averageSp,
       top10Cutoff,
@@ -397,6 +422,164 @@ function registerSurveyRoutes(base, cfg) {
 }
 registerSurveyRoutes('/survey', SURVEY);
 registerSurveyRoutes('/poll2', POLL2);
+
+// Purchase SP Shield (deducts 30 SP, adds 1 shield)
+api.post('/shield/purchase', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  if (student.totalSp < 30) {
+    return res.status(400).json({ error: 'Insufficient SP. You need at least 30 SP to purchase a shield.' });
+  }
+  if (student.shieldsCount >= 3) {
+    return res.status(400).json({ error: 'Maximum shield capacity (3) reached.' });
+  }
+
+  // Restrict to 1 shield purchase per week (7 days)
+  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const boughtThisWeek = await SPTransaction.findOne({
+    email: student.email,
+    category: 'shield_purchase',
+    createdAt: { $gte: oneWeekAgo }
+  });
+  if (boughtThisWeek) {
+    return res.status(400).json({ error: 'You can only purchase 1 SP Shield per week.' });
+  }
+
+  student.totalSp -= 30;
+  student.shieldsCount += 1;
+  await student.save();
+
+  await SPTransaction.create({
+    email: student.email,
+    studentId: student._id,
+    category: 'shield_purchase',
+    deltaMode: 'absolute',
+    deltaValue: -30,
+    appliedDelta: -30,
+    balanceAfter: student.totalSp,
+    reason: 'Purchased SP Shield',
+    dateTime: new Date(),
+    shieldDelta: 1
+  });
+
+  res.json({ ok: true, profile: await studentPayload(student) });
+});
+
+// Set Weekly Goal
+api.post('/reflections/goal', async (req, res) => {
+  console.log('Goal POST body:', req.body);
+  const email = await studentEmailFromRequest(req);
+  console.log('Goal POST resolved email:', email);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  console.log('Goal POST student found:', student ? student.name : 'none');
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const { goal } = req.body || {};
+  if (typeof goal !== 'number' || goal < 0) {
+    return res.status(400).json({ error: 'Goal must be a non-negative number.' });
+  }
+
+  const weekLabel = getWeekLabel(student.internshipStartDate);
+
+  let ref = await Reflection.findOne({ email: student.email, weekLabel });
+  if (ref) {
+    ref.weeklySpGoal = goal;
+    await ref.save();
+  } else {
+    ref = await Reflection.create({
+      studentId: student._id,
+      email: student.email,
+      weekLabel,
+      weeklySpGoal: goal
+    });
+  }
+
+  res.json({ ok: true, profile: await studentPayload(student) });
+});
+
+// Submit Reflection (awards +5 SP)
+api.post('/reflections/submit', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const { reflectionText } = req.body || {};
+  if (!reflectionText || typeof reflectionText !== 'string' || reflectionText.trim().length === 0) {
+    return res.status(400).json({ error: 'Reflection text is required.' });
+  }
+
+  const weekLabel = getWeekLabel(student.internshipStartDate);
+
+  let ref = await Reflection.findOne({ email: student.email, weekLabel });
+  if (!ref) {
+    return res.status(400).json({ error: 'Please set a goal for this week first.' });
+  }
+  if (ref.submitted) {
+    return res.status(400).json({ error: 'You have already submitted a reflection for this week.' });
+  }
+
+  ref.reflectionText = reflectionText.trim();
+  ref.submitted = true;
+  await ref.save();
+
+  student.totalSp += 5;
+  await student.save();
+
+  await SPTransaction.create({
+    email: student.email,
+    studentId: student._id,
+    category: 'reflection_submit',
+    deltaMode: 'absolute',
+    deltaValue: 5,
+    appliedDelta: 5,
+    balanceAfter: student.totalSp,
+    reason: `Reflection Submitted for ${weekLabel}: +5 SP`,
+    dateTime: new Date()
+  });
+
+  res.json({ ok: true, profile: await studentPayload(student) });
+});
+
+// Send Nudge (Admin only)
+api.post('/admin/nudge', adminGuard, async (req, res) => {
+  const { studentId, message } = req.body || {};
+  if (!studentId || !message) {
+    return res.status(400).json({ error: 'studentId and message required.' });
+  }
+
+  const student = await Student.findById(studentId);
+  if (!student) return res.status(404).json({ error: 'Student not found.' });
+
+  student.nudges.push({ message });
+  await student.save();
+
+  res.json({ ok: true });
+});
+
+// Mark Nudges as Read
+api.post('/nudges/read', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  let updated = false;
+  for (const n of student.nudges) {
+    if (!n.read) {
+      n.read = true;
+      updated = true;
+    }
+  }
+  if (updated) {
+    await student.save();
+  }
+  res.json({ ok: true, profile: await studentPayload(student) });
+});
 
 api.get('/admin/stats', adminGuard, async (_req, res) => {
   const [yetToOnboard, excusedStudents, sessions, txns, activeStudents] = await Promise.all([

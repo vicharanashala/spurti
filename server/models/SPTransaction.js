@@ -6,7 +6,7 @@ const spTransactionSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['initial', 'attendance', 'poll', 'manual'],
+    enum: ['initial', 'attendance', 'poll', 'manual', 'shield_purchase', 'shield_grant', 'shield_consume', 'reflection_submit', 'recovery_reward'],
     index: true
   },
   sessionLabel: { type: String, default: '', index: true },
@@ -15,7 +15,8 @@ const spTransactionSchema = new mongoose.Schema({
   appliedDelta: { type: Number, required: true },
   balanceAfter: { type: Number, required: true },
   reason: { type: String, required: true },
-  dateTime: { type: Date, required: true, index: true }
+  dateTime: { type: Date, required: true, index: true },
+  shieldDelta: { type: Number, default: 0 }
 }, { timestamps: true });
 
 spTransactionSchema.index({ email: 1, dateTime: 1, createdAt: 1 });

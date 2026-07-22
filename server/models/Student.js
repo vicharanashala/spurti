@@ -16,6 +16,22 @@ const studentSchema = new mongoose.Schema({
   trophyLeague: { type: String, default: 'Bronze II' },
   legendBadgeUnlocked: { type: Boolean, default: false },
   leaderboardGroup: { type: String, default: '', index: true },
+  currentStreak: { type: Number, default: 0 },
+  longestStreak: { type: Number, default: 0 },
+  shieldsCount: { type: Number, default: 0 },
+  shieldAutoApply: { type: Boolean, default: true },
+  nudges: [{
+    message: { type: String, required: true },
+    sentAt: { type: Date, default: Date.now },
+    read: { type: Boolean, default: false }
+  }],
+  recoveryMission: {
+    active: { type: Boolean, default: false },
+    sessionCountTarget: { type: Number, default: 3 },
+    sessionCountCurrent: { type: Number, default: 0 },
+    pointsToRecover: { type: Number, default: 15 },
+    createdAt: { type: Date, default: null }
+  },
   // Survey triangulation (perception follow-up). Set when the student submits
   // the dashboard pop-up Google Form — via the Apps Script webhook or the
   // "I've submitted" button. Drives whether the survey modal still shows.

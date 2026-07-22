@@ -69,7 +69,7 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} setProfile={setProfile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -262,26 +262,49 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, setProfile, onBack }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+
+  const dismissNudges = async () => {
+    try {
+      const res = await fetch(`${API}/nudges/read`, {
+        method: 'POST',
+        headers: { 'X-Student-Email': student.email }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setProfile(data.profile);
+      }
+    } catch {}
+  };
+
   return (
     <main className="page compact">
+      <NudgesBanner nudges={student.nudges || []} onDismiss={dismissNudges} />
       <header className="topbar">
         {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
         <div>
           <p className="eyebrow">Student Spurti Bank</p>
           <h1>{student.name}</h1>
         </div>
-        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
+        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong>={student.rank && student.cohortSize ? <em>Rank {student.rank} of {student.cohortSize}</em> : null}</div>
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[
+        ['bank','SP Bank'],
+        ['polls','Polls'],
+        ['goals','Goals & Reflections'],
+        ['shop','SP Shield Shop'],
+        ['leaderboard','Leaderboard']
+      ]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
+      {tab === 'goals' && <GoalsTab profile={profile} setProfile={setProfile} />}
+      {tab === 'shop' && <ShopTab profile={profile} setProfile={setProfile} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
   );
@@ -303,9 +326,14 @@ function LevelStatus({ student }) {
           <em>current performance</em>
         </div>
         <div className="level-tile">
-          <span>Legend Badge</span>
-          <strong>{student.legendBadgeUnlocked ? '🏅 Unlocked' : '🔒 Locked'}</strong>
-          <em>reach 1500 SP once</em>
+          <span>Streak</span>
+          <strong>🔥 {student.currentStreak || 0} sessions</strong>
+          <em>longest: {student.longestStreak || 0}</em>
+        </div>
+        <div className="level-tile">
+          <span>SP Shield</span>
+          <strong>🛡️ {student.shieldsCount || 0} / 3</strong>
+          <em>streak insurance</em>
         </div>
         <div className="level-tile">
           <span>Onboarding Group</span>
@@ -314,8 +342,7 @@ function LevelStatus({ student }) {
         </div>
       </div>
       <p className="level-note">
-        Level shows your highest achievement and never decreases. Trophy League shows your current performance and can move up or down with your current Spurti Points.
-        {student.legendBadgeUnlocked ? ' You have unlocked the Legend Badge by reaching 1500 Spurti Points at least once.' : ''}
+        Level shows your highest achievement and never decreases. Trophy League shows your current performance and can move up or down with your SP. Streaks track consecutive sessions qualified. Shields protect your streak during a missed session.
       </p>
     </section>
   );
@@ -347,14 +374,33 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   );
 }
 
+const ALL_BADGES = [
+  { name: 'Getting Started', emoji: '🚀', desc: 'Welcome to Spurti! You are onboarded.' },
+  { name: 'Top 50', emoji: '🏆', desc: 'Rank in the top 50 cohort leaderboard.' },
+  { name: 'Consistent Attendee', emoji: '📅', desc: 'Maintain at least 75% qualified attendance.' },
+  { name: 'Poll Champion', emoji: '🗳️', desc: 'Answered at least 75% of launched polls.' },
+  { name: 'Above Average', emoji: '⚡', desc: 'Exceeded the average SP of your cohort.' },
+  { name: 'Streak Master', emoji: '🔥', desc: 'Achieved a streak of 10 or more sessions.' },
+  { name: 'Shielded', emoji: '🛡️', desc: 'Acquired or consumed an SP Shield.' },
+  { name: 'Reflective Thinker', emoji: '✍️', desc: 'Submitted a weekly self-reflection.' }
+];
+
 function StudentPulse({ profile, badges, nextActions }) {
   const { student, cohort, attendance, polls, transactions } = profile;
   const qualified = attendance.filter(a => a.qualified).length;
   const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
   const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
+  const mission = student.recoveryMission;
   return (
     <section className="pulse-grid">
+      {mission && mission.active && (
+        <div className="pulse-card progress-card recovery-mission-card">
+          <span>Active Recovery Mission</span>
+          <strong>{mission.sessionCountCurrent} / {mission.sessionCountTarget} sessions</strong>
+          <p>Complete {mission.sessionCountTarget} consecutive qualified sessions to recover +{mission.pointsToRecover} SP.</p>
+        </div>
+      )}
       <div className="pulse-card progress-card">
         <span>Standing</span>
         <strong>Rank {student.rank}</strong>
@@ -377,9 +423,27 @@ function StudentPulse({ profile, badges, nextActions }) {
           <b>{pollAttempted}/{pollTotal} polls attempted</b>
         </div>
       </div>
-      <div className="pulse-card">
-        <span>Badges</span>
-        <div className="badge-row">{badges.map(badge => <em key={badge}>{badge}</em>)}</div>
+      <div className="pulse-card wide-pulse">
+        <span>Badge Gallery</span>
+        <div className="badge-gallery-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '10px', marginTop: '8px' }}>
+          {ALL_BADGES.map(b => {
+            const unlocked = badges.includes(b.name) || (b.name === 'Getting Started');
+            return (
+              <div key={b.name} className={`badge-item ${unlocked ? 'unlocked' : 'locked'}`} title={b.desc} style={{
+                background: unlocked ? '#f0fdf4' : '#f8fafc',
+                border: `1px solid ${unlocked ? '#bbf7d0' : '#e2e8f0'}`,
+                borderRadius: '8px',
+                padding: '10px',
+                textAlign: 'center',
+                opacity: unlocked ? 1 : 0.6
+              }}>
+                <div style={{ fontSize: '24px' }}>{unlocked ? b.emoji : '🔒'}</div>
+                <strong style={{ display: 'block', fontSize: '13px', margin: '4px 0', color: unlocked ? '#166534' : '#64748b' }}>{b.name}</strong>
+                <span style={{ fontSize: '11px', color: '#64748b' }}>{b.desc}</span>
+              </div>
+            );
+          })}
+        </div>
       </div>
       <div className="pulse-card wide-pulse">
         <span>SP trend</span>
@@ -416,6 +480,9 @@ function buildBadges(profile) {
   if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
   if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
   if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
+  if ((profile.student.longestStreak || 0) >= 10) badges.push('Streak Master');
+  if ((profile.student.shieldsCount || 0) > 0 || (profile.transactions || []).some(tx => tx.category === 'shield_purchase' || tx.category === 'shield_consume')) badges.push('Shielded');
+  if ((profile.reflections || []).some(r => r.submitted)) badges.push('Reflective Thinker');
   return badges.length ? badges : ['Getting Started'];
 }
 
@@ -593,7 +660,47 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
-      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
+      {studentProfile && (
+        <div className="overlay">
+          <section className="modal wide">
+            <div className="modal-head">
+              <h2>{studentProfile.student.name}</h2>
+              <button className="icon" onClick={() => setStudentProfile(null)}>x</button>
+            </div>
+            <div className="admin-nudge-box" style={{ padding: '0 20px 20px 20px', borderBottom: '1px solid var(--line)' }}>
+              <h3>Send Nudge to Student</h3>
+              <div className="search-row">
+                <input id="admin-nudge-input" placeholder="Enter nudge message (e.g. Please join tomorrow's session early!)..." style={{ flex: 1 }} />
+                <button className="primary" onClick={async () => {
+                  const input = document.getElementById('admin-nudge-input');
+                  const message = input?.value?.trim();
+                  if (!message) return alert('Message cannot be empty.');
+                  try {
+                    const res = await fetch(`${API}/admin/nudge`, {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Email': auth.email,
+                        'X-Admin-Token': auth.token
+                      },
+                      body: JSON.stringify({ studentId: studentProfile.student._id, message })
+                    });
+                    if (res.ok) {
+                      alert('Nudge sent successfully!');
+                      input.value = '';
+                    } else {
+                      alert('Failed to send nudge.');
+                    }
+                  } catch {
+                    alert('Error sending nudge.');
+                  }
+                }}>Send Nudge</button>
+              </div>
+            </div>
+            <SpBank transactions={studentProfile.transactions} />
+          </section>
+        </div>
+      )}
     </main>
   );
 }
@@ -843,6 +950,265 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
         {note && <p className="survey-note">{note}</p>}
       </div>
     </div>
+  );
+}
+
+function NudgesBanner({ nudges, onDismiss }) {
+  const unread = nudges.filter(n => !n.read);
+  if (unread.length === 0) return null;
+  return (
+    <div className="nudges-banner">
+      <div className="nudge-title">📢 Message from Admin:</div>
+      {unread.map((n, i) => (
+        <p key={i} className="nudge-message">"{n.message}" <span className="nudge-time">({new Date(n.sentAt).toLocaleDateString()})</span></p>
+      ))}
+      <button className="primary compact" style={{ marginTop: '8px', padding: '6px 12px' }} onClick={onDismiss}>Dismiss Message</button>
+    </div>
+  );
+}
+
+function GoalsTab({ profile, setProfile }) {
+  const { student, reflections = [], currentWeekLabel } = profile;
+  const [goalInput, setGoalInput] = useState('');
+  const [reflectionInput, setReflectionInput] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const currentRef = reflections.find(r => r.weekLabel === currentWeekLabel);
+
+  const getWeekRange = (startDate, weekLabel) => {
+    const match = String(weekLabel).match(/Week (\d+)/);
+    if (!match) return { start: new Date(0), end: new Date() };
+    const weekNum = parseInt(match[1], 10);
+    const start = new Date(startDate);
+    start.setDate(start.getDate() + (weekNum - 1) * 7);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    return { start, end };
+  };
+
+  const { start, end } = getWeekRange(student.internshipStartDate, currentWeekLabel);
+  const earnedThisWeek = (profile.transactions || [])
+    .filter(tx => {
+      const txDate = new Date(tx.dateTime);
+      return txDate >= start && txDate < end && tx.appliedDelta > 0;
+    })
+    .reduce((sum, tx) => sum + tx.appliedDelta, 0);
+
+  const targetGoal = currentRef ? currentRef.weeklySpGoal : 0;
+  const remaining = Math.max(0, targetGoal - earnedThisWeek);
+  const pct = targetGoal ? Math.min(100, Math.round((earnedThisWeek / targetGoal) * 100)) : 0;
+
+  const handleSetGoal = async () => {
+    setError('');
+    const goal = Number(goalInput);
+    if (isNaN(goal) || goal <= 0) return setError('Please enter a valid goal (positive number).');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/reflections/goal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Student-Email': student.email },
+        body: JSON.stringify({ goal })
+      });
+      if (!res.ok) throw new Error('Failed to set goal');
+      const data = await res.json();
+      setProfile(data.profile);
+    } catch (err) {
+      setError('Failed to set goal. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReflectionSubmit = async () => {
+    setError('');
+    if (!reflectionInput.trim()) return setError('Reflection text cannot be empty.');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/reflections/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Student-Email': student.email },
+        body: JSON.stringify({ reflectionText: reflectionInput })
+      });
+      if (!res.ok) throw new Error('Failed to submit reflection');
+      const data = await res.json();
+      setProfile(data.profile);
+      setReflectionInput('');
+    } catch (err) {
+      setError('Failed to submit reflection. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Goals & Reflections ({currentWeekLabel})</h2>
+      </div>
+      {error && <p className="error">{error}</p>}
+      
+      <div className="goals-section">
+        {!currentRef ? (
+          <div className="goal-setup">
+            <p className="muted" style={{ marginBottom: '12px' }}>Set your target SP goal for {currentWeekLabel} to help track your weekly learning consistency!</p>
+            <div className="search-row">
+              <input type="number" value={goalInput} onChange={e => setGoalInput(e.target.value)} placeholder="e.g. 150 SP" style={{ flex: 1 }} />
+              <button className="primary" disabled={loading} onClick={handleSetGoal}>Set Goal</button>
+            </div>
+          </div>
+        ) : (
+          <div className="goal-active">
+            <div className="goal-banner" style={{ marginBottom: '16px' }}>
+              <span>🎯 Target Goal: <strong>{currentRef.weeklySpGoal} SP</strong></span>
+              <span>Your Current Points: <strong>{student.totalSp} SP</strong></span>
+            </div>
+
+            <div className="goal-progress-section" style={{
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '12px',
+              padding: '16px',
+              marginBottom: '20px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px', fontWeight: 'bold' }}>
+                <span style={{ color: '#1e293b' }}>Weekly Progress</span>
+                <span style={{ color: '#2563eb' }}>{pct}% Completed</span>
+              </div>
+              <div className="progress-bar-container" style={{
+                background: '#e2e8f0',
+                borderRadius: '8px',
+                height: '16px',
+                width: '100%',
+                overflow: 'hidden',
+                marginBottom: '12px'
+              }}>
+                <div className="progress-bar-fill" style={{
+                  background: 'linear-gradient(90deg, #3b82f6 0%, #10b981 100%)',
+                  height: '100%',
+                  width: `${pct}%`,
+                  transition: 'width 0.4s ease'
+                }} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '13px' }}>
+                <div style={{ background: '#f0fdf4', padding: '8px 12px', borderRadius: '8px', border: '1px solid #dcfce7' }}>
+                  <span style={{ color: '#166534', display: 'block', fontSize: '11px', textTransform: 'uppercase', fontWeight: 'bold' }}>Earned This Week</span>
+                  <strong style={{ color: '#14532d', fontSize: '16px' }}>+{earnedThisWeek} SP</strong>
+                </div>
+                <div style={{ background: remaining > 0 ? '#eff6ff' : '#f0fdf4', padding: '8px 12px', borderRadius: '8px', border: remaining > 0 ? '1px solid #dbeafe' : '1px solid #dcfce7' }}>
+                  <span style={{ color: remaining > 0 ? '#1e40af' : '#166534', display: 'block', fontSize: '11px', textTransform: 'uppercase', fontWeight: 'bold' }}>Remaining</span>
+                  <strong style={{ color: remaining > 0 ? '#1e3a8a' : '#14532d', fontSize: '16px' }}>
+                    {remaining > 0 ? `${remaining} SP` : 'Goal Met! 🎉'}
+                  </strong>
+                </div>
+              </div>
+            </div>
+            
+            {!currentRef.submitted ? (
+              <div className="reflection-form">
+                <h3>Weekly Reflection</h3>
+                <p className="muted" style={{ marginBottom: '8px' }}>Submit a short self-reflection on your consistency and learning effort this week to claim a <strong>+5 SP</strong> reward!</p>
+                <textarea 
+                  value={reflectionInput} 
+                  onChange={e => setReflectionInput(e.target.value)} 
+                  placeholder="How did this week go? What did you find easy or challenging?"
+                  rows="4"
+                  className="reflection-textarea"
+                  style={{ width: '100%', marginBottom: '12px' }}
+                />
+                <button className="primary" disabled={loading} onClick={handleReflectionSubmit}>Submit Reflection (+5 SP)</button>
+              </div>
+            ) : (
+              <div className="reflection-completed">
+                <p className="success-note">✅ Reflection submitted! +5 SP has been added to your bank statement.</p>
+                <blockquote className="reflection-quote">"{currentRef.reflectionText}"</blockquote>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {reflections.length > 0 && (
+        <div className="reflections-history" style={{ marginTop: '24px' }}>
+          <h3>Goal History</h3>
+          <table className="table">
+            <thead><tr><th>Week</th><th>Target Goal</th><th>Reflection</th><th>Submitted</th></tr></thead>
+            <tbody>
+              {reflections.map(ref => (
+                <tr key={ref._id}>
+                  <td>{ref.weekLabel}</td>
+                  <td>{ref.weeklySpGoal} SP</td>
+                  <td><em className="text-preview">{ref.reflectionText || '—'}</em></td>
+                  <td>{ref.submitted ? '✅ Yes' : '❌ No'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ShopTab({ profile, setProfile }) {
+  const { student } = profile;
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const buyShield = async () => {
+    setError('');
+    setSuccess('');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/shield/purchase`, {
+        method: 'POST',
+        headers: { 'X-Student-Email': student.email }
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to purchase shield');
+      }
+      const data = await res.json();
+      setProfile(data.profile);
+      setSuccess('Successfully purchased 1 SP Shield! Streak protected.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>SP Shield Shop</h2>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {success && <p className="success-note" style={{ marginBottom: '16px' }}>{success}</p>}
+
+      <div className="shop-grid">
+        <div className="shop-card">
+          <div className="shield-icon">🛡️</div>
+          <h3>SP Shield</h3>
+          <p className="price">30 SP</p>
+          <p className="muted desc">
+            Acquire an SP Shield to protect your streak! If you miss a session or fail to qualify due to connectivity issues, a shield is automatically consumed. Your current streak will be preserved, and you will be awarded baseline attendance points (+5 SP).
+          </p>
+          <div className="status-indicators">
+            <div>Current Balance: <strong>{student.totalSp} SP</strong></div>
+            <div>Shield Inventory: <strong>{student.shieldsCount} / 3</strong></div>
+          </div>
+          <button 
+            className="primary" 
+            disabled={loading || student.totalSp < 30 || student.shieldsCount >= 3} 
+            onClick={buyShield}
+          >
+            {student.shieldsCount >= 3 ? 'Shield Inventory Full' : 'Buy 1 Shield (30 SP)'}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 
