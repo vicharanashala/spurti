@@ -13,6 +13,10 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import Commitment from './models/Commitment.js';
+import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
+import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
+import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -225,7 +229,8 @@ async function studentPayload(student) {
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed)
+      poll2Completed: Boolean(student.poll2Completed),
+      eligibleForVibeGoals: isVibeEligible(student)
     },
     transactions,
     polls,
@@ -268,6 +273,120 @@ api.get('/me', async (req, res) => {
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
   res.json({ authenticated: true, profile: await studentPayload(student) });
+});
+
+// ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
+async function vibeStudent(req) {
+  const email = normalizeEmail(req.body?.email || req.query.email) || await studentEmailFromRequest(req);
+  if (!email) return null;
+  return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+}
+
+api.get('/vibe/state', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (!isVibeEligible(student)) return res.json({ eligible: false });
+  res.json(await buildVibeState(student));
+});
+
+api.post('/vibe/bet', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible for ViBe Goals.' });
+  const { course, goalPct, stake, multiplier, deadline } = req.body || {};
+  const state = await buildVibeState(student);
+  const v = validateBet({ state, course, goalPct: +goalPct, stake: +stake, multiplier: +multiplier, deadline });
+  if (v.errs.length) return res.status(400).json({ error: v.errs.join(' ') });
+  const c = courseByKey(course);
+  // debit the stake now (the "cost of the bet"), visible in the SP Bank
+  await applySpDelta(student.email, -(+stake),
+    `Staked ${stake} SP on ViBe goal: +${goalPct}% ${c ? c.name : course} (${multiplier}×)`);
+  await Commitment.create({
+    email: student.email, type: 'vibe', debited: true,
+    course, goalPct: +goalPct, baselinePct: v.baselinePct,
+    deadline: new Date(deadline), stake: +stake, multiplier: +multiplier,
+    potentialWin: v.win, potentialLoss: v.loss, reserved: v.loss, status: 'active',
+    label: `+${goalPct}% ${c ? c.name : course} (stake ${stake} @ ${multiplier}×)`
+  });
+  const fresh = await Student.findOne({ email: student.email }).lean();
+  res.json(await buildVibeState(fresh));
+});
+
+api.put('/vibe/bet/:id', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible.' });
+  const bet = await Commitment.findOne({ _id: req.params.id, email: student.email, type: 'vibe', status: 'active' });
+  if (!bet) return res.status(404).json({ error: 'No active bet to edit.' });
+  const { goalPct, stake, multiplier } = req.body || {};   // deadline & course are NOT editable
+  const state = await buildVibeState(student);
+  const v = validateBet({ state, course: bet.course, goalPct: +goalPct, stake: +stake, multiplier: +multiplier, ignoreActive: true });
+  if (v.errs.length) return res.status(400).json({ error: v.errs.join(' ') });
+  // reconcile the already-debited stake: refund the difference (old − new)
+  const stakeDiff = bet.stake - (+stake);
+  if (stakeDiff !== 0) {
+    const c = courseByKey(bet.course);
+    await applySpDelta(student.email, stakeDiff,
+      `ViBe goal edited — stake ${bet.stake}→${stake} on +${goalPct}% ${c ? c.name : bet.course}`);
+  }
+  Object.assign(bet, { goalPct: +goalPct, stake: +stake, multiplier: +multiplier,
+    potentialWin: v.win, potentialLoss: v.loss, reserved: v.loss });
+  await bet.save();
+  const fresh = await Student.findOne({ email: student.email }).lean();
+  res.json(await buildVibeState(fresh));
+});
+
+// DEMO: resolve a bet (no live settlement cron locally). result = 'won' | 'lost'.
+api.post('/vibe/bet/:id/settle', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const bet = await Commitment.findOne({ _id: req.params.id, email: student.email, type: 'vibe', status: 'active' });
+  if (!bet) return res.status(404).json({ error: 'No active bet.' });
+  const result = req.body?.result === 'lost' ? 'lost' : 'won';
+  await settleBetDemo(bet, result);
+  const fresh = await Student.findOne({ email: student.email }).lean();
+  res.json(await buildVibeState(fresh));
+});
+
+// ---- Standup commitments (weekly, attendance-only; keep-the-stake) -----------
+api.get('/standup/state', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (!isVibeEligible(student)) return res.json({ eligible: false });
+  res.json(await buildStandupState(student));
+});
+
+api.post('/standup/commit', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible for standup commitments.' });
+  const { tierKey, multiplier } = req.body || {};
+  const r = await placeStandup(student, { tierKey, multiplier });
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json(await buildStandupState(student));
+});
+
+// DEMO: resolve a standup commitment (no live weekly settlement cron yet).
+api.post('/standup/commit/:id/settle', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const c = await Commitment.findOne({ _id: req.params.id, email: student.email, type: 'standup', status: 'active' });
+  if (!c) return res.status(404).json({ error: 'No active standup commitment.' });
+  await settleStandupDemo(c, req.body?.result === 'lost' ? 'lost' : 'won');
+  const fresh = await Student.findOne({ email: student.email }).lean();
+  res.json(await buildStandupState(fresh));
+});
+
+// ---- My Journey (phase-by-phase progress + SP; 16 July cohort onward) ---------
+api.get('/journey/state', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (!isVibeEligible(student)) return res.json({ eligible: false });
+  res.json(await buildJourneyState(student));
+});
+
+api.put('/journey/plan', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible for My Journey.' });
+  await saveJourneyPlan(student.email, req.body || {});
+  res.json(await buildJourneyState(student));
 });
 
 api.get('/search', async (req, res) => {
