@@ -513,6 +513,275 @@ input {
 .survey-primary { background: #4f46e5; color: #fff; }
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
+
+/* Wraps the Tour button + the existing score-card in the student topbar.
+   Layout-only — no color/background changes, so the topbar keeps its
+   original look. */
+.topbar-right { display: flex; align-items: center; gap: 14px; }
+
+.onboarding-tour-pill {
+  background: #e9f2f5;
+  border: 1px solid var(--line);
+  color: var(--primary-dark);
+  border-radius: 20px;
+  padding: 4px 14px;
+  font-size: 12px;
+  font-weight: 850;
+  cursor: pointer;
+  min-height: auto;
+  white-space: nowrap;
+}
+.onboarding-tour-pill:hover { background: #dcebf0; }
+
+/* Onboarding tour modal */
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.onboarding-wrapper {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.onboarding-card {
+  width: 100%;
+  max-width: 540px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+}
+.onboarding-header {
+  background: #1a3a3a;
+  padding: 20px 28px;
+  border-radius: 12px 12px 0 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+}
+.onboarding-step-label {
+  justify-self: start;
+  color: #9fdfcb;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.onboarding-title {
+  justify-self: center;
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 500;
+  margin: 0;
+  text-align: center;
+}
+.onboarding-skip {
+  justify-self: end;
+  background: transparent;
+  border: 0;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  font-weight: 700;
+  min-height: auto;
+  padding: 4px 6px;
+}
+.onboarding-progress-bar {
+  width: 100%;
+  height: 3px;
+  background: #e2e8f0;
+}
+.onboarding-progress-bar-fill {
+  height: 100%;
+  background: #2d6a6a;
+  transition: width 300ms ease;
+}
+.onboarding-body {
+  background: #ffffff;
+  padding: 28px 32px;
+  min-height: 280px;
+  overflow: hidden;
+}
+.onboarding-step-content {
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+.onboarding-step-content.phase-out { opacity: 0; transform: translateX(-10px); }
+.onboarding-step-content.phase-in { opacity: 1; transform: translateX(0); }
+.onboarding-icon-row { display: flex; justify-content: center; }
+.onboarding-icon-circle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #e1f5ee;
+  color: #1a3a3a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+}
+.onboarding-step-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1a3a3a;
+  text-align: center;
+  margin: 16px 0 0;
+}
+.onboarding-step-description {
+  font-size: 14px;
+  color: #64748b;
+  line-height: 1.7;
+  text-align: center;
+  max-width: 400px;
+  margin: 12px auto 0;
+}
+.onboarding-visual-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 20px;
+  margin-top: 20px;
+}
+.onboarding-footer {
+  padding: 16px 32px;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.onboarding-dots { display: flex; align-items: center; gap: 6px; }
+.onboarding-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e2e8f0;
+}
+.onboarding-dot.active { width: 10px; height: 10px; background: #2d6a6a; }
+.onboarding-nav { display: flex; gap: 10px; }
+.onboarding-btn-primary {
+  background: #1a3a3a;
+  color: #ffffff;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 20px;
+  font-weight: 700;
+}
+.onboarding-btn-primary:disabled { opacity: 0.6; cursor: default; }
+.onboarding-btn-secondary {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  color: #64748b;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-weight: 700;
+}
+
+/* Step 1 — animated SP counter */
+.onboarding-sp-counter { text-align: center; }
+.onboarding-sp-counter-value { font-size: 48px; font-weight: 700; color: #1a3a3a; }
+.onboarding-sp-counter-caption { font-size: 13px; color: #64748b; margin-top: 4px; }
+
+/* Step 2 — SP rules table */
+.onboarding-rules-table { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.onboarding-rules-col-header {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  margin-bottom: 10px;
+}
+.onboarding-rules-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #1a3a3a;
+}
+.onboarding-rules-row:last-child { margin-bottom: 0; }
+.onboarding-rules-badge {
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* Step 3 — mini leaderboard */
+.onboarding-lb-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 0 8px 8px 0;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #1a3a3a;
+}
+.onboarding-lb-row:last-child { margin-bottom: 0; }
+.onboarding-lb-row.rank-1 { border-left: 3px solid #f59e0b; background: #fffbeb; }
+.onboarding-lb-row.rank-2 { border-left: 3px solid #94a3b8; background: #f8fafc; }
+.onboarding-lb-row.rank-you { border-left: 3px solid #2d6a6a; background: #e1f5ee; font-weight: 600; }
+.onboarding-lb-rank { width: 16px; font-weight: 700; color: #64748b; }
+.onboarding-lb-name { flex: 1; }
+.onboarding-lb-sp { font-weight: 700; }
+
+/* Step 4 — nudge banner (mirrors NudgeBanner styling) */
+.onboarding-nudge-visual { background: transparent; border: 0; padding: 0; }
+.onboarding-nudge-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff8e1;
+  border-left: 4px solid #f59e0b;
+  border-radius: 0 8px 8px 0;
+  padding: 14px 16px;
+}
+.onboarding-nudge-icon { font-size: 16px; color: #f59e0b; font-weight: 700; }
+.onboarding-nudge-text { flex: 1; color: #78350f; font-size: 13px; line-height: 1.5; }
+.onboarding-nudge-dismiss {
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(120, 53, 15, 0.25);
+  color: #78350f;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  min-height: auto;
+}
+
+/* Step 5 — SP earning simulator */
+.onboarding-simulator { padding-top: 16px; padding-bottom: 4px; }
+.onboarding-sim-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a3a3a;
+}
+.onboarding-sim-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: #2d6a6a; }
+.onboarding-sim-total {
+  text-align: center;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed #e2e8f0;
+}
+.onboarding-sim-total strong { display: block; font-size: 32px; color: #1a3a3a; }
+.onboarding-sim-total span { display: block; margin-top: 4px; font-size: 12px; color: #64748b; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }
 
 /* --- ViBe Goals tab -------------------------------------------------------- */

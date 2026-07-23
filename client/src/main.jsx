@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import OnboardingTrigger from './components/OnboardingTrigger.jsx';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
@@ -267,6 +268,7 @@ function StudentView({ profile, onBack }) {
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+  const onboardingRef = useRef(null);
   return (
     <main className="page compact">
       <header className="topbar">
@@ -275,8 +277,14 @@ function StudentView({ profile, onBack }) {
           <p className="eyebrow">Student Spurti Bank</p>
           <h1>{student.name}</h1>
         </div>
-        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
+        <div className="topbar-right">
+          <button type="button" className="onboarding-tour-pill" onClick={() => onboardingRef.current?.open()}>
+            Tour
+          </button>
+          <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
+        </div>
       </header>
+      <OnboardingTrigger ref={onboardingRef} studentEmail={student.email} studentName={student.name} />
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'],
