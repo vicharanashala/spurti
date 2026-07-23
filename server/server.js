@@ -13,6 +13,8 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { getStreakStatus, claimDailyStreak, processAllStudents } from './services/streakService.js';
+import Streak from './models/Streak.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -238,7 +240,8 @@ async function studentPayload(student) {
       pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
     },
     leaderboard: leaderboard.map(mapRow),
-    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
+    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow),
+    streak: await getStreakStatus(email).catch(() => null)
   };
 }
 
@@ -557,7 +560,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     };
   });
 
-  const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
+  const categoryTotals = ['initial', 'attendance', 'poll', 'manual', 'streak'].map(category => {
     const rows = activeTransactions.filter(t => t.category === category);
     return {
       category,
@@ -616,6 +619,49 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
+
+// FEATURE 10: Daily Streak - GET/POST /api/streak
+api.get('/streak', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Unauthorized' });
+    const status = await getStreakStatus(email);
+    res.json(status);
+  } catch (err) {
+    console.error('streak GET error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
+});
+api.post('/streak/claim', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Unauthorized' });
+    const result = await claimDailyStreak(email);
+    res.json(result);
+  } catch (err) {
+    console.error('streak claim error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+// Admin: list all streaks
+api.get('/admin/streaks', adminGuard, async (req, res) => {
+  const sort = String(req.query.sort || 'currentStreak');
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+  const streaks = await Streak.find().sort({ [sort]: -1 }).limit(limit).lean();
+  res.json(streaks);
+});
+// Admin: trigger daily streak processing for all students
+api.post('/admin/streak/process-all', adminGuard, async (req, res) => {
+  try {
+    const date = req.body.date; // optional YYYY-MM-DD
+    const results = await processAllStudents(date);
+    res.json({ processed: results.length, results });
+  } catch (err) {
+    console.error('streak process-all error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.use('/api', api);
 app.use('/spurti/api', api);

@@ -75,6 +75,19 @@ status: 'pending' | 'accepted' | 'rejected',
 reviewedBy, reviewedAt, transactionId
 ```
 
+### streaks
+```
+email (unique, indexed), studentId (ref Student, indexed),
+currentStreak (default: 0), longestStreak (default: 0),
+heartsRemaining (default: 2), heartsUsed (default: 0),
+lastQualifyingDate (string), lastProcessedDate (string),
+streakStartDate (Date), totalStreakSp (default: 0),
+lastHeartUseDate (string),
+history: [{ date: string, sp: number, type: 'daily' | 'milestone' | 'heart_save' }],
+timestamps
+```
+Index on `currentStreak: -1` for leaderboard sorting.
+
 ## Architecture — two halves
 
 1. **Web app (this repo, `server/` + `client/`)** — Express API + React SPA,
@@ -135,6 +148,158 @@ scoring — the `pipeline/` rubric is authoritative. The old Zoom ±5 ingest
 - `GET /api/admin/chat-sp-reviews` — pending reviews
 - `POST /api/admin/chat-sp-reviews/:id/accept` — award SP
 - `POST /api/admin/chat-sp-reviews/:id/reject` — reject
+- `GET /api/admin/streaks` — list all streak documents (sort, limit)
+- `POST /api/admin/streak/process-all` — trigger daily streak processing for all students
+
+## Streak Score Feature
+
+### What it is
+The Streak Score incentivises daily attendance consistency. Students earn bonus SP
+for attending sessions on consecutive days (Mon–Sat). Sundays are excluded — they
+do **not** count as streak days and do **not** break streaks.
+
+### Eligibility
+- Only students whose `internshipStartDate` is **on or after 2026-07-16** are
+  eligible. Students who started earlier get no streak processing at all.
+- Students with `status: 'excused'` are excluded.
+
+### How qualification works (per day)
+A student qualifies for a streak day if **at least one session** on that date has
+**both**:
+1. `attendancePercentage >= 85%` (from `attendancerecords`)
+2. `poll participation >= 85%` (from `pollrecords`)
+
+If no `attendancerecords` exist (dev / pre-pipeline), the system falls back to
+`sptransactions`: `appliedDelta >= 10` (which implies >= 90%) satisfies the 85%
+threshold.
+
+### SP rewards
+| Streak day | SP earned |
+|-----------|-----------|
+| Days 1–9 | 1 SP/day |
+| Day 10 (milestone) | 5 SP |
+| Days 11–19 | 1 SP/day |
+| Day 20 (milestone) | 7 SP |
+| Days 21–29 | 1 SP/day |
+| Day 30 (milestone) | 9 SP |
+| Days 31+ | 2 SP/day |
+| Day 40 (milestone) | 11 SP |
+| Every 10th day after 30 | +2 more than previous milestone |
+
+**Milestone formula:** `3 + (streakDay / 10) * 2`
+
+### Hearts (streak savers)
+Each student starts with **2 hearts**. If a day is missed, a heart is consumed to
+preserve the streak. Hearts are **not** used during backfill. Losing both hearts
+resets the streak to 0.
+
+When a heart is used, `lastQualifyingDate` is updated to the heart-saved date,
+resetting the gap counter so consecutive hearts work correctly.
+
+### Gap logic (Sunday-aware)
+The `isConsecutiveGap` check uses `nextWeekday()` instead of `addDays(..., 1)`.
+This means if the last qualifying date was Friday, the expected next qualifying
+day is Monday (skipping Sunday). A student who qualifies on Friday, misses
+Saturday (heart), and misses Monday (heart) can use both hearts without breaking
+the streak.
+
+### API endpoints
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| `GET` | `/api/streak` | Student (cookie) | Returns streak status for the logged-in student |
+| `POST` | `/api/streak/claim` | Student (cookie) | Manually claim streak SP from the dashboard |
+| `GET` | `/api/admin/streaks` | Admin guard | List all streak documents, sorted and limited |
+| `POST` | `/api/admin/streak/process-all` | Admin guard | Trigger daily streak processing for all students on a given date |
+
+Streak data is also embedded in the profile response (`profile.streak`).
+
+### Cron job — `server/cron/streakDaily.js`
+Standalone Node script using the raw MongoDB driver (not Mongoose). Designed to
+run daily after the main SP pipeline completes.
+
+**Environment variables:**
+- `MONGO_URI` — from `.env` (same DB as the web app)
+- `DATE=YYYY-MM-DD` — process a specific date (default: yesterday, IST-aware)
+- `DRY_RUN=1` — log results without writing to DB
+- `BACKFILL=1` — process from each student's start date (one-time setup)
+
+**Behaviour:**
+- Automatically skips Sundays (shifts target date to Saturday if needed)
+- Skips students whose `internshipStartDate` is before `STREAK_CUTOFF_DATE`
+- In backfill mode, skips Sundays in the date range
+- Uses `nextWeekday()` for gap logic (same as streakService.js)
+- Updates `lastQualifyingDate` on heart use (same as streakService.js)
+
+### Frontend
+- **`StreakCard`** — compact summary on the dashboard (current streak, hearts,
+  SP, next milestone, today status)
+- **`StreakDetail`** — full tab view with stats grid, "How it works" rules, and
+  recent history table
+- **Tab label:** "Streak" (second tab)
+- **CSS:** `client/src/styles.css` lines 1103–1176
+
+### Files involved
+| File | Purpose |
+|------|---------|
+| `server/config.js` | Threshold constants (85/85/2) + `STREAK_CUTOFF_DATE` |
+| `server/models/Streak.js` | Mongoose schema for `streaks` collection |
+| `server/services/streakService.js` | Core business logic (qualification, processing, claim, status) |
+| `server/cron/streakDaily.js` | Standalone daily cron script |
+| `server/server.js:1100-1144` | API routes + profile injection |
+| `server/models/SPTransaction.js` | `'streak'` in category enum |
+| `client/src/main.jsx:337-440` | `StreakCard` + `StreakDetail` React components |
+| `client/src/styles.css:1103-1176` | Streak CSS |
+| `server/services/__tests__/streakService.test.js` | 37 unit tests |
+
+### What the admin needs to do after merging
+
+#### 1. Pull and build on production server
+```bash
+cd /home/sakshi/spurti
+git pull origin main
+npm install
+npm --prefix client install && npm run build
+```
+
+#### 2. Restart the Express server
+```bash
+# Restart however the server is managed (pm2, systemd, etc.)
+pm2 restart spurti
+```
+The `streaks` collection is auto-created by MongoDB on first write — no manual
+DB migration needed.
+
+#### 3. One-time backfill (historical streak data)
+Run with `DRY_RUN=1` first to preview:
+```bash
+BACKFILL=1 DRY_RUN=1 node server/cron/streakDaily.js
+```
+Then run for real:
+```bash
+BACKFILL=1 node server/cron/streakDaily.js
+```
+This processes every active student with `internshipStartDate >= 2026-07-16`
+from their start date through yesterday. Students who started before the cutoff
+are automatically skipped.
+
+#### 4. Set up daily cron job
+Add to crontab (`crontab -e`) to run after the main SP pipeline each day:
+```
+# Streak processing — runs daily at 23:59 IST (18:59 UTC) after pipeline
+59 18 * * * cd /home/sakshi/spurti && node server/cron/streakDaily.js >> /home/sakshi/spurti/logs/streak.log 2>&1
+```
+The script automatically skips Sundays and students before the cutoff date.
+
+#### 5. Verify
+- Open `/spurti` as a student → streak card + "Streak" tab should appear
+- Admin: `GET /api/admin/streaks` → should return scored students
+- Admin: `POST /api/admin/streak/process-all` with `{ "date": "2026-07-17" }`
+  → manual trigger for a specific date
+
+#### No other action needed
+- No `.env` changes required (cron uses existing `MONGO_URI`)
+- No schema migration — Mongoose auto-creates the `streaks` collection
+- Frontend is built into `client/dist` and served as static files
 
 ## Auth — `chatengine_token` cookie passthrough (LIVE since 2026-06-29)
 Spurti lives at `samagama.in/spurti` (same domain as Samagama), so the browser
