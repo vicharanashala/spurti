@@ -640,3 +640,30 @@ input {
 .cm-body { padding: 4px 14px 14px; border-top: 1px solid var(--line); }
 .cm-body .vg { margin-top: 8px; }
 .cm-soon { color: var(--muted); font-size: 14px; line-height: 1.6; padding: 10px 2px; }
+
+/* ---- Upvote Challenges tab -------------------------------------------------- */
+.ch { display: grid; gap: 16px; }
+.ch .panel h2 { margin-bottom: 4px; }
+.ch-balance { display: flex; align-items: center; gap: 12px; padding: 16px 20px; }
+.ch-balance strong { font-size: 28px; color: var(--primary); }
+.ch-balance span { color: var(--muted); font-size: 14px; }
+.ch-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+@media (max-width: 720px) { .ch-grid { grid-template-columns: 1fr; } }
+.ch-card { border: 1px solid var(--line); border-radius: 10px; padding: 16px; background: var(--panel); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; }
+.ch-card-head strong { display: block; font-size: 16px; margin-bottom: 6px; }
+.ch-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.ch-badge { display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 800; background: #eef2ff; color: var(--text); }
+.ch-badge-mult { background: #fef3e2; color: var(--amber); }
+.ch-desc { color: var(--muted); font-size: 13px; margin: 0; line-height: 1.5; }
+.ch-bar-wrap { }
+.ch-bar-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.ch-bar-label b { color: var(--text); }
+.ch-bar { margin-top: 0; }
+.ch-meta { color: var(--muted); font-size: 12px; }
+.ch-my-vote { }
+.ch-actions { display: flex; gap: 8px; align-items: center; }
+.ch-actions input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; background: #fff; color: var(--text); font-size: 13px; }
+.ch-actions button { white-space: nowrap; min-height: 36px; }
+.ch-warn { color: var(--red); font-size: 12px; font-weight: 700; margin: 0; }
+.ch-active-card { margin-bottom: 0; }
+.ch-active-card .side .vg-pill { font-size: 13px; padding: 4px 12px; }
