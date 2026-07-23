@@ -120,9 +120,15 @@ which hold the retired CSV/±5 logic). See `pipeline/README.md` for detail.
 
 - **Initial:** +100 to every *started intern* on their official start date.
   Future-start interns are zeroed; non-intern roster entries are set aside.
-- **Attendance (A):** presence clipped to the official window
-  `[09:05 IST, min(first-instance-end, 11:00 IST)]`; `pct = clipped / window`,
-  then banded: **≥90% → +10, 75–89% → +5, 50–74% → +3, <50% → 0**.
+- **Attendance (A):** presence clipped to the official window, `pct = clipped /
+  window`, then banded: **≥90% → +10, 75–89% → +5, 50–74% → +3, <50% → 0**.
+  - **Before 2026-07-16 (morning standup):** window `[09:05 IST, min(first-instance-end, 11:00 IST)]`.
+  - **From 2026-07-16 (standup moved to evening):** window `[20:05 IST, min(picked-mtg-end, 21:00 IST)]`
+    and the scored meeting is the mandatory meeting with the **largest overlap**
+    of that evening window (not just the earliest-starting one — the all-day
+    persistent room must not steal the slot). Cutover + times are constants at
+    the top of `sp-rubric-build-mirror.cjs`: `EVENING_CUTOVER`,
+    `EVENING_WSTART_IST`, `EVENING_WEND_IST`. Change these if the timing shifts again.
 - **Poll (B):** `pct = answered / totalQuestions`, same band ladder (10/5/3/0).
 - **Grace day 2026-06-06:** 1-min join = full attendance + full poll.
 - **Chat / discretionary:** admin-reviewed via ChatSPReview in the web app
@@ -333,6 +339,19 @@ Code: `getSamagamaUser` / `studentEmailFromRequest` in `server/server.js`.
 - **To verify new ingestion:** After running `ingestSession`, check that: (a) new session appears in `sessions` collection, (b) transaction count increases, (c) for a sample student, balance in `sptransactions` matches their `totalSp` in `students` table, (d) leaderboard API reflects updated SP
 
 ## Known Bugs / Notes
+- **2026-07-16 standup moved morning → evening (attendance window fix).** Students
+  flagged that the 16 Jul evening standup (~60 min) credited "115 min". Cause was
+  NOT double-counting: the scorer clipped presence to the fixed **09:05–11:00 IST
+  (=115 min) morning window**, which no longer matched the standup. The persistent
+  Zoom room `95674128668` ("Evening Standup") stays open all day, so it satisfied
+  the old morning window. Fix: added an evening-window cutover (see SP Calculation
+  section) → from 16 Jul the window is **20:05–21:00 IST (55 min)** and the scorer
+  picks the max-overlap meeting. Re-scored + APPLIED 2026-07-17 09:17Z
+  (backup `sp-runs/sp_backup_mirror_2026-07-17T0917Z`; script backup
+  `pipeline/sp-rubric-build-mirror.cjs.bak.20260717T091026Z`). Impact on 16 Jul:
+  493 students ↑ (mostly 0→+10, real evening attendees who'd been under-credited),
+  35 ↓ (incl. ~20 who only idled in the morning room, 10→0), 204 unchanged.
+  Dates before the cutover use the identical old code path (no historical change).
 - `deltaMode` validator error: schema expects `'absolute' | 'percentage'`. Using `'percent'` (singular) causes validation failure. Fixed in code — only affects legacy transactions created before the fix (May 26 restart).
 - **Percentage SP support:** When a chat SP review is accepted with `% SP` (e.g. +10% SP), `deltaMode` is set to `'percentage'`, `deltaValue` holds the percent (e.g. 10), and `appliedDelta` is computed at accept time as `round(currentBalance * deltaValue / 100)`. This works correctly.
 

@@ -280,10 +280,14 @@ function StudentView({ profile, onBack }) {
       <LevelStatus student={student} />
       <StreakCard streak={profile.streak} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['streak','Streak'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['streak','Streak'], ['polls','Polls'],
+        ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
+        ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'streak' && <StreakDetail streak={profile.streak} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
+      {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} setTab={setTab} />}
+      {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
   );
@@ -611,6 +615,437 @@ function Leaderboard({ rows }) {
         <tbody>{rows.map(row => <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}><td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.totalSp}</td></tr>)}</tbody>
       </table>
     </section>
+  );
+}
+
+const fmtDate = d => d ? new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '—';
+const toInput = d => d ? new Date(d).toISOString().slice(0, 10) : '';
+
+// The unified phase-by-phase progress + SP tab. Four phases: Standups, ViBe, SPA,
+// Projects. Standups & ViBe show real SP; SPA & Projects are placeholders until the
+// Samagama data (and their SP rule) land. Goal *staking* lives in the Commitments tab.
+function MyJourney({ student, setTab }) {
+  const email = student.email;
+  const [data, setData] = useState(null);
+  const [plan, setPlan] = useState({ vibeBy: '', spaBy: '', projectBy: '' });
+  const [savedMsg, setSavedMsg] = useState(false);
+
+  const load = async () => {
+    const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`);
+    const j = await r.json();
+    setData(j);
+    if (j.plan) setPlan({ vibeBy: toInput(j.plan.vibeBy), spaBy: toInput(j.plan.spaBy), projectBy: toInput(j.plan.projectBy) });
+  };
+  useEffect(() => { load(); }, [email]);
+
+  const savePlan = async () => {
+    const r = await fetch(`${API}/journey/plan`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, ...plan })
+    });
+    if (r.ok) { setData(await r.json()); setSavedMsg(true); setTimeout(() => setSavedMsg(false), 2000); }
+  };
+
+  if (!data) return <section className="panel">Loading your journey…</section>;
+  if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
+
+  const { standups, vibe, spa, projects } = data;
+  const spaPct = spa.total ? Math.round(spa.solved / spa.total * 100) : 0;
+
+  return (
+    <div className="jr">
+      <section className="panel jr-plan">
+        <h2>My internship plan</h2>
+        <p className="muted">Four phases to your Summership. Set the dates you’re aiming for — your cards below track you against them. (SP is staked separately in the <b>Commitments</b> tab.)</p>
+        <div className="jr-plan-row">
+          <label>Finish ViBe by<input type="date" value={plan.vibeBy} onChange={e => setPlan({ ...plan, vibeBy: e.target.value })} /></label>
+          <label>Solve all 53 SPA by<input type="date" value={plan.spaBy} onChange={e => setPlan({ ...plan, spaBy: e.target.value })} /></label>
+          <label>First project PR by<input type="date" value={plan.projectBy} onChange={e => setPlan({ ...plan, projectBy: e.target.value })} /></label>
+          <button className="primary" onClick={savePlan}>Save plan</button>
+          {savedMsg && <span className="jr-saved">✓ Saved</span>}
+        </div>
+      </section>
+
+      <div className="jr-grid">
+        {/* Phase 1 — Standups */}
+        <section className="jr-card phase-standups">
+          <div className="jr-head"><span className="jr-n">1</span><h3>Standups</h3><span className="jr-sp">+{standups.sp} SP</span></div>
+          <p className="jr-sub">Zoom attendance + Spandan polls</p>
+          <div className="jr-stats">
+            <div><strong>{standups.zoomMinutes}</strong><span>Zoom minutes</span></div>
+            <div><strong>{standups.sessionsAttended}</strong><span>sessions attended</span></div>
+            <div><strong>{standups.pollsAttempted}/{standups.pollsTotal}</strong><span>polls attempted</span></div>
+          </div>
+          <div className="jr-splits">
+            <span className="jr-pill">Attendance +{standups.spAttendance}</span>
+            <span className="jr-pill">Polls +{standups.spPolls}</span>
+          </div>
+        </section>
+
+        {/* Phase 2 — ViBe */}
+        <section className="jr-card phase-vibe">
+          <div className="jr-head"><span className="jr-n">2</span><h3>ViBe courses</h3><span className={`jr-sp ${vibe.sp < 0 ? 'neg' : ''}`}>{vibe.sp >= 0 ? '+' : ''}{vibe.sp} SP</span></div>
+          <p className="jr-sub">{vibe.clearedCount}/{vibe.totalCourses} courses complete · plan: by {fmtDate(data.plan.vibeBy)}</p>
+          <div className="jr-dots">
+            {vibe.ladder.map(l => (
+              <div key={l.key} className={`jr-dot ${l.cleared ? 'done' : (vibe.current && vibe.current.key === l.key ? 'current' : '')}`} title={l.name}>
+                <b>{l.cleared ? '✓' : `${l.pct}%`}</b><span>{l.name}</span>
+              </div>
+            ))}
+          </div>
+          <div className="jr-splits">
+            {vibe.current
+              ? <span className="jr-pill">Now: {vibe.current.name} — {vibe.current.pct}%</span>
+              : <span className="jr-pill">All courses complete 🎉</span>}
+            {vibe.activeCommitment && <span className="jr-pill amber">Active commitment: +{vibe.activeCommitment.goalPct}%</span>}
+            <button className="jr-link" onClick={() => setTab('vibe')}>Set a commitment →</button>
+          </div>
+        </section>
+
+        {/* Phase 3 — SPA (data + SP rule pending Samagama) */}
+        <section className="jr-card phase-spa">
+          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-soon">Coming soon</span></div>
+          <p className="jr-sub">53-problem set · plan: by {fmtDate(data.plan.spaBy)}</p>
+          {spa.pending
+            ? <p className="cm-soon">Your Matrix Mystics progress and SP will appear here soon — we’re wiring up the data.</p>
+            : <>
+                <div className="jr-big"><strong>{spa.solved}</strong><span>/ {spa.total} solved</span></div>
+                <div className="jr-progress"><i style={{ width: `${spaPct}%` }} /></div>
+                <div className="jr-splits"><span className="jr-pill">{spa.spaPoints} SPA points</span></div>
+              </>}
+        </section>
+
+        {/* Phase 4 — Projects (data + SP rule pending Samagama) */}
+        <section className="jr-card phase-project">
+          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">Coming soon</span></div>
+          <p className="jr-sub">Pull requests · plan: by {fmtDate(data.plan.projectBy)}</p>
+          {projects.pending
+            ? <p className="cm-soon">Your project PRs and SP will appear here soon — we’re wiring up the data.</p>
+            : <div className="jr-stats">
+                <div><strong>{projects.prsRaised}</strong><span>PRs raised</span></div>
+                <div><strong>{projects.prsMerged}</strong><span>PRs merged</span></div>
+              </div>}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function courseName(ladder, key) { const c = ladder.find(l => l.key === key); return c ? c.name : key; }
+// net SP over the whole commitment: won -> win minus the debited stake; lost -> stake + penalty
+function netFor(b) { return b.status === 'won' ? b.potentialWin - b.stake : -(b.stake + b.potentialLoss); }
+
+// The Commitments hub: one accordion card per phase. Every phase shares the same SP
+// engine (stake debited → HIT wins it back multiplied / MISS loses a penalty); only
+// the target metric differs. ViBe is live; the other three land one by one.
+const COMMITMENT_TYPES = [
+  { key: 'vibe',    name: 'ViBe courses',        blurb: 'Pledge to raise your current course’s completion by X% before a deadline.', ready: true },
+  { key: 'standup', name: 'Standups',            blurb: 'Pledge to attend all of this week’s standups at a chosen attendance tier.', ready: true },
+  { key: 'spa',     name: 'SPA — Matrix Mystics', blurb: 'Pledge to solve N of the 53 problems by a date.',                          ready: false },
+  { key: 'project', name: 'Projects',            blurb: 'Pledge to raise / merge N pull requests by a date.',                        ready: false }
+];
+
+function Commitments({ student }) {
+  const [open, setOpen] = useState('vibe');
+  return (
+    <div className="cm">
+      <section className="panel">
+        <h2>Commitments</h2>
+        <p className="muted">Stake SP on a goal in any phase — hit it by the deadline and win your stake back multiplied; miss and you lose a penalty on top. <b>One active commitment per phase</b> (up to four running at once).</p>
+      </section>
+      {COMMITMENT_TYPES.map(t => {
+        const isOpen = open === t.key;
+        return (
+          <section key={t.key} className={`cm-acc ${isOpen ? 'open' : ''} phase-${t.key}`}>
+            <button className="cm-accbtn" onClick={() => setOpen(isOpen ? null : t.key)}>
+              <span className="cm-caret">{isOpen ? '▾' : '▸'}</span>
+              <b>{t.name}</b>
+              {!t.ready && <span className="cm-tag">coming soon</span>}
+              <span className="cm-blurb">{t.blurb}</span>
+            </button>
+            {isOpen && (
+              <div className="cm-body">
+                {t.ready
+                  ? (t.key === 'vibe' ? <VibeGoals student={student} /> : <StandupGoals student={student} />)
+                  : <p className="cm-soon">{t.blurb}<br /><b>Coming soon</b> — same stake-and-win mechanic as ViBe, tuned to this phase.</p>}
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function VibeGoals({ student }) {
+  const email = student.email;
+  const [data, setData] = useState(null);
+  const [form, setForm] = useState({ goalPct: 20, stake: 100, multiplier: 4, deadline: '' });
+  const [editing, setEditing] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    const r = await fetch(`${API}/vibe/state?email=${encodeURIComponent(email)}`);
+    setData(await r.json());
+  };
+  useEffect(() => {
+    load();
+    const d = new Date(); d.setDate(d.getDate() + 2);
+    setForm(f => ({ ...f, deadline: d.toISOString().slice(0, 10) }));
+  }, [email]);
+
+  if (!data) return <section className="panel">Loading ViBe Goals…</section>;
+  if (!data.eligible) return <section className="panel empty">ViBe Goals isn’t available for your cohort yet.</section>;
+
+  const cur = data.current, cfg = data.config;
+  const s = +form.stake, m = +form.multiplier, g = +form.goalPct;
+  const loss = cfg.penaltyFactor * s * m, win = s * m, need = s + loss;   // stake debited + worst-case penalty
+  const daysOut = form.deadline
+    ? Math.round((new Date(form.deadline).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000) : 0;
+  const availForBet = data.available + (editing && data.active ? data.active.reserved + data.active.stake : 0);
+
+  let problem = null;
+  if (!cur) problem = 'All courses complete — nothing to commit to.';
+  else if (g <= cur.floorPct) problem = `Goal must beat the weekly floor (${cur.floorPct}%).`;
+  else if (daysOut < 1 || daysOut > cfg.maxBetDays) problem = `Deadline must be 1–${cfg.maxBetDays} days out.`;
+  else if (g > cur.remaining) problem = `Goal exceeds your remaining ${cur.remaining}%.`;
+  else if (need > availForBet) problem = `You need ${need} SP (stake ${s} + up to ${loss} loss); you have ${availForBet}.`;
+
+  const post = async (url, body, method = 'POST') => {
+    const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json(); if (!r.ok) { setErr(j.error); return null; } setErr(null); return j;
+  };
+  const place = async () => { const j = await post(`${API}/vibe/bet`,
+    { email, course: cur.key, goalPct: g, stake: s, multiplier: m, deadline: form.deadline }); if (j) setData(j); };
+  const saveEdit = async () => { const j = await post(`${API}/vibe/bet/${data.active._id}`,
+    { email, goalPct: g, stake: s, multiplier: m }, 'PUT'); if (j) { setEditing(false); setData(j); } };
+  const settle = async (result) => { const j = await post(`${API}/vibe/bet/${data.active._id}/settle`,
+    { email, result }); if (j) { setEditing(false); setData(j); } };
+
+  const showForm = cur && (!data.active || editing);
+
+  return (
+    <div className="vg">
+      <section className="panel">
+        <h2>Your course path</h2>
+        <p className="muted">Courses unlock in order — you work on and set commitments for your current course only. Prior completions are credited automatically.</p>
+        <div className="vg-ladder">
+          {data.ladder.map((l, i) => (
+            <React.Fragment key={l.key}>
+              {i > 0 && <div className="vg-arrow">→</div>}
+              <div className={`vg-step ${l.cleared ? 'done' : (cur && cur.key === l.key ? 'current' : 'locked')}`}>
+                <span className="n">{i + 1}</span><b>{l.name}</b>
+                <em>{l.prior ? 'credited ✓' : l.cleared ? '100% ✓' : (cur && cur.key === l.key ? `${l.pct}% · in progress` : '🔒 locked')}</em>
+              </div>
+            </React.Fragment>
+          ))}
+        </div>
+      </section>
+
+      {cur && (
+        <section className="panel">
+          <h2>Current course — {cur.name}</h2>
+          <div className="vg-tiles">
+            <div className={`vg-tile ${data.weeklyFloor.met ? 'done' : ''}`}>
+              <span>This week (floor)</span>
+              <strong>{data.weeklyFloor.doneHours} h</strong>
+              <em>{cfg.floorHours} h required · {data.weeklyFloor.met
+                ? <span className="vg-pill green">+{cfg.floorSp} SP earned</span>
+                : <span className="vg-pill amber">not yet</span>}</em>
+            </div>
+            <div className="vg-tile">
+              <span>{cur.name} — completion</span>
+              <strong>{cur.pct}%</strong>
+              <em>{cur.remaining}% left · ≈ {(cur.pct / 100 * cur.hours).toFixed(1)} / {cur.hours} h*</em>
+              <div className="vg-progress"><i style={{ width: `${cur.pct}%` }} /></div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {cur && (
+        <section className="panel">
+          <h2>{editing ? 'Edit your commitment' : 'Set a goal & commit extra SP'}</h2>
+          <p className="muted">Your stake is <b>debited now</b>. Hit your goal by the deadline → win it back multiplied; miss → lose an extra penalty on top. One commitment per course, deadline up to {cfg.maxBetDays} days away.</p>
+          {!showForm && data.active &&
+            <div className="vg-lock">You have an active commitment on {cur.name}. Edit it below, or resolve it with the demo buttons.</div>}
+          {showForm && (
+            <div className="vg-form">
+              <div className="vg-field"><label>Course</label><input value={`${cur.name} (current)`} disabled /></div>
+              <div className="vg-field"><label>Raise completion by</label>
+                <div className="vg-row"><input type="number" min="1" max={cur.remaining} value={form.goalPct}
+                  onChange={e => setForm({ ...form, goalPct: e.target.value })} /><b>%</b></div>
+                <span className="hint">Allowed {cur.floorPct}%–{cur.remaining}% (floor → remaining) · ≈ {(g / 100 * cur.hours).toFixed(1)} h</span>
+              </div>
+              <div className="vg-field"><label>Deadline</label>
+                <input type="date" value={form.deadline} disabled={editing}
+                  onChange={e => setForm({ ...form, deadline: e.target.value })} />
+                <span className="hint">{editing ? 'Fixed — can’t be changed after placing.' : `Up to ${cfg.maxBetDays} days away.`}</span>
+              </div>
+              <div className="vg-field"><label>Stake — <b>{s}</b> SP</label>
+                <input type="range" min={cfg.stakeMin} max={cfg.stakeMax} step="10" value={form.stake}
+                  onChange={e => setForm({ ...form, stake: e.target.value })} />
+                <span className="hint">{cfg.stakeMin}–{cfg.stakeMax} SP.</span>
+              </div>
+              <div className="vg-field vg-wide"><label>Confidence multiplier</label>
+                <div className="vg-mult">{cfg.multipliers.map(x =>
+                  <button key={x} className={m === x ? 'active' : ''} onClick={() => setForm({ ...form, multiplier: x })}>{x}×</button>)}</div>
+              </div>
+              <div className="vg-readout">
+                <div className="r lose"><span>Staked now</span><strong>−{s}</strong></div>
+                <div className="r win"><span>If you HIT</span><strong>+{win}</strong><span className="net">net +{win - s}</span></div>
+                <div className="r lose"><span>If you MISS</span><strong>−{loss}</strong><span className="net">net −{s + loss}</span></div>
+                <div className="r"><span>Left after placing</span><strong>{availForBet - s - loss}</strong></div>
+              </div>
+              <div className="vg-actions">
+                {editing
+                  ? <><button className="primary" disabled={!!problem} onClick={saveEdit}>Save changes</button>
+                      <button className="secondary" onClick={() => { setEditing(false); setErr(null); }}>Cancel</button></>
+                  : <button className="primary" disabled={!!problem} onClick={place}>Place commitment</button>}
+                <span className={problem ? 'vg-warn' : 'vg-ok'}>{problem || `✓ Covered — ${loss} SP reserved until it settles.`}</span>
+              </div>
+              {err && <p className="error">{err}</p>}
+            </div>
+          )}
+        </section>
+      )}
+
+      <section className="panel">
+        <h2>Your active commitment</h2>
+        {data.active ? (
+          <div className="vg-bet">
+            <div>
+              <h4>{courseName(data.ladder, data.active.course)} — raise completion by {data.active.goalPct}%</h4>
+              <div className="meta">staked {data.active.stake} (debited) @ {data.active.multiplier}× · by {new Date(data.active.deadline).toLocaleDateString()} · risk −{data.active.potentialLoss} more on miss</div>
+            </div>
+            <div className="side">
+              <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
+              <div className="vg-betbtns">
+                {!editing && <button className="secondary" onClick={() => { setForm({ goalPct: data.active.goalPct, stake: data.active.stake, multiplier: data.active.multiplier, deadline: form.deadline }); setEditing(true); }}>Edit commitment</button>}
+                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
+                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
+              </div>
+            </div>
+          </div>
+        ) : <p className="muted">No active commitment right now — set one above.</p>}
+      </section>
+
+      <section className="panel">
+        <h2>Past commitments</h2>
+        {data.history.length ? (
+          <table className="table"><thead><tr><th>Course</th><th>Goal</th><th>Stake</th><th>Result</th><th>Net SP</th></tr></thead>
+            <tbody>{data.history.map(b => (
+              <tr key={b._id}><td>{courseName(data.ladder, b.course)}</td><td>+{b.goalPct}%</td><td>{b.stake} @ {b.multiplier}×</td>
+                <td className={b.status === 'won' ? 'vg-hit' : 'vg-miss'}>{b.status === 'won' ? 'HIT' : 'MISS'}</td>
+                <td className={b.status === 'won' ? 'vg-hit' : 'vg-miss'}>{netFor(b) >= 0 ? '+' : ''}{netFor(b)}</td></tr>))}
+            </tbody></table>
+        ) : <p className="muted">No settled commitments yet.</p>}
+      </section>
+    </div>
+  );
+}
+
+// Standup commitment — weekly, attendance-only, keep-the-stake. Student picks a tier
+// (81–90 → stake 20 / 91–100 → stake 50, fixed) and a confidence (2×/3×/4×). HIT pays
+// +stake×conf on top of earned attendance; MISS charges −0.5×stake×conf off the balance.
+function StandupGoals({ student }) {
+  const email = student.email;
+  const [data, setData] = useState(null);
+  const [tierKey, setTierKey] = useState('91-100');
+  const [multiplier, setMultiplier] = useState(4);
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    const r = await fetch(`${API}/standup/state?email=${encodeURIComponent(email)}`);
+    setData(await r.json());
+  };
+  useEffect(() => { load(); }, [email]);
+
+  if (!data) return <section className="panel">Loading standups…</section>;
+  if (!data.eligible) return <section className="panel empty">Standup commitments aren’t available for your cohort yet.</section>;
+
+  const tier = data.tiers.find(t => t.key === tierKey) || data.tiers[0];
+  const stake = tier.stake, win = stake * multiplier, loss = data.penaltyFactor * stake * multiplier;
+  const problem = data.active
+    ? 'You already have an active standup commitment this week.'
+    : loss > data.available ? `You need ${loss} SP free to cover a possible miss; you have ${data.available}.` : null;
+
+  const post = async (url, body) => {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json(); if (!r.ok) { setErr(j.error); return null; } setErr(null); return j;
+  };
+  const place = async () => { const j = await post(`${API}/standup/commit`, { email, tierKey, multiplier }); if (j) setData(j); };
+  const settle = async (result) => { const j = await post(`${API}/standup/commit/${data.active._id}/settle`, { email, result }); if (j) setData(j); };
+
+  return (
+    <div className="vg">
+      <section className="panel">
+        <h2>This week’s standups — {data.weekLabel}</h2>
+        <p className="muted">Pledge to attend <b>all {data.sessionsThisWeek}</b> standups this week at a chosen attendance tier. Attendance only — polls stay as poll-points. Your stake <b>isn’t deducted</b>: hit your pledge for a bonus on top of the attendance points you earn, miss and a penalty applies.</p>
+        <div className="vg-tiles">
+          <div className="vg-tile"><span>Attended so far</span><strong>{data.attendedThisWeek}/{data.sessionsThisWeek}</strong><em>this week</em></div>
+          <div className="vg-tile"><span>Avg attendance</span><strong>{data.avgPctThisWeek != null ? data.avgPctThisWeek + '%' : '—'}</strong><em>so far</em></div>
+        </div>
+      </section>
+
+      {!data.active && (
+        <section className="panel">
+          <h2>Set a standup commitment</h2>
+          <div className="vg-form">
+            <div className="vg-field vg-wide"><label>Attendance tier (fixed stake)</label>
+              <div className="vg-mult">{data.tiers.map(t =>
+                <button key={t.key} className={tierKey === t.key ? 'active' : ''} onClick={() => setTierKey(t.key)}>{t.label} · stake {t.stake}</button>)}</div>
+              <span className="hint">Higher tier = higher bar and bigger reward. Beating your tier still counts as a hit.</span>
+            </div>
+            <div className="vg-field vg-wide"><label>Confidence multiplier</label>
+              <div className="vg-mult">{data.multipliers.map(x =>
+                <button key={x} className={multiplier === x ? 'active' : ''} onClick={() => setMultiplier(x)}>{x}×</button>)}</div>
+            </div>
+            <div className="vg-readout">
+              <div className="r"><span>Stake (fixed by tier)</span><strong>{stake}</strong></div>
+              <div className="r win"><span>If you HIT</span><strong>+{win}</strong><span className="net">bonus, on top of attendance</span></div>
+              <div className="r lose"><span>If you MISS</span><strong>−{loss}</strong><span className="net">penalty off your balance</span></div>
+            </div>
+            <div className="vg-actions">
+              <button className="primary" disabled={!!problem} onClick={place}>Place commitment</button>
+              <span className={problem ? 'vg-warn' : 'vg-ok'}>{problem || `✓ Covered · settles ${new Date(data.deadline).toLocaleDateString()}`}</span>
+            </div>
+            {err && <p className="error">{err}</p>}
+          </div>
+        </section>
+      )}
+
+      <section className="panel">
+        <h2>Your active commitment</h2>
+        {data.active ? (
+          <div className="vg-bet">
+            <div>
+              <h4>{data.active.label}</h4>
+              <div className="meta">stake {data.active.stake} (kept) · by {new Date(data.active.deadline).toLocaleDateString()} · risk −{data.active.potentialLoss} on miss</div>
+            </div>
+            <div className="side">
+              <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
+              <div className="vg-betbtns">
+                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
+                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
+              </div>
+            </div>
+          </div>
+        ) : <p className="muted">No active standup commitment — set one above.</p>}
+      </section>
+
+      <section className="panel">
+        <h2>Past standup commitments</h2>
+        {data.history.length ? (
+          <table className="table"><thead><tr><th>Week pledge</th><th>Tier</th><th>Result</th><th>SP</th></tr></thead>
+            <tbody>{data.history.map(c => (
+              <tr key={c._id}><td>{c.label}</td><td>{c.tier}</td>
+                <td className={c.status === 'won' ? 'vg-hit' : 'vg-miss'}>{c.status === 'won' ? 'HIT' : 'MISS'}</td>
+                <td className={c.status === 'won' ? 'vg-hit' : 'vg-miss'}>{c.resultDelta >= 0 ? '+' : ''}{c.resultDelta}</td></tr>))}
+            </tbody></table>
+        ) : <p className="muted">No settled standup commitments yet.</p>}
+      </section>
+    </div>
   );
 }
 
