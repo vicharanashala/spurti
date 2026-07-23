@@ -278,11 +278,13 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
+      <StreakCard streak={profile.streak} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'],
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['streak','Streak'], ['polls','Polls'],
         ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
         ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
+      {tab === 'streak' && <StreakDetail streak={profile.streak} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} setTab={setTab} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} />}
@@ -321,6 +323,113 @@ function LevelStatus({ student }) {
         Level shows your highest achievement and never decreases. Trophy League shows your current performance and can move up or down with your current Spurti Points.
         {student.legendBadgeUnlocked ? ' You have unlocked the Legend Badge by reaching 1500 Spurti Points at least once.' : ''}
       </p>
+    </section>
+  );
+}
+
+function StreakCard({ streak }) {
+  if (!streak) return null;
+
+  const hearts = [];
+  for (let i = 0; i < 2; i++) hearts.push(i < streak.heartsRemaining ? '\u2764\uFE0F' : '\u{1F90E}');
+
+  return (
+    <section className="panel streak-card">
+      <div className="streak-summary">
+        <div className="streak-main">
+          <span className="streak-fire">{streak.currentStreak > 0 ? '\u{1F525}' : '\u{1F31F}'}</span>
+          <div>
+            <strong className="streak-count">{streak.currentStreak} Day Streak</strong>
+            <span className="streak-best">Best: {streak.longestStreak}</span>
+          </div>
+        </div>
+        <div className="streak-hearts">
+          <span className="hearts-label">Hearts</span>
+          <span className="hearts-icons">{hearts.join(' ')}</span>
+        </div>
+        <div className="streak-sp">
+          <span>Streak SP</span>
+          <strong>+{streak.totalStreakSp}</strong>
+        </div>
+        <div className="streak-next">
+          <span>Next milestone</span>
+          <strong>Day {streak.nextMilestone.day} {'\u2192'} +{streak.nextMilestone.sp} SP</strong>
+          <em>{streak.nextMilestone.daysRemaining} day{streak.nextMilestone.daysRemaining !== 1 ? 's' : ''} away</em>
+        </div>
+      </div>
+      <div className="streak-status-row">
+        <span className={streak.todayQualifies ? 'streak-qualify yes' : 'streak-qualify no'}>
+          {streak.todayQualifies ? '\u2705 Today qualifies' : '\u23FA Today not yet qualified'}
+        </span>
+      </div>
+    </section>
+  );
+}
+
+function StreakDetail({ streak }) {
+  if (!streak) return <section className="panel"><p className="muted">No streak data yet. Start attending sessions to build your streak!</p></section>;
+
+  const hearts = [];
+  for (let i = 0; i < 2; i++) hearts.push(i < streak.heartsRemaining ? '\u2764\uFE0F' : '\u{1F90E}');
+
+  return (
+    <section className="panel">
+      <div className="panel-head"><h2>Daily Streak</h2></div>
+      <div className="streak-detail-grid">
+        <div className="streak-detail-stat">
+          <span>Current Streak</span>
+          <strong>{streak.currentStreak} days</strong>
+        </div>
+        <div className="streak-detail-stat">
+          <span>Longest Streak</span>
+          <strong>{streak.longestStreak} days</strong>
+        </div>
+        <div className="streak-detail-stat">
+          <span>Hearts</span>
+          <strong>{hearts.join(' ')}</strong>
+          <em>{streak.heartsUsed} used</em>
+        </div>
+        <div className="streak-detail-stat">
+          <span>Total Streak SP</span>
+          <strong>+{streak.totalStreakSp}</strong>
+        </div>
+        <div className="streak-detail-stat">
+          <span>Next Milestone</span>
+          <strong>Day {streak.nextMilestone.day} {'\u2192'} +{streak.nextMilestone.sp} SP</strong>
+          <em>{streak.nextMilestone.daysRemaining} day{streak.nextMilestone.daysRemaining !== 1 ? 's' : ''} to go</em>
+        </div>
+        <div className="streak-detail-stat">
+          <span>Today</span>
+          <strong className={streak.todayQualifies ? 'yes' : 'no'}>{streak.todayQualifies ? 'Qualified \u2705' : 'Not yet qualified'}</strong>
+        </div>
+      </div>
+      <div className="streak-rules">
+        <h3>How it works</h3>
+        <ul>
+          <li>Available for interns who started on or after <strong>16 July 2026</strong>.</li>
+          <li>Attend sessions (Mon{'\u2013'}Sat) with {'\u2265'}85% attendance AND {'\u2265'}85% poll participation to earn streak days.</li>
+          <li><strong>Sundays are off</strong> {'\u2014'} they do not count as streak days and do not break your streak.</li>
+          <li>Days 1{'\u2013'}30: <strong>1 SP/day</strong>. After day 30: <strong>2 SP/day</strong>.</li>
+          <li>Every 10th day gives a milestone bonus: Day 10 {'\u2192'} <strong>5 SP</strong>, Day 20 {'\u2192'} <strong>7 SP</strong>, Day 30 {'\u2192'} <strong>9 SP</strong>, increasing by 2 each milestone.</li>
+          <li>Miss a day? Hearts save your streak! You have <strong>{streak.heartsRemaining} heart{streak.heartsRemaining !== 1 ? 's' : ''}</strong> remaining.</li>
+          <li>Lose both hearts and the streak resets to 0.</li>
+        </ul>
+      </div>
+      {streak.recentHistory?.length > 0 && (
+        <div className="streak-history">
+          <h3>Recent History</h3>
+          <table className="table">
+            <thead><tr><th>Date</th><th>SP</th><th>Type</th></tr></thead>
+            <tbody>{[...streak.recentHistory].reverse().map(h => (
+              <tr key={h.date}>
+                <td>{h.date}</td>
+                <td>{h.sp > 0 ? `+${h.sp}` : '-'}</td>
+                <td>{h.type === 'milestone' ? '\u{1F3C6} Milestone' : h.type === 'heart_save' ? '\u2764\uFE0F Heart Used' : '\u2705 Daily'}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }

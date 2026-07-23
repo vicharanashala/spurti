@@ -12,12 +12,17 @@
     "setup": "npm install && npm --prefix client install && npm run rebuild && npm run build",
     "build": "npm --prefix client run build",
     "start": "node server/server.js",
-    "dev": "node server/server.js"
+    "dev": "node server/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
     "mongoose": "^8.8.4"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
   }
 }
