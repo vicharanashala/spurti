@@ -279,11 +279,12 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'],
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['challenges','Challenges'],
         ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
         ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
+      {tab === 'challenges' && <ChallengesHub student={student} />}
       {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} setTab={setTab} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
@@ -1205,6 +1206,154 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
         </table>
       )}
     </section>
+  );
+}
+
+
+function ChallengesHub({ student }) {
+  const [data, setData] = useState(null);
+  const [active, setActive] = useState(null);
+  const [voteInputs, setVoteInputs] = useState({});
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    const [propRes, actRes] = await Promise.all([
+      fetch(`${API}/challenges/proposed?email=${encodeURIComponent(student.email)}`),
+      fetch(`${API}/challenges/active?email=${encodeURIComponent(student.email)}`)
+    ]);
+    if (propRes.ok) setData(await propRes.json());
+    if (actRes.ok) setActive(await actRes.json());
+  };
+  useEffect(() => { load(); }, [student.email]);
+
+  const post = async (url, body) => {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok) { setErr(j.error); return null; }
+    setErr(null);
+    return j;
+  };
+
+  const vote = async (challengeId) => {
+    const sp = +voteInputs[challengeId] || 0;
+    if (sp <= 0) return;
+    const j = await post(`${API}/challenges/${challengeId}/vote`, { email: student.email, spPoints: sp });
+    if (j) { setData(j); setVoteInputs({ ...voteInputs, [challengeId]: '' }); }
+  };
+
+  const withdraw = async (challengeId) => {
+    const j = await post(`${API}/challenges/${challengeId}/withdraw`, { email: student.email });
+    if (j) setData(j);
+  };
+
+  if (!data) return <section className="panel">Loading challenges…</section>;
+
+  const { challenges, userVotes, totalSp } = data;
+  const balance = totalSp;
+
+  return (
+    <div className="ch">
+      <section className="panel">
+        <h2>Upvote Challenges</h2>
+        <p className="muted">Spend your SP to vote for the next weekly challenge. The challenge with the most SP wins and becomes active — only voters can participate. If your challenge wins, you get your invested SP back multiplied!</p>
+      </section>
+
+      {/* Active challenge */}
+      {active?.challenge && (
+        <section className="panel">
+          <h2>Active Challenge</h2>
+          <div className="vg-bet ch-active-card">
+            <div>
+              <h4>{active.challenge.title}</h4>
+              <p className="meta">{active.challenge.description}</p>
+              <div className="meta">Runs until {new Date(active.challenge.liveEndDate).toLocaleDateString()} · {active.challenge.rewardMultiplier}× reward</div>
+            </div>
+            <div className="side">
+              {active.enrolled
+                ? <span className="vg-pill green">You're in! 🎯</span>
+                : <span className="vg-pill amber">Not enrolled</span>}
+            </div>
+          </div>
+          <p className="muted" style={{ marginTop: 8 }}>
+            {active.enrolled
+              ? `Challenge runs until ${new Date(active.challenge.liveEndDate).toLocaleDateString()}. Complete it to earn ${active.challenge.rewardMultiplier}× your invested SP!`
+              : 'This challenge is exclusive to voters. Vote in the next round to participate.'}
+          </p>
+        </section>
+      )}
+
+      {/* SP balance */}
+      <section className="panel ch-balance">
+        <h2>Your SP</h2>
+        <strong>{balance} SP</strong>
+        <span>available for voting</span>
+      </section>
+
+      {/* Proposed challenges */}
+      <section className="panel">
+        <h2>Vote for the next challenge</h2>
+        <p className="muted">Voting closes when the deadline passes. Put your SP behind the challenge you want to see next!</p>
+      </section>
+
+      {challenges.length === 0 ? (
+        <section className="panel empty">No proposed challenges right now — check back later.</section>
+      ) : (
+        <div className="ch-grid">
+          {challenges.map(c => {
+            const myVote = userVotes[c._id] || 0;
+            const inputVal = voteInputs[c._id] || '';
+            const inputSp = +inputVal || 0;
+            const tooHigh = inputSp > balance - myVote;
+            const totalInvested = c.totalSpInvested || 0;
+            const maxInvested = Math.max(1, ...challenges.map(x => x.totalSpInvested || 0));
+            const barPct = Math.round((totalInvested / maxInvested) * 100);
+
+            return (
+              <article className="ch-card" key={c._id}>
+                <div className="ch-card-head">
+                  <strong>{c.title}</strong>
+                  <div className="ch-badges">
+                    <span className="ch-badge">{c.type === 'attendance' ? 'Attendance' : 'Poll Master'}</span>
+                    <span className="ch-badge ch-badge-mult">{c.rewardMultiplier}× reward</span>
+                  </div>
+                  <p className="ch-desc">{c.description}</p>
+                </div>
+
+                <div className="ch-bar-wrap">
+                  <span className="ch-bar-label">Total SP invested: <b>{totalInvested}</b></span>
+                  <div className="vg-progress ch-bar"><i style={{ width: `${barPct}%` }} /></div>
+                </div>
+
+                <div className="ch-meta">
+                  Voting closes {new Date(c.votingEndDate).toLocaleDateString()}
+                </div>
+
+                {myVote > 0 && (
+                  <div className="ch-my-vote">
+                    <span className="vg-pill green">Your vote: {myVote} SP</span>
+                  </div>
+                )}
+
+                <div className="ch-actions">
+                  <input type="number" min="1" max={balance - myVote}
+                    placeholder="SP to vote"
+                    value={inputVal}
+                    onChange={e => setVoteInputs({ ...voteInputs, [c._id]: e.target.value })} />
+                  <button className="primary" disabled={!inputVal || inputSp <= 0 || tooHigh}
+                    onClick={() => vote(c._id)}>Vote</button>
+                  {myVote > 0 && (
+                    <button className="secondary" onClick={() => withdraw(c._id)}>Withdraw</button>
+                  )}
+                </div>
+                {tooHigh && <p className="ch-warn">Not enough SP (balance: {balance - myVote})</p>}
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      {err && <p className="error">{err}</p>}
+    </div>
   );
 }
 
