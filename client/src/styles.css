@@ -1017,285 +1017,428 @@ input:focus, select:focus {
 }
 
 /* ==========================================================================
-   Spurti Tree / Plant Growth Feature Styles
+   Spurti Growth Tree & Ecosystem System
    ========================================================================== */
 .tree-panel {
-  padding: 24px;
+  padding: 28px;
   background: rgba(255, 255, 255, 0.9);
-  border-radius: 20px;
+  border-radius: 24px;
   box-shadow: var(--shadow);
   position: relative;
   overflow: hidden;
-  margin-bottom: 20px;
-  border-top: 4px solid #10b981;
+  margin-bottom: 24px;
+  border-top: 5px solid #10b981;
 }
 
-.tree-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
+.tree-header h2 {
+  font-size: 22px;
+  font-weight: 850;
+  margin-bottom: 4px;
+  color: #1e1b4b;
 }
 
 .tree-stage-tag {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
-  padding: 6px 14px;
+  padding: 6px 16px;
   border-radius: 999px;
   background: #ecfdf5;
   color: #047857;
   border: 1px solid rgba(16, 185, 129, 0.2);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.05);
 }
 
-.tree-container {
+/* Tree frame progress wrapper */
+.tree-frame-wrapper {
   position: relative;
-  height: 200px;
-  background: linear-gradient(180deg, #eff6ff 0%, #e0f2fe 100%);
-  border-radius: 16px;
+  width: 100%;
+  max-width: 360px;
+  height: 360px;
+  margin: 24px auto;
   display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
+  justify-content: center;
   align-items: center;
-  overflow: hidden;
-  padding-bottom: 16px;
-  border: 1px solid rgba(226, 232, 240, 0.5);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.02);
 }
 
-/* Sky sparkles */
-.sky-particles {
+.progress-ring-container {
   position: absolute;
   inset: 0;
+  z-index: 1;
   pointer-events: none;
 }
-.star-sparkle {
-  position: absolute;
-  top: 20px;
-  left: 20%;
-  font-size: 20px;
-  animation: pulse-glow 2s infinite alternate;
-}
-@keyframes pulse-glow {
-  0% { transform: scale(0.8); opacity: 0.5; }
-  100% { transform: scale(1.2); opacity: 1; filter: drop-shadow(0 0 8px #fbbf24); }
+
+.progress-svg-bg {
+  width: 100%;
+  height: 100%;
 }
 
-/* Plant / Pot Display */
-.plant-display {
-  font-size: 80px;
-  line-height: 1;
+.tree-canvas-container {
+  position: absolute;
+  width: 340px;
+  height: 340px;
   z-index: 2;
-  margin-bottom: -10px;
-  transform-origin: bottom center;
-  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  animation: gentle-sway 6s ease-in-out infinite alternate;
+  border-radius: 50%;
+  overflow: hidden;
+  box-shadow: 0 8px 30px rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(226, 232, 240, 0.5);
+  background: #ffffff;
 }
 
-.plant-display.wiggle {
-  animation: plant-bounce 0.8s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+.tree-svg-canvas {
+  width: 100%;
+  height: 100%;
 }
 
-.pot-display {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  z-index: 1;
-  width: 90px;
-}
-
-.soil-line {
-  width: 80px;
-  height: 6px;
-  background: #78350f;
-  border-radius: 999px;
-  margin-bottom: -2px;
-}
-
-.pot-body {
-  width: 70px;
-  height: 40px;
-  background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
-  border-radius: 0 0 16px 16px;
-  border-top: 4px solid #f59e0b;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-}
-
-/* Watering can & animations */
-.watering-can-animation {
-  position: absolute;
-  top: 15px;
-  right: 25%;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  animation: can-tip 2s ease-in-out forwards;
-}
-
-.watering-can {
-  font-size: 38px;
-  transform: rotate(0deg);
-}
-
-.water-drops {
-  display: flex;
+/* Tree Dashboard Stats Grid */
+.tree-stats-dashboard {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
-  margin-top: 2px;
-  transform: translateX(-15px);
+  margin-bottom: 24px;
 }
 
-.drop {
-  width: 3px;
-  height: 12px;
-  background: #3b82f6;
-  border-radius: 999px;
-  opacity: 0;
+.tree-stat-tile {
+  background: rgba(248, 250, 252, 0.6);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  text-align: center;
 }
-.drop-1 { animation: drip 0.5s infinite 0.1s; }
-.drop-2 { animation: drip 0.5s infinite 0.3s; }
-.drop-3 { animation: drip 0.5s infinite 0.2s; }
-
-@keyframes can-tip {
-  0% { transform: translate(100px, -20px) rotate(0deg); }
-  25% { transform: translate(0, 0) rotate(-35deg); }
-  75% { transform: translate(0, 0) rotate(-35deg); }
-  100% { transform: translate(100px, -20px) rotate(0deg); }
+.tree-stat-tile:hover {
+  background: rgba(255, 255, 255, 1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(99, 102, 241, 0.04);
 }
-
-@keyframes drip {
-  0% { transform: translateY(0); opacity: 1; height: 4px; }
-  100% { transform: translateY(70px); opacity: 0; height: 16px; }
-}
-
-@keyframes gentle-sway {
-  0% { transform: rotate(-2deg); }
-  100% { transform: rotate(2deg); }
-}
-
-@keyframes plant-bounce {
-  0%, 100% { transform: scale(1) rotate(0); }
-  20% { transform: scale(1.2, 0.8) rotate(-4deg); }
-  40% { transform: scale(0.85, 1.15) rotate(4deg); }
-  60% { transform: scale(1.08, 0.92) rotate(-2deg); }
-  80% { transform: scale(0.95, 1.05) rotate(1deg); }
-}
-
-.tree-info {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-}
-
-.tree-desc {
-  font-size: 14.5px;
-  line-height: 1.5;
+.tree-stat-tile span {
+  display: block;
+  font-size: 11px;
   color: var(--muted);
-  margin-bottom: 16px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tree-stat-tile strong {
+  display: block;
+  font-size: 16px;
+  margin-top: 4px;
+  color: #1e293b;
+  font-weight: 850;
 }
 
-.tree-footer {
+/* Ecosystem SVG Animations */
+.sitting-bird {
+  animation: bird-chirp 6s steps(1) infinite;
+  transform-origin: 133px 192px;
+}
+@keyframes bird-chirp {
+  0%, 100% { transform: translate(133px, 192px) scale(0.65) rotate(0deg); }
+  30% { transform: translate(133px, 192px) scale(0.65) rotate(-4deg); }
+  34% { transform: translate(133px, 192px) scale(0.65) rotate(4deg); }
+  38% { transform: translate(133px, 192px) scale(0.65) rotate(0deg); }
+}
+
+.clouds-bg {
+  animation: clouds-drift 90s linear infinite;
+}
+@keyframes clouds-drift {
+  0% { transform: translateX(-100px); }
+  100% { transform: translateX(360px); }
+}
+
+.butterfly-1 {
+  animation: fly-bf-1 14s linear infinite;
+  transform-origin: center;
+}
+@keyframes fly-bf-1 {
+  0% { transform: translate(60px, 160px) scale(0.55) rotate(0deg); }
+  30% { transform: translate(110px, 120px) scale(0.55) rotate(25deg); }
+  60% { transform: translate(150px, 150px) scale(0.55) rotate(-15deg); }
+  80% { transform: translate(90px, 180px) scale(0.55) rotate(10deg); }
+  100% { transform: translate(60px, 160px) scale(0.55) rotate(0deg); }
+}
+
+.butterfly-2 {
+  animation: fly-bf-2 18s linear infinite;
+  transform-origin: center;
+}
+@keyframes fly-bf-2 {
+  0% { transform: translate(270px, 140px) scale(0.5) rotate(0deg); }
+  33% { transform: translate(200px, 170px) scale(0.5) rotate(-30deg); }
+  66% { transform: translate(240px, 100px) scale(0.5) rotate(20deg); }
+  100% { transform: translate(270px, 140px) scale(0.5) rotate(0deg); }
+}
+
+.fireflies circle {
+  animation: drift-ff 5s ease-in-out infinite alternate;
+  filter: drop-shadow(0 0 4px #fbbf24);
+}
+.ff-1 { animation-delay: 0.1s; }
+.ff-2 { animation-delay: 0.7s; }
+.ff-3 { animation-delay: 1.3s; }
+.ff-4 { animation-delay: 1.9s; }
+.ff-5 { animation-delay: 0.4s; }
+
+@keyframes drift-ff {
+  0% { transform: translate(0, 0); opacity: 0.2; }
+  50% { opacity: 0.95; }
+  100% { transform: translate(15px, -25px); opacity: 0.1; }
+}
+
+.halo-glow {
+  animation: rotate-halo 10s linear infinite;
+}
+@keyframes rotate-halo {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.heartbeat-seed {
+  animation: seed-beat 1.6s ease-in-out infinite;
+  transform-origin: 180px 295px;
+}
+@keyframes seed-beat {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+.tree-branches.wiggle {
+  animation: tree-shudder 0.7s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+@keyframes tree-shudder {
+  0%, 100% { transform: scale(1) rotate(0); }
+  20% { transform: scale(1.05, 0.95) rotate(-2deg); }
+  40% { transform: scale(0.95, 1.05) rotate(2deg); }
+  60% { transform: scale(1.02, 0.98) rotate(-1deg); }
+  80% { transform: scale(0.98, 1.02) rotate(0.5deg); }
+}
+
+/* Floating number bubble */
+.floating-bubble {
+  position: absolute;
+  font-weight: 900;
+  color: #4f46e5;
+  font-size: 14px;
+  pointer-events: none;
+  animation: float-bubble-animation 1.8s ease-out forwards;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 5px 12px;
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+}
+@keyframes float-bubble-animation {
+  0% { transform: translateY(0) scale(0.8); opacity: 0; }
+  15% { opacity: 1; transform: translateY(-10px) scale(1); }
+  100% { transform: translateY(-90px) scale(0.9); opacity: 0; }
+}
+
+/* Procedural leaf loading effect */
+.tree-leaf-item {
+  transform-origin: center center;
+  transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* Watering can inside SVG */
+.can-group {
+  animation: tilt-can-svg 1.8s ease-in-out forwards;
+  transform-origin: 240px 80px;
+}
+@keyframes tilt-can-svg {
+  0% { transform: translate(80px, -60px) rotate(0deg); opacity: 0; }
+  20% { transform: translate(0, 0) rotate(-35deg); opacity: 1; }
+  80% { transform: translate(0, 0) rotate(-35deg); opacity: 1; }
+  100% { transform: translate(80px, -60px) rotate(0deg); opacity: 0; }
+}
+
+.drip-group {
+  animation: fade-drips 1.8s ease-in-out forwards;
+}
+@keyframes fade-drips {
+  0%, 20%, 80%, 100% { opacity: 0; }
+  35%, 65% { opacity: 1; }
+}
+.drip-line-1 { animation: drip-flow 0.4s linear infinite; }
+.drip-line-2 { animation: drip-flow 0.4s linear infinite 0.12s; }
+.drip-line-3 { animation: drip-flow 0.4s linear infinite 0.24s; }
+@keyframes drip-flow {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: 10; }
+}
+
+/* Stepper Track Timeline */
+.tree-stepper-track {
+  position: relative;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
+  margin-top: 32px;
+  padding: 0 4px;
+  overflow-x: auto;
+  padding-bottom: 8px;
 }
 
-.next-grow {
-  font-size: 13.5px;
-  color: #334155;
-}
-.next-grow strong {
-  color: #10b981;
-}
-.max-grow {
-  font-size: 13.5px;
-  font-weight: 750;
-  color: #10b981;
+.tree-stepper-track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 14px;
+  height: 4px;
+  background: #f1f5f9;
+  z-index: 1;
 }
 
-.water-btn {
-  min-height: 38px;
-  padding: 0 16px;
-  font-size: 13.5px;
+.stepper-line-fill {
+  position: absolute;
+  left: 0;
+  top: 14px;
+  height: 4px;
+  background: var(--rainbow-gradient);
+  z-index: 2;
+  transition: width 0.5s ease;
+}
+
+.stepper-node {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: help;
+  min-width: 44px;
+}
+
+.step-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f8fafc;
+  border: 2px solid #e2e8f0;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.stepper-node.active .step-icon {
+  background: #ecfdf5;
+  border-color: #34d399;
+}
+
+.stepper-node.current .step-icon {
+  background: #fff;
+  border-color: #818cf8;
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18);
+  transform: scale(1.15);
+}
+
+.step-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-top: 6px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.stepper-node.active .step-label {
+  color: #047857;
+}
+
+.stepper-node.current .step-label {
+  color: #4f46e5;
+  font-weight: 800;
 }
 
 /* ==========================================================================
-   Podium Leaderboard Styles
+   Podium Leaderboard Styles (Professional, Light, Beautiful)
    ========================================================================== */
 .leaderboard-panel {
-  border-top: 4px solid #6366f1;
+  border-top: 5px solid #6366f1;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 24px;
 }
 
 .leaderboard-select {
-  max-width: 220px;
+  border: 1px solid var(--line);
+  background: #fff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-weight: 600;
+  color: #334155;
+  outline: none;
+  min-width: 200px;
 }
 
 .podium-section {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  gap: 16px;
-  margin: 32px 0 40px;
-  padding: 0 8px;
+  gap: 20px;
+  margin: 36px 0 44px;
 }
 
 .podium-card {
   flex: 1;
-  max-width: 200px;
+  max-width: 190px;
   background: rgba(255, 255, 255, 0.85);
   border: 1px solid rgba(226, 232, 240, 0.8);
   border-radius: 20px;
-  padding: 16px 12px 0;
+  padding: 20px 12px 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   position: relative;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02);
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.03);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .podium-card:hover {
-  transform: translateY(-6px);
-  box-shadow: 0 12px 30px rgba(99, 102, 241, 0.12);
+  transform: translateY(-8px);
+  box-shadow: 0 20px 40px -10px rgba(99, 102, 241, 0.16);
+  border-color: rgba(99, 102, 241, 0.3);
 }
 
 .podium-card.current {
   border-color: #34d399;
   background: #f0fdf4;
-  box-shadow: 0 4px 15px rgba(52, 211, 153, 0.1);
+  box-shadow: 0 8px 24px rgba(52, 211, 153, 0.08);
 }
 
 .podium-badge {
-  font-size: 32px;
+  font-size: 36px;
   margin-bottom: 8px;
-  filter: drop-shadow(0 4px 6px rgba(0,0,0,0.06));
+  filter: drop-shadow(0 4px 8px rgba(0,0,0,0.06));
 }
 
 .podium-name {
   font-size: 15px;
   font-weight: 800;
-  color: #1e293b;
+  color: #0f172a;
   text-align: center;
   max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  margin-bottom: 2px;
 }
 
 .podium-email {
   font-size: 12px;
   color: var(--muted);
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .podium-points {
-  font-size: 15px;
-  font-weight: 800;
+  font-size: 16px;
+  font-weight: 850;
   color: #4f46e5;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .podium-stand {
@@ -1306,56 +1449,66 @@ input:focus, select:focus {
   align-items: center;
   color: #fff;
   font-weight: 900;
-  font-size: 16px;
+  font-size: 18px;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
 
-/* Pedestal heights & styling */
+/* Custom styled stands */
 .place-1 {
-  height: 70px;
+  height: 80px;
   background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
-  box-shadow: 0 4px 10px rgba(245, 158, 11, 0.2);
+  box-shadow: 0 6px 15px rgba(245, 158, 11, 0.2);
 }
 .place-2 {
-  height: 50px;
+  height: 55px;
   background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
-  box-shadow: 0 4px 10px rgba(100, 116, 139, 0.2);
+  box-shadow: 0 6px 15px rgba(100, 116, 139, 0.25);
 }
 .place-3 {
-  height: 35px;
+  height: 40px;
   background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
-  box-shadow: 0 4px 10px rgba(180, 83, 9, 0.2);
+  box-shadow: 0 6px 15px rgba(180, 83, 9, 0.25);
 }
 
 .podium-card.gold {
   order: 2;
-  margin-bottom: 0;
+  border-color: rgba(245, 158, 11, 0.3);
 }
 .podium-card.silver {
   order: 1;
-  margin-bottom: 0;
 }
 .podium-card.bronze {
   order: 3;
-  margin-bottom: 0;
 }
 
-/* Ranks list design */
 .leaderboard-table th {
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--line);
+}
+
+.leaderboard-table tbody tr {
   background: transparent;
-  border-bottom: 2px solid var(--line);
+}
+.leaderboard-table tbody tr:hover {
+  background: rgba(99, 102, 241, 0.02) !important;
 }
 
 .rank-badge {
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: #f1f5f9;
   font-weight: 800;
   font-size: 13px;
   color: #475569;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
 }
 
 .current-student .rank-badge {
@@ -1364,12 +1517,12 @@ input:focus, select:focus {
 }
 
 .font-semibold {
-  font-weight: 600;
+  font-weight: 700;
   color: #1e293b;
 }
 
 .points-col {
-  font-weight: 800;
+  font-weight: 850;
   color: #4f46e5;
 }
 
@@ -1387,15 +1540,15 @@ input:focus, select:focus {
     order: unset;
   }
   .podium-stand {
-    height: 35px !important;
+    height: 40px !important;
   }
 }
 
 /* ==========================================================================
-   Polls Pie Chart & Ring Styles
+   Polls Pie Chart Summary Styles
    ========================================================================== */
 .polls-panel {
-  border-top: 4px solid #10b981;
+  border-top: 5px solid #10b981;
 }
 
 .polls-overall-container {
@@ -1403,8 +1556,8 @@ input:focus, select:focus {
   align-items: center;
   gap: 32px;
   padding: 24px;
-  background: rgba(255, 255, 255, 0.5);
-  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 18px;
   border: 1px solid var(--line);
   margin-bottom: 28px;
 }
@@ -1479,7 +1632,7 @@ input:focus, select:focus {
 }
 
 .poll-session-card {
-  padding: 16px;
+  padding: 18px;
 }
 
 .poll-card-content {
@@ -1497,7 +1650,7 @@ input:focus, select:focus {
 }
 .poll-info strong {
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 750;
   color: #1e293b;
 }
 .poll-info span {
@@ -1507,8 +1660,8 @@ input:focus, select:focus {
 
 .mini-ring-wrapper {
   position: relative;
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
 }
 
 .mini-ring-svg {

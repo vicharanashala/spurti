@@ -69,7 +69,7 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} onUpdateProfile={setProfile} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -262,7 +262,7 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onBack, onUpdateProfile }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -314,7 +314,7 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
-      <SpurtiTree sp={student.totalSp} />
+      <SpurtiTree student={student} onUpdateProfile={onUpdateProfile} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'],
         ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
@@ -1449,91 +1449,465 @@ function BadgePopup({ badge, onClose }) {
   );
 }
 
-function SpurtiTree({ sp }) {
+function playChime() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    
+    // Play a beautiful, soft ascending C-major triad chime
+    const playNote = (freq, delay, duration, vol) => {
+      setTimeout(() => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        gain.gain.setValueAtTime(vol, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + duration);
+      }, delay);
+    };
+
+    playNote(523.25, 0, 0.8, 0.12);   // C5
+    playNote(659.25, 100, 0.8, 0.12); // E5
+    playNote(783.99, 200, 1.0, 0.15); // G5
+  } catch (e) {
+    console.log("Audio play blocked/failed:", e);
+  }
+}
+
+const BRANCH_DEFS = [
+  // Trunk (unlocks at 0 water)
+  { id: 1, x1: 180, y1: 300, x2: 180, y2: 210, thickness: 16, unlock: 0 },
+  // Level 1 Branches
+  { id: 2, x1: 180, y1: 250, x2: 135, y2: 200, thickness: 11, unlock: 10 },
+  { id: 3, x1: 180, y1: 230, x2: 225, y2: 180, thickness: 10, unlock: 20 },
+  { id: 4, x1: 180, y1: 210, x2: 175, y2: 150, thickness: 9, unlock: 30 },
+  // Level 2 Sub-branches
+  { id: 5, x1: 135, y1: 200, x2: 95, y2: 170, thickness: 8, unlock: 40 },
+  { id: 6, x1: 135, y1: 200, x2: 150, y2: 155, thickness: 7, unlock: 45 },
+  { id: 7, x1: 225, y1: 180, x2: 265, y2: 140, thickness: 8, unlock: 50 },
+  { id: 8, x1: 225, y1: 180, x2: 200, y2: 145, thickness: 7, unlock: 55 },
+  // Level 3 Sub-branches
+  { id: 9, x1: 175, y1: 150, x2: 145, y2: 110, thickness: 6, unlock: 60 },
+  { id: 10, x1: 175, y1: 150, x2: 205, y2: 110, thickness: 6, unlock: 65 },
+  // Canopy twigs
+  { id: 11, x1: 95, y1: 170, x2: 65, y2: 150, thickness: 5, unlock: 70 },
+  { id: 12, x1: 95, y1: 170, x2: 105, y2: 130, thickness: 4, unlock: 73 },
+  { id: 13, x1: 265, y1: 140, x2: 295, y2: 120, thickness: 5, unlock: 76 },
+  { id: 14, x1: 265, y1: 140, x2: 250, y2: 105, thickness: 4, unlock: 80 },
+  { id: 15, x1: 145, y1: 110, x2: 120, y2: 80, thickness: 3, unlock: 83 },
+  { id: 16, x1: 205, y1: 110, x2: 230, y2: 80, thickness: 3, unlock: 86 },
+  { id: 17, x1: 145, y1: 110, x2: 155, y2: 75, thickness: 3, unlock: 89 },
+  { id: 18, x1: 205, y1: 110, x2: 195, y2: 75, thickness: 3, unlock: 92 }
+];
+
+function SpurtiTree({ student, onUpdateProfile }) {
   const [watering, setWatering] = useState(false);
   const [wiggle, setWiggle] = useState(false);
+  const [floatBubbles, setFloatBubbles] = useState([]);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  let stage = '🌱 Seedling';
-  let plantEmoji = '🌱';
-  let desc = 'Your Spurti Sprout has just broken through the soil. Keep attending sessions to water it!';
-  let nextMilestone = 150;
-  
-  if (sp >= 1000) {
-    stage = '🌲 Mighty Legend Tree';
-    plantEmoji = '🌲';
-    desc = 'Amazing! Your plant has grown into a giant, majestic Legend Tree. You are a Spurti Champion!';
-    nextMilestone = null;
-  } else if (sp >= 500) {
-    stage = '🌳 Blooming Tree';
-    plantEmoji = '🌳';
-    desc = 'Your plant is now a beautiful blooming tree. It is strong and thriving!';
-    nextMilestone = 1000;
-  } else if (sp >= 300) {
-    stage = '🪴 Thriving Shrub';
-    plantEmoji = '🪴';
-    desc = 'Your plant has grown leaves and is potted nicely. It is healthy and growing fast!';
-    nextMilestone = 500;
-  } else if (sp >= 150) {
-    stage = '🌿 Young Sapling';
-    plantEmoji = '🌿';
-    desc = 'Your sprout has grown into a young sapling with fresh green leaves!';
-    nextMilestone = 300;
-  }
+  const sp = student.totalSp || 0;
+  const waterCount = student.waterCount || 0;
+  const growthPct = waterCount;
 
-  const handleWater = () => {
+  // Determine current stage & description
+  const stageIndex = Math.floor(waterCount / 10);
+  const STAGES = [
+    { name: 'Seed', icon: '🌱', range: '0' },
+    { name: 'Sprout', icon: '🌿', range: '1-10' },
+    { name: 'Seedling', icon: '🪴', range: '11-20' },
+    { name: 'Small Plant', icon: '🍃', range: '21-30' },
+    { name: 'Young Plant', icon: '🌿', range: '31-40' },
+    { name: 'Sapling', icon: '🪵', range: '41-50' },
+    { name: 'Young Tree', icon: '🌳', range: '51-60' },
+    { name: 'Healthy Tree', icon: '🌲', range: '61-70' },
+    { name: 'Beautiful Tree', icon: '🌸', range: '71-80' },
+    { name: 'Majestic Tree', icon: '✨', range: '81-90' },
+    { name: 'Legendary Tree', icon: '👑', range: '91-100' }
+  ];
+  const currentStage = STAGES[Math.min(10, stageIndex)];
+
+  const STAGE_DESCRIPTIONS = [
+    'A tiny seed lies dormant in dry soil, holding inside it the heart of a majestic tree.',
+    'The seed germinates! A delicate root takes hold and the first green shoots emerge.',
+    'A thriving seedling rises. Leaves stretch outward to gather the morning wind.',
+    'A sturdy plant with multiple healthy leaves. Butterflies have begun visiting!',
+    'A rich, young green plant. The leaves react dynamically when watered.',
+    'A woody stem forms! The sapling blooms with occasional wild flowers.',
+    'A thick woody trunk starts supporting a beautiful canopy in the sunlight.',
+    'Foliage thickens, creating a cozy shelter for chirping birds.',
+    'A gorgeous, lush tree full of colorful blossoms. Nature is thriving here.',
+    'Canopy expands massively, sparkling with magical light after each watering.',
+    'A legendary tree of unmatched stature. Fireflies dance under golden rays!'
+  ];
+  const stageDesc = STAGE_DESCRIPTIONS[Math.min(10, stageIndex)];
+
+  const handleWater = async () => {
     if (watering) return;
+    if (sp < 10) {
+      setErrorMsg('Insufficient SP! Complete study sessions to earn points.');
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+    if (waterCount >= 100) {
+      setErrorMsg('Your tree is already fully grown! 🌲');
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+
+    // Play synthesized sound
+    playChime();
+
+    // Trigger local animations
     setWatering(true);
     setWiggle(true);
-    setTimeout(() => setWiggle(false), 1000);
-    setTimeout(() => setWatering(false), 2000);
+    setErrorMsg('');
+
+    // Spawn floating numbers
+    const bid1 = Date.now();
+    const bid2 = Date.now() + 1;
+    setFloatBubbles([
+      { id: bid1, text: '+1 Water Drop 💧', x: '42%', y: '45%' },
+      { id: bid2, text: '-10 SP ⚡', x: '58%', y: '50%' }
+    ]);
+
+    setTimeout(() => {
+      setFloatBubbles([]);
+    }, 1800);
+
+    // Call database endpoint after can tilts
+    setTimeout(async () => {
+      try {
+        const r = await fetch(`${API}/student/water`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: student.email })
+        });
+        const data = await r.json();
+        if (r.ok && data.success) {
+          onUpdateProfile(data.profile);
+        } else {
+          setErrorMsg(data.error || 'Failed to water.');
+        }
+      } catch {
+        setErrorMsg('Network error.');
+      }
+    }, 900);
+
+    setTimeout(() => {
+      setWiggle(false);
+      setWatering(false);
+    }, 2000);
   };
 
-  const scale = Math.min(1.4, 0.65 + (sp / 1400));
+  // --- Procedural Branching Calculations ---
+  const renderedBranches = BRANCH_DEFS.map(b => {
+    if (waterCount <= b.unlock) return null;
+    // grows to full length over 10 waterings
+    const progress = Math.min(1.0, (waterCount - b.unlock) / 10);
+    const cx2 = b.x1 + (b.x2 - b.x1) * progress;
+    const cy2 = b.y1 + (b.y2 - b.y1) * progress;
+    // thickness grows as tree grows
+    const cthickness = b.thickness * (0.4 + 0.6 * (waterCount / 100));
+    return { ...b, cx2, cy2, cthickness };
+  }).filter(Boolean);
+
+  // --- Procedural Leaves Calculations ---
+  const leaves = [];
+  renderedBranches.forEach(b => {
+    // End leaf: starts growing once branch reaches 80% completion
+    const leafUnlock = b.unlock + 8;
+    if (waterCount >= leafUnlock) {
+      const progress = Math.min(1.0, (waterCount - leafUnlock) / 5);
+      const scale = progress * 7;
+      const angle = b.x2 < b.x1 ? -40 : b.x2 > b.x1 ? 40 : 0;
+      leaves.push({
+        id: `leaf-end-${b.id}`,
+        x: b.cx2,
+        y: b.cy2,
+        scale,
+        angle
+      });
+    }
+
+    // Mid-length leaf: starts growing once branch reaches 40% completion
+    const midLeafUnlock = b.unlock + 4;
+    if (waterCount >= midLeafUnlock && b.id > 1) {
+      const progress = Math.min(1.0, (waterCount - midLeafUnlock) / 5);
+      const scale = progress * 5;
+      const mx = b.x1 + (b.cx2 - b.x1) * 0.65;
+      const my = b.y1 + (b.cy2 - b.y1) * 0.65;
+      const angle = b.x2 < b.x1 ? -20 : 20;
+      leaves.push({
+        id: `leaf-mid-${b.id}`,
+        x: mx,
+        y: my,
+        scale,
+        angle
+      });
+    }
+  });
+
+  // --- Ground Flower calculations ---
+  const flowers = [];
+  const flowerPositions = [
+    { x: 120, y: 298, unlock: 35, color: '#f43f5e' }, // rose pink
+    { x: 245, y: 299, unlock: 45, color: '#eab308' }, // yellow
+    { x: 145, y: 301, unlock: 60, color: '#ec4899' }, // deep pink
+    { x: 215, y: 297, unlock: 75, color: '#3b82f6' }  // sky blue
+  ];
+  flowerPositions.forEach((fp, idx) => {
+    if (waterCount >= fp.unlock) {
+      const progress = Math.min(1.0, (waterCount - fp.unlock) / 5);
+      flowers.push({ ...fp, id: `flower-${idx}`, scale: progress * 0.7 });
+    }
+  });
 
   return (
     <section className="panel tree-panel">
       <div className="tree-header">
-        <h2>Spurti Growth Tree</h2>
-        <span className="tree-stage-tag">{stage}</span>
+        <div>
+          <h2>Spurti Ecosystem</h2>
+          <p className="muted">Earn SP in class and water your tree to nurture it to Legendary level!</p>
+        </div>
+        <span className="tree-stage-tag">{currentStage.name} {currentStage.icon}</span>
       </div>
-      <div className="tree-container">
-        <div className="sky-particles">
-          {sp >= 1000 && <span className="star-sparkle select-none">✨</span>}
-        </div>
-        
-        {watering && (
-          <div className="watering-can-animation">
-            <span className="watering-can">🚿</span>
-            <div className="water-drops">
-              <i className="drop drop-1" />
-              <i className="drop drop-2" />
-              <i className="drop drop-3" />
-            </div>
-          </div>
-        )}
 
-        <div className={`plant-display ${wiggle ? 'wiggle' : ''}`} style={{ transform: `scale(${scale})` }}>
-          <span className="plant-emoji select-none">{plantEmoji}</span>
+      <div className="tree-frame-wrapper">
+        {/* Progress Ring wrapping the plant card */}
+        <div className="progress-ring-container">
+          <svg viewBox="0 0 360 360" className="progress-svg-bg">
+            {/* Soft backdrop progress line */}
+            <circle cx="180" cy="180" r="170" fill="transparent" stroke="rgba(99, 102, 241, 0.05)" strokeWidth="4" />
+            {/* Active glow progress ring */}
+            <circle cx="180" cy="180" r="170" fill="transparent" stroke="url(#progress-rainbow-grad)" strokeWidth="4" 
+                    strokeDasharray="1068.14" 
+                    strokeDashoffset={1068.14 - (1068.14 * growthPct) / 100} 
+                    strokeLinecap="round" 
+                    transform="rotate(-90 180 180)" />
+            <defs>
+              <linearGradient id="progress-rainbow-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#6366f1" />
+                <stop offset="50%" stopColor="#a855f7" />
+                <stop offset="100%" stopColor="#ec4899" />
+              </linearGradient>
+              <linearGradient id="sunbeam-grad" x1="1" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.18" />
+                <stop offset="100%" stopColor="#f59e0b" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+          </svg>
         </div>
 
-        <div className="pot-display">
-          <div className="soil-line" />
-          <div className="pot-body" />
+        {/* Tree Render Canvas */}
+        <div className="tree-canvas-container">
+          {floatBubbles.map(fb => (
+            <span key={fb.id} className="floating-bubble" style={{ left: fb.x, top: fb.y }}>
+              {fb.text}
+            </span>
+          ))}
+
+          <svg viewBox="0 0 360 360" className="tree-svg-canvas">
+            {/* Background Sky Light */}
+            <radialGradient id="sky-glow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor={waterCount >= 91 ? "#fef3c7" : "#eff6ff"} stopOpacity="0.4" />
+              <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+            </radialGradient>
+            <rect width="360" height="360" fill="url(#sky-glow)" rx="16" />
+
+            {/* Sunlight rays (unlocks Stage 6, 60+ water) */}
+            {waterCount >= 60 && (
+              <g className="sunbeams" opacity="0.8">
+                <polygon points="360,0 220,360 270,360" fill="url(#sunbeam-grad)" />
+                <polygon points="360,0 120,360 170,360" fill="url(#sunbeam-grad)" />
+                <polygon points="360,0 0,220 0,280" fill="url(#sunbeam-grad)" />
+              </g>
+            )}
+
+            {/* Clouds (unlocks Stage 5, 50+ water) */}
+            {waterCount >= 50 && (
+              <g className="clouds-bg">
+                <path d="M 30 50 Q 40 35 55 42 Q 70 35 80 50 L 25 50 Z" fill="rgba(255, 255, 255, 0.75)" />
+                <path d="M 280 70 Q 290 55 305 62 Q 320 55 330 70 L 275 70 Z" fill="rgba(255, 255, 255, 0.75)" />
+              </g>
+            )}
+
+            {/* Soil / Ground */}
+            <ellipse cx="180" cy="300" rx="100" ry="12" fill={watering ? "#5c2505" : "#78350f"} />
+            
+            {/* Soil Cracks (Stage 0 only) */}
+            {waterCount === 0 && (
+              <path d="M 120 300 Q 130 297 150 299 M 165 302 Q 175 300 195 299 M 205 297 Q 220 299 235 298" 
+                    stroke="#451a03" strokeWidth="1.5" fill="transparent" />
+            )}
+
+            {/* Grass (unlocks Stage 1+, 5+ water) */}
+            {waterCount >= 5 && (
+              <g stroke="#10b981" strokeWidth="2.5" fill="transparent" strokeLinecap="round">
+                {/* Grass Left */}
+                <path d="M 95 300 Q 92 292 90 288" />
+                <path d="M 98 300 Q 98 290 100 286" />
+                {/* Grass Center */}
+                <path d="M 172 301 Q 170 292 168 288" />
+                <path d="M 176 301 Q 177 291 180 287" />
+                {/* Grass Right */}
+                <path d="M 255 299 Q 256 291 259 287" />
+              </g>
+            )}
+
+            {/* Ground Flowers */}
+            {flowers.map(flower => (
+              <g key={flower.id} transform={`translate(${flower.x}, ${flower.y}) scale(${flower.scale})`}>
+                <circle cx="0" cy="0" r="4.5" fill="#f59e0b" />
+                <circle cx="-5" cy="0" r="3.5" fill={flower.color} />
+                <circle cx="5" cy="0" r="3.5" fill={flower.color} />
+                <circle cx="0" cy="-5" r="3.5" fill={flower.color} />
+                <circle cx="0" cy="5" r="3.5" fill={flower.color} />
+              </g>
+            ))}
+
+            {/* Butterflies (unlocks Stage 3+, 30+ water) */}
+            {waterCount >= 30 && (
+              <g className="butterfly-1">
+                <path d="M 0 0 C -4 -5 -9 -3 -7 1 C -5 5 0 2 0 0" fill="#a855f7" />
+                <path d="M 0 0 C 4 -5 9 -3 7 1 C 5 5 0 2 0 0" fill="#ec4899" />
+                <circle cx="0" cy="2" r="1.5" fill="#1e1b4b" />
+              </g>
+            )}
+            {waterCount >= 45 && (
+              <g className="butterfly-2">
+                <path d="M 0 0 C -4 -5 -9 -3 -7 1 C -5 5 0 2 0 0" fill="#06b6d4" />
+                <path d="M 0 0 C 4 -5 9 -3 7 1 C 5 5 0 2 0 0" fill="#3b82f6" />
+                <circle cx="0" cy="2" r="1.5" fill="#1e1b4b" />
+              </g>
+            )}
+
+            {/* Sitting Bird (unlocks Stage 5+, 50+ water) */}
+            {waterCount >= 50 && (
+              <g transform="translate(133, 192) scale(0.65)" className="sitting-bird">
+                <ellipse cx="0" cy="0" rx="9" ry="7" fill="#3b82f6" />
+                <circle cx="7" cy="-5" r="5" fill="#3b82f6" />
+                <path d="M 11 -5 L 15 -4 L 11 -3 Z" fill="#fbbf24" />
+                <path d="M -7 0 L -13 -4 L -11 3 Z" fill="#1d4ed8" />
+                <circle cx="6" cy="-6" r="1" fill="#fff" />
+              </g>
+            )}
+
+            {/* Fireflies (unlocks Stage 10, 91+ water) */}
+            {waterCount >= 91 && (
+              <g className="fireflies">
+                <circle cx="90" cy="110" r="2.5" fill="#fef08a" className="ff-1" />
+                <circle cx="150" cy="70" r="2" fill="#fef08a" className="ff-2" />
+                <circle cx="230" cy="130" r="2.2" fill="#fef08a" className="ff-3" />
+                <circle cx="270" cy="90" r="1.8" fill="#fef08a" className="ff-4" />
+                <circle cx="120" cy="160" r="2.4" fill="#fef08a" className="ff-5" />
+              </g>
+            )}
+
+            {/* SVGs Tree Group */}
+            <g className={`tree-branches ${wiggle ? 'wiggle' : ''}`} style={{ transformOrigin: '180px 300px' }}>
+              {/* Golden Ambient Halo (Stage 10) */}
+              {waterCount >= 91 && (
+                <ellipse cx="180" cy="150" rx="80" ry="85" fill="transparent" stroke="#f59e0b" strokeWidth="8" opacity="0.12" strokeDasharray="10 6" className="halo-glow" style={{ transformOrigin: '180px 150px' }} />
+              )}
+
+              {/* Render branches */}
+              {renderedBranches.map(b => (
+                <line key={b.id} 
+                      x1={b.x1} y1={b.y1} 
+                      x2={b.cx2} y2={b.cy2} 
+                      stroke="#451a03" 
+                      strokeWidth={b.cthickness} 
+                      strokeLinecap="round" />
+              ))}
+
+              {/* Render leaves */}
+              {leaves.map(leaf => (
+                <path key={leaf.id} 
+                      d="M 0 0 C -5 -9 -11 -10 -11 -4 C -11 2 -5 5 0 0 Z" 
+                      fill={waterCount >= 81 ? "#10b981" : "#059669"}
+                      stroke="#047857"
+                      strokeWidth="0.5"
+                      transform={`translate(${leaf.x}, ${leaf.y}) rotate(${leaf.angle}) scale(${leaf.scale / 7})`}
+                      className="tree-leaf-item"
+                      filter={waterCount >= 81 ? "drop-shadow(0 0 2px rgba(16,185,129,0.3))" : ""} />
+              ))}
+
+              {/* Stage 0 Heartbeat Seedling inside soil */}
+              {waterCount === 0 && (
+                <g className="heartbeat-seed">
+                  <circle cx="180" cy="295" r="4.5" fill="#f59e0b" />
+                  <path d="M 180 292 Q 182 288 185 287" stroke="#10b981" strokeWidth="1.5" fill="transparent" />
+                </g>
+              )}
+            </g>
+
+            {/* Watering can animation overlay */}
+            {watering && (
+              <g className="can-group">
+                <text x="240" y="80" fontSize="42" className="can-emoji">🚿</text>
+                <g className="drip-group">
+                  <line x1="220" y1="90" x2="200" y2="140" stroke="#3b82f6" strokeWidth="3" strokeDasharray="5 5" className="drip-line-1" />
+                  <line x1="230" y1="95" x2="210" y2="145" stroke="#60a5fa" strokeWidth="3" strokeDasharray="5 5" className="drip-line-2" />
+                  <line x1="240" y1="90" x2="220" y2="140" stroke="#3b82f6" strokeWidth="3" strokeDasharray="5 5" className="drip-line-3" />
+                </g>
+              </g>
+            )}
+          </svg>
+        </div>
+      </div>
+
+      <div className="tree-stats-dashboard">
+        <div className="tree-stat-tile">
+          <span>Current Water</span>
+          <strong>💧 {waterCount} / 100</strong>
+        </div>
+        <div className="tree-stat-tile">
+          <span>Growth Pct</span>
+          <strong>🌱 {growthPct}%</strong>
+        </div>
+        <div className="tree-stat-tile">
+          <span>Water Left</span>
+          <strong>💧 {100 - waterCount} Left</strong>
+        </div>
+        <div className="tree-stat-tile">
+          <span>SP Required</span>
+          <strong>⚡ {Math.max(0, 1000 - waterCount * 10)} SP</strong>
         </div>
       </div>
 
       <div className="tree-info">
-        <p className="tree-desc">{desc}</p>
-        <div className="tree-footer">
-          {nextMilestone ? (
-            <span className="next-grow">Next growth stage at <strong>{nextMilestone} SP</strong> (current: {sp} SP)</span>
-          ) : (
-            <span className="max-grow">Maximum growth achieved! 🎉</span>
-          )}
-          <button className="water-btn primary" onClick={handleWater} disabled={watering}>
-            {watering ? 'Watering...' : 'Water Plant 💧'}
+        <p className="tree-desc">{stageDesc}</p>
+        
+        {/* Stepper Timeline */}
+        <div className="tree-stepper-track">
+          <div className="stepper-line-fill" style={{ width: `${(Math.min(10, stageIndex) / 10) * 100}%` }} />
+          {STAGES.map((s, idx) => {
+            const active = idx <= stageIndex;
+            const current = idx === stageIndex;
+            return (
+              <div key={s.name} className={`stepper-node ${active ? 'active' : ''} ${current ? 'current' : ''}`} title={`Stage ${idx}: ${s.name} (${s.range} Water)`}>
+                <span className="step-icon">{s.icon}</span>
+                <span className="step-label">{s.name}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="tree-footer" style={{ marginTop: '24px' }}>
+          <span className="next-grow" style={{ fontWeight: '500' }}>
+            Available balance: <strong>{sp} SP</strong>
+          </span>
+          <button className="water-btn primary" onClick={handleWater} disabled={watering || sp < 10 || waterCount >= 100}>
+            {watering ? 'Watering...' : 'Water Tree 💧 (10 SP)'}
           </button>
         </div>
+        {errorMsg && <p className="error" style={{ textAlign: 'center', marginTop: '12px' }}>{errorMsg}</p>}
       </div>
     </section>
   );

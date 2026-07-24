@@ -10,6 +10,7 @@ const studentSchema = new mongoose.Schema({
   excusedAt: { type: Date, default: null },
   excusedReason: { type: String, default: '' },
   totalSp: { type: Number, default: 100, index: true },
+  waterCount: { type: Number, default: 0 },
   // Spurti Levels & Trophy Leagues — derived views over SP (see services/levels.js).
   highestSpEver: { type: Number, default: 100, index: true },
   level: { type: Number, default: 1 },
