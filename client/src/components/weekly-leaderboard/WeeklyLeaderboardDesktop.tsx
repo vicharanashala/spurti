@@ -6,11 +6,10 @@ import { RightRail } from './RightRail';
 import { Top10Popup, useAutoTop10 } from './Top10Popup';
 import { RegularUserCard } from './RegularUserCard';
 import { FreshWeekEmpty } from './FreshWeekEmpty';
-import { WeeklyChampionsPopup, wasChampionsDismissed, markChampionsDismissed } from '../weekly-recap/WeeklyChampionsPopup';
-import { AIRecoveryCoachPopup, wasCoachDismissed, markCoachDismissed } from '../weekly-recap/AIRecoveryCoachPopup';
-import { DistanceMessage, Bottom50Message } from '../weekly-recap/DistanceMessage';
-import WeeklyGoalCard from '../weekly-recap/WeeklyGoalCard';
-import '../weekly-recap/WeeklyRecap.css';
+import { WeeklyLearningInsightsPopup, wasInsightsDismissed, markInsightsDismissed } from '../weekly-recap/WeeklyLearningInsightsPopup';
+import { RecoveryCoachPopup, wasRecoveryCoachDismissed, markRecoveryCoachDismissed } from '../weekly-recap/RecoveryCoachPopup';
+import '../weekly-recap/WeeklyLearningInsightsPopup.css';
+import '../weekly-recap/RecoveryCoachPopup.css';
 
 // ============================================================
 // Weekly Leaderboard — Desktop Shell
@@ -214,15 +213,14 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
 
   const t10 = useAutoTop10(data);
 
-  // Weekly recap popups — Champions first (everyone), then AI Coach
-  // (only bottom-50 students). Dismissed flags are keyed on recapId
-  // (weekStart) so each popup shows only once per week.
+  // Weekly recap popups — Insights first (everyone), then Recovery
+  // Coach (only bottom-50 students). Dismissed flags are keyed on
+  // recapId (weekStart) so each popup shows only once per week.
   const recapOpen = useWeeklyRecapPopups(email, recap);
 
   const body = (
     <div className="wl-body">
       <CenterColumn data={data} loading={loading} error={error} onRetry={fetchData}>
-        <WeeklyGoalCard data={recap?.goal} />
         {data?.me?.weeklySp === 0 && data?.week?.phase !== 'calculating' && (
           <FreshWeekEmpty data={data} />
         )}
@@ -245,23 +243,21 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
       <div className={`wl-shell-inline wl-shell--${theme}`} data-theme={theme}>
         {body}
         <Top10Popup open={t10.open} onClose={t10.close} data={data} />
-        <WeeklyChampionsPopup
-          open={recapOpen.showChampions}
-          onClose={() => { markChampionsDismissed(recap?.recapId); recapOpen.closeChampions(); }}
+        <WeeklyLearningInsightsPopup
+          open={recapOpen.showInsights}
+          onClose={() => { markInsightsDismissed(recap?.recapId); recapOpen.closeInsights(); }}
           recap={recap?.recap}
-          recapId={recap?.recapId}
-        />
-        <AIRecoveryCoachPopup
-          open={recapOpen.showCoach}
-          onClose={() => { markCoachDismissed(recap?.recapId); recapOpen.closeCoach(); }}
-          plan={recap?.plan}
+          me={recap?.me}
+          caseKey={recap?.case}
           recapId={recap?.recapId}
           email={email}
         />
-        <DistanceMessage
-          recap={recapOpen.distanceMessage?.payload}
-          variant={recapOpen.distanceMessage?.variant}
-          onDismiss={recapOpen.closeDistanceMessage}
+        <RecoveryCoachPopup
+          open={recapOpen.showRecovery}
+          onClose={() => { markRecoveryCoachDismissed(recap?.recapId); recapOpen.closeRecovery(); }}
+          me={recap?.me}
+          recapId={recap?.recapId}
+          email={email}
         />
       </div>
     );
@@ -300,81 +296,47 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
 // ============================================================
 // useWeeklyRecapPopups
 // State machine for the Monday-morning recap experience:
-//   1. Champions popup (everyone) — opens first
-//   2. AI Coach popup (bottom-50 only) — opens after Champions closes
-//   3. Subtle "distance message" toast below the popup right after
-//      Champions closes (everyone), and a separate variant for
-//      bottom-50 students after the AI Coach closes.
-// Each popup + message shows only once per week
-// (recapId = weekStart key).
+//   1. WeeklyLearningInsightsPopup (everyone, gated by case + week)
+//      — auto-flips at 10s to show personalized AI insights on the back.
+//   2. RecoveryCoachPopup (only for case === 'bottom50') — fires
+//      after the Insights popup closes.
+// Each popup shows only once per week (recapId = weekStart key).
 // ============================================================
 function useWeeklyRecapPopups(email, recap) {
-  const [showChampions, setShowChampions] = useState(false);
-  const [showCoach, setShowCoach] = useState(false);
-  // Distance message lives in two states: 'champions' (everyone,
-  // shown right after Champions closes) and 'bottom50' (only for
-  // students in the bottom 50, shown after the AI Coach closes).
-  const [distanceMessage, setDistanceMessage] = useState(null);
+  const [showInsights, setShowInsights] = useState(false);
+  const [showRecovery, setShowRecovery] = useState(false);
 
   // When the recap arrives (or user changes), trigger the cascade.
   useEffect(() => {
     if (!recap || !recap.recap || !recap.recapId) return;
     if (!email) return;
-    // Skip if both already dismissed this week.
-    const champDismissed = wasChampionsDismissed(recap.recapId);
-    const coachDismissed = wasCoachDismissed(recap.recapId);
-    if (champDismissed && (coachDismissed || !recap.plan)) return;
+    // Skip if everything already dismissed this week.
+    const insightsDismissed = wasInsightsDismissed(recap.recapId);
+    const recoveryDismissed = wasRecoveryCoachDismissed(recap.recapId);
+    const isBottom50 = recap.case === 'bottom50';
+    if (insightsDismissed && (recoveryDismissed || !isBottom50)) return;
 
     // Tiny delay so the dashboard mounts first — feels intentional.
     const t = setTimeout(() => {
-      if (!champDismissed) setShowChampions(true);
-      // AI Coach opens after Champions closes (handled in closeChampions).
-      else if (!coachDismissed && recap.plan) setShowCoach(true);
+      if (!insightsDismissed) setShowInsights(true);
+      else if (!recoveryDismissed && isBottom50) setShowRecovery(true);
     }, 600);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recap?.recapId, recap?.plan, email]);
-
-  const champMessageDismissed = useMemo(() => {
-    if (!recap?.recapId) return false;
-    try { return !!localStorage.getItem(`rc_distance_dismissed_${recap.recapId}_champions`); }
-    catch { return false; }
-  }, [recap?.recapId]);
-
-  const coachMessageDismissed = useMemo(() => {
-    if (!recap?.recapId) return false;
-    try { return !!localStorage.getItem(`rc_distance_dismissed_${recap.recapId}_coach`); }
-    catch { return false; }
-  }, [recap?.recapId]);
+  }, [recap?.recapId, recap?.case, email]);
 
   return {
-    showChampions,
-    showCoach,
-    distanceMessage,
-    closeChampions: () => {
-      setShowChampions(false);
-      // Show the subtle distance message after Champions closes, but
-      // only once per week.
-      if (!champMessageDismissed && recap?.me) {
-        setDistanceMessage({ variant: 'champions', payload: recap.me });
-        try { localStorage.setItem(`rc_distance_dismissed_${recap.recapId}_champions`, '1'); }
-        catch {}
-      }
-      // Cascade to AI Coach if applicable and not yet dismissed.
-      if (recap?.plan && recap?.recapId && !wasCoachDismissed(recap.recapId)) {
-        setTimeout(() => setShowCoach(true), 400);
+    showInsights,
+    showRecovery,
+    closeInsights: () => {
+      setShowInsights(false);
+      // After the Insights popup closes, cascade to the Recovery Coach
+      // popup ONLY for bottom-50 students.
+      const isBottom50 = recap?.case === 'bottom50';
+      if (isBottom50 && recap?.recapId && !wasRecoveryCoachDismissed(recap.recapId)) {
+        setTimeout(() => setShowRecovery(true), 400);
       }
     },
-    closeCoach: () => {
-      setShowCoach(false);
-      // Show the bottom-50 encouragement message after the coach
-      // closes (only if they actually were in the bottom 50).
-      if (recap?.plan && !coachMessageDismissed) {
-        setDistanceMessage({ variant: 'bottom50', payload: recap.plan });
-        try { localStorage.setItem(`rc_distance_dismissed_${recap.recapId}_coach`, '1'); }
-        catch {}
-      }
-    },
-    closeDistanceMessage: () => setDistanceMessage(null)
+    closeRecovery: () => setShowRecovery(false)
   };
 }

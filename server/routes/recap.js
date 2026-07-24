@@ -8,95 +8,33 @@ function normalizeEmail(value) {
 }
 
 // ============================================================
-// Weekly Goal derivation
-// Pure function — picks one of three motivational buckets based on
-// the student's prior-week rank, computes the estimated SP / projected
-// rank / targets, and turns the AI Coach plan into a milestone path.
+// Case derivation — powers the WeeklyLearningInsightsPopup.
+//   'top10'   : rank 1-10 last week
+//   'close'   : rank 11-cohortSize-50 AND pointsToTop10 in [1..20]
+//   'bottom50': in the recap's bottom50 list (never named in UI)
+//   'other'   : everyone else (rank > 10, gap > 20 OR gap = 0)
 // ============================================================
-const GOAL_TARGETS = {
-  close: [
-    { id: 'attendance', label: '100% Attendance' },
-    { id: 'poll',       label: 'Complete every Daily Poll' },
-    { id: 'discussion', label: 'Participate in Daily Discussions' },
-    { id: 'challenge',  label: "Complete this Week's Challenge" }
-  ],
-  average: [
-    { id: 'attendance', label: '100% Attendance' },
-    { id: 'poll',       label: 'Daily Poll Participation' },
-    { id: 'discussion', label: 'Join at least 3 Discussions' },
-    { id: 'challenge',  label: 'Complete Weekly Challenge' }
-  ],
-  bottom: [
-    { id: 'attendance', label: 'Attend every session' },
-    { id: 'poll',       label: 'Complete every Daily Poll' },
-    { id: 'discussion', label: 'Join one Discussion every day' },
-    { id: 'challenge',  label: 'Complete the Weekly Challenge' }
-  ]
-};
-
-function pickBucket(myRank, cohortSize) {
-  if (!myRank) return 'average';
-  if (myRank <= 10) return 'close'; // already in top10 — handled in distance message
-  if (myRank <= 25) return 'close';
-  if (cohortSize && myRank > cohortSize - 50) return 'bottom';
-  return 'average';
-}
-
-function pickHeadline(bucket, myRank) {
-  if (bucket === 'close' && myRank) {
-    const ranksAway = Math.max(0, myRank - 10);
-    return {
-      title: '🎯 Weekly Goal',
-      headline: `You were only ${ranksAway} rank${ranksAway === 1 ? '' : 's'} away from becoming a Weekly Champion.`,
-      sub: "Stay consistent this week and you'll have a great chance of reaching the Top 10."
-    };
-  }
-  if (bucket === 'average') {
-    return {
-      title: '🚀 Keep Growing',
-      headline: 'You made steady progress last week.',
-      sub: 'Maintain your consistency and aim for the Top 20.'
-    };
-  }
-  return {
-    title: '💙 Fresh Start',
-    headline: 'Every week is a new beginning.',
-    sub: 'Small daily improvements will help you move up quickly.'
-  };
-}
-
-function deriveGoal(allRankedRow, recap) {
-  if (!allRankedRow || !recap) return null;
-  // The recap's allRanked entries store `rank` (not `weeklyRank`).
-  const myRank = allRankedRow.rank;
-  const bucket = pickBucket(myRank, recap.cohortSize);
-  const titles = pickHeadline(bucket, myRank);
-  const targets = GOAL_TARGETS[bucket];
-  const requiredSp = bucket === 'close' ? 42
-                  : bucket === 'average' ? 30
-                  : 36;
-  const projectedRank = bucket === 'close' ? 'Top 10'
-                      : bucket === 'average' ? 'Top 20'
-                      : 'Top 30';
-  return {
-    bucket,
-    title: titles.title,
-    headline: titles.headline,
-    subhead: titles.sub,
-    targets,
-    requiredSp,
-    projectedRank,
-    priorRank: myRank,
-    priorWeeklySp: allRankedRow.weeklySp
-  };
+function deriveCase(me, recap) {
+  if (!me) return 'other';
+  const rank = Number(me.weeklyRank);
+  if (rank > 0 && rank <= 10) return 'top10';
+  const isInBottom50 = Array.isArray(recap?.bottom50)
+    && recap.bottom50.some(r => r.email === me.email);
+  if (isInBottom50) return 'bottom50';
+  const gap = Number(me.pointsToTop10);
+  if (gap > 0 && gap <= 20) return 'close';
+  return 'other';
 }
 
 // GET /api/weekly/recap?email=...
-// Returns everything the dashboard renders after the Monday-morning
-// recap experience:
+// Returns:
 //   - recap     : last week's Top 10 + Bottom 50
 //   - plan      : AI Recovery plan (only for bottom-50 students)
-//   - goal      : personalized Weekly Goal Card payload (always set)
+//   - goal      : legacy WeeklyGoalCard payload (always set)
+//   - case      : 'top10' | 'close' | 'other' | 'bottom50' — drives the
+//                 WeeklyLearningInsightsPopup cascade
+//   - me        : student summary incl. rank, weeklySp, pointsToTop10,
+//                 attendance/poll/challenge counts
 //   - newWeek   : the upcoming week that started Monday 06:00
 //   - recapId   : weekStart — used for dismissal flags
 router.get('/recap', async (req, res) => {
@@ -108,15 +46,26 @@ router.get('/recap', async (req, res) => {
       recap: null,
       plan: null,
       goal: null,
+      me: null,
+      case: null,
       newWeek: null,
       recapId: null,
       message: 'No recap yet — the first recap is generated after the first week ends.'
     });
   }
-  const [plan, goal] = await Promise.all([
-    recoveryPlanFor(email),
-    Promise.resolve(deriveGoal(recap.allRanked?.find(r => r.email === email) || null, recap))
-  ]);
+  // Look up the student's row in allRanked.
+  const myRow = recap.allRanked?.find(r => r.email === email);
+  const me = myRow ? {
+    email,
+    name: myRow.name,
+    weeklyRank: myRow.rank,
+    weeklySp: myRow.weeklySp,
+    attendanceCount: myRow.attendanceCount,
+    pollCount: myRow.pollCount,
+    challengeCount: myRow.challengeCount,
+    pointsToTop10: Math.max(0, (recap.top10[9]?.weeklySp ?? 0) - myRow.weeklySp)
+  } : null;
+  const plan = await recoveryPlanFor(email);
   res.json({
     recap: {
       weekStart: recap.weekStart,
@@ -132,7 +81,8 @@ router.get('/recap', async (req, res) => {
       finalizedAt: recap.finalizedAt
     },
     plan,
-    goal,
+    me,
+    case: deriveCase(me, recap),
     recapId: recap.weekStart,
     newWeek: { weekStart: recap.weekStart }
   });
