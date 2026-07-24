@@ -263,6 +263,32 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
+class StudentViewErrorBoundary extends React.Component {
+    constructor(props) { super(props); this.state = { err: null }; }
+    static getDerivedStateFromError(err) { return { err }; }
+    componentDidCatch(err, info) {
+      // Dump to localStorage so we can curl it from the server.
+      try {
+        localStorage.setItem('__spurti_last_error', JSON.stringify({
+          message: err?.message,
+          stack: err?.stack,
+          info: info?.componentStack?.slice(0, 500)
+        }));
+      } catch {}
+    }
+    render() {
+      if (this.state.err) {
+        return (
+          <div style={{ padding: 20, fontFamily: 'monospace', color: '#b91c1c' }}>
+            <h2>⚠ Render error</h2>
+            <pre style={{ whiteSpace: 'pre-wrap' }}>{String(this.state.err?.message || this.state.err)}</pre>
+          </div>
+        );
+      }
+      return this.props.children;
+    }
+  }
+
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
   const [weeklyOpen, setWeeklyOpen] = useState(false);
@@ -270,6 +296,7 @@ function StudentView({ profile, onBack }) {
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
   return (
+    <StudentViewErrorBoundary>
     <main className="page compact">
       <ReplaySection profile={profile} />
       <header className="topbar">
@@ -311,6 +338,7 @@ function StudentView({ profile, onBack }) {
         </section>
       )}
     </main>
+    </StudentViewErrorBoundary>
   );
 }
 
