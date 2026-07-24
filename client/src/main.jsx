@@ -267,6 +267,42 @@ function StudentView({ profile, onBack }) {
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+
+  const [badgeQueue, setBadgeQueue] = useState([]);
+  const [currentBadge, setCurrentBadge] = useState(null);
+
+  useEffect(() => {
+    if (!student) return;
+    const queue = [];
+    const MILESTONES = [
+      { id: '100', name: 'Centurion', points: 100, icon: '🥉', color: 'bronze' },
+      { id: '200', name: 'Double Centurion', points: 200, icon: '🥈', color: 'silver' },
+      { id: '500', name: 'Half-Kilo', points: 500, icon: '🥇', color: 'gold' },
+      { id: '1000', name: 'Millennium', points: 1000, icon: '💎', color: 'platinum' }
+    ];
+    for (const milestone of MILESTONES) {
+      if (student.totalSp >= milestone.points) {
+        const seen = localStorage.getItem(`badge_seen_${milestone.id}_${student.email}`);
+        if (!seen) {
+          queue.push(milestone);
+        }
+      }
+    }
+    if (queue.length > 0) {
+      setBadgeQueue(queue);
+      setCurrentBadge(queue[0]);
+    }
+  }, [student]);
+
+  const handleCloseBadge = () => {
+    if (currentBadge && student) {
+      localStorage.setItem(`badge_seen_${currentBadge.id}_${student.email}`, 'true');
+      const remaining = badgeQueue.slice(1);
+      setBadgeQueue(remaining);
+      setCurrentBadge(remaining.length > 0 ? remaining[0] : null);
+    }
+  };
+
   return (
     <main className="page compact">
       <header className="topbar">
@@ -287,6 +323,7 @@ function StudentView({ profile, onBack }) {
       {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} setTab={setTab} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {currentBadge && <BadgePopup badge={currentBadge} onClose={handleCloseBadge} />}
     </main>
   );
 }
@@ -416,11 +453,19 @@ function buildBadges(profile) {
   const qualifiedPct = profile.attendance.length ? profile.attendance.filter(a => a.qualified).length / profile.attendance.length : 0;
   const pollAttempted = profile.polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
   const pollTotal = profile.polls.reduce((sum, p) => sum + p.totalQuestions, 0);
-  if (profile.student.rank <= 50) badges.push('Top 50');
-  if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
-  if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
-  if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
-  return badges.length ? badges : ['Getting Started'];
+  
+  // SP Milestone Badges
+  const sp = profile.student.totalSp;
+  if (sp >= 1000) badges.push('💎 Millennium (1000+ SP)');
+  else if (sp >= 500) badges.push('🥇 Half-Kilo (500+ SP)');
+  else if (sp >= 200) badges.push('🥈 Double Centurion (200+ SP)');
+  else if (sp >= 100) badges.push('🥉 Centurion (100+ SP)');
+
+  if (profile.student.rank <= 50) badges.push('👑 Top 50');
+  if (qualifiedPct >= 0.75) badges.push('🔥 Consistent Attendee');
+  if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('⚡ Poll Champion');
+  if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('📈 Above Average');
+  return badges.length ? badges : ['🌱 Getting Started'];
 }
 
 function buildNextActions(profile) {
@@ -1283,3 +1328,36 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
 
 
 createRoot(document.getElementById('root')).render(<App />);
+
+function BadgePopup({ badge, onClose }) {
+  return (
+    <div className="badge-popup-overlay">
+      <div className="badge-popup-card">
+        <div className="badge-popup-confetti">
+          {Array.from({ length: 35 }).map((_, i) => {
+            const colors = ['#6366f1', '#a855f7', '#ec4899', '#3b82f6', '#10b981', '#f59e0b'];
+            const style = {
+              left: `${Math.random() * 100}%`,
+              top: `${-10 - Math.random() * 20}px`,
+              backgroundColor: colors[i % colors.length],
+              transform: `rotate(${Math.random() * 360}deg)`,
+              animationDelay: `${Math.random() * 1.5}s`,
+              animationDuration: `${1.5 + Math.random() * 2.5}s`
+            };
+            return <div key={i} className="confetti-piece" style={style} />;
+          })}
+        </div>
+        <div className={`badge-popup-glow ${badge.color}`} />
+        <div className="badge-popup-icon-container">
+          <span className="badge-popup-icon">{badge.icon}</span>
+        </div>
+        <p className="badge-popup-eyebrow">Milestone Unlocked! 🎉</p>
+        <h2 className="badge-popup-title">{badge.name} Badge</h2>
+        <p className="badge-popup-description">
+          Sensational effort! You have earned this badge for achieving <strong>{badge.points} Spurti Points</strong>. Your consistency and dedication are paying off!
+        </p>
+        <button className="badge-popup-btn" onClick={onClose}>Awesome!</button>
+      </div>
+    </div>
+  );
+}
