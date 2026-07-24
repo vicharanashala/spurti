@@ -138,6 +138,7 @@ export function CurrentRankBadge({ sp, profile }) {
   const rank = rankFor(sp);
   const next = nextRank(sp);
   const tier = TIER_THEME[rank.tier];
+  const nextTier = next ? TIER_THEME[next.rank.tier] : null;
   const desc = RANK_DESCRIPTIONS[rank.name] || '';
   return (
     <div className="rk-current" style={{ '--rk-glow': tier.glow }}>
@@ -148,9 +149,9 @@ export function CurrentRankBadge({ sp, profile }) {
         <div className="rk-current__eyebrow">{tier.label.toUpperCase()} TIER</div>
         <div className="rk-current__name" style={{ color: tier.glow }}>{rank.name}</div>
         <div className="rk-current__desc">{desc}</div>
-        {next && (
+        {next && nextTier && (
           <div className="rk-current__next">
-            Next: <b style={{ color: next.rank.theme.glow }}>{next.rank.name}</b>
+            Next: <b style={{ color: nextTier.glow }}>{next.rank.name}</b>
             <span className="rk-current__next-sep">·</span>
             {next.spNeeded} SP to go
           </div>
@@ -175,12 +176,12 @@ function MilestoneMarker({ rank, sp, currentSp, isCompleted, theme }) {
     <div className={`rk-milestone${isCompleted ? ' is-completed' : ''}`} style={{ left: `${pct}%` }}>
       <div
         className="rk-milestone__node"
-        style={{ background: isCompleted ? rank.theme.gradient : 'var(--surface)',
-                 borderColor: isCompleted ? rank.theme.glow : 'var(--border-strong)' }}
+        style={{ background: isCompleted ? theme.gradient : 'var(--surface)',
+                 borderColor: isCompleted ? theme.glow : 'var(--border-strong)' }}
       >
         {isCompleted ? <span className="rk-milestone__check">✓</span> : <span className="rk-milestone__sp">{sp >= 1000 ? `${(sp/1000).toFixed(1)}k` : sp}</span>}
       </div>
-      <div className="rk-milestone__label" style={{ color: isCompleted ? rank.theme.glow : 'var(--text-dim)' }}>
+      <div className="rk-milestone__label" style={{ color: isCompleted ? theme.glow : 'var(--text-dim)' }}>
         {rank.name}
       </div>
     </div>
@@ -206,8 +207,9 @@ function Runner({ tier }) {
 export function JourneyProgressTrack({ sp }) {
   const rank = rankFor(sp);
   const next = nextRank(sp);
+  const tier = TIER_THEME[rank.tier];
+  const nextTier = next ? TIER_THEME[next.rank.tier] : null;
   const progressPct = spToPct(sp);
-  const currentIdx = rank.idx;
 
   return (
     <div className="rk-track-wrap">
@@ -221,11 +223,11 @@ export function JourneyProgressTrack({ sp }) {
         </div>
         <div className="rk-track-head__right">
           <div className="rk-track-current">
-            <div className="rk-track-current-rank" style={{ color: rank.theme.glow }}>
+            <div className="rk-track-current-rank" style={{ color: tier.glow }}>
               {rank.name}
             </div>
             <div className="rk-track-current-meta">
-              Tier <b>{rank.theme.label}</b> · Rank {rank.idx}/16
+              Tier <b>{tier.label}</b> · Rank {rank.idx}/16
             </div>
           </div>
         </div>
@@ -235,7 +237,7 @@ export function JourneyProgressTrack({ sp }) {
         <div className="rk-track-rail">
           <div
             className="rk-track-fill"
-            style={{ width: `${progressPct}%`, '--rk-glow': rank.theme.glow }}
+            style={{ width: `${progressPct}%`, '--rk-glow': tier.glow }}
           />
         </div>
         {RANKS.map(r => (
@@ -250,7 +252,7 @@ export function JourneyProgressTrack({ sp }) {
         ))}
         <div
           className="rk-runner-wrap"
-          style={{ left: `${progressPct}%`, color: rank.theme.glow }}
+          style={{ left: `${progressPct}%`, color: tier.glow }}
         >
           <Runner tier={rank.tier} />
         </div>
@@ -261,11 +263,11 @@ export function JourneyProgressTrack({ sp }) {
           <div className="rk-track-eyebrow">SP</div>
           <span className="rk-track-sp-min">100</span>
         </div>
-        {next ? (
+        {next && nextTier ? (
           <div className="rk-track-foot__next">
             <div className="rk-track-eyebrow">NEXT RANK</div>
             <div className="rk-track-foot__next-row">
-              <span className="rk-track-foot__next-name" style={{ color: next.rank.theme.glow }}>
+              <span className="rk-track-foot__next-name" style={{ color: nextTier.glow }}>
                 {next.rank.name}
               </span>
               <span className="rk-track-foot__next-sep">·</span>
@@ -278,7 +280,7 @@ export function JourneyProgressTrack({ sp }) {
                 className="rk-track-foot__next-fill"
                 style={{
                   width: `${Math.min(100, Math.round(((sp - rank.min) / (next.rank.min - rank.min)) * 100))}%`,
-                  background: next.rank.theme.gradient
+                  background: nextTier.gradient
                 }}
               />
             </div>
