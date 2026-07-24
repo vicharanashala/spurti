@@ -274,31 +274,19 @@ api.post('/student/water', async (req, res) => {
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
   if (!student) return res.status(404).json({ error: 'Student not found' });
 
-  if (student.totalSp < 10) {
-    return res.status(400).json({ error: 'Insufficient SP! Each watering requires 10 SP.' });
+  const waterCount = student.waterCount || 0;
+  const unlocked = Math.min(100, Math.floor(student.totalSp / 10));
+
+  if (waterCount >= unlocked) {
+    return res.status(400).json({ error: 'No waterings available! Earn more SP first.' });
   }
-  if ((student.waterCount || 0) >= 100) {
+  if (waterCount >= 100) {
     return res.status(400).json({ error: 'Tree is already fully grown! Max waterings reached.' });
   }
 
-  // Decrement SP & Increment water count
-  student.totalSp = Math.max(0, student.totalSp - 10);
-  student.waterCount = (student.waterCount || 0) + 1;
+  // ONLY increment waterCount! Do NOT modify student.totalSp!
+  student.waterCount = waterCount + 1;
   await student.save();
-
-  // Add transaction
-  await SPTransaction.create({
-    email: student.email,
-    studentId: student._id,
-    category: 'manual',
-    sessionLabel: 'Watering',
-    deltaMode: 'absolute',
-    deltaValue: -10,
-    appliedDelta: -10,
-    balanceAfter: student.totalSp,
-    reason: `Watered Spurti Tree (+1 Water Drop, -10 SP). Total Waterings: ${student.waterCount}/100.`,
-    dateTime: new Date()
-  });
 
   res.json({ success: true, profile: await studentPayload(student) });
 });

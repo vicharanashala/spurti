@@ -1515,6 +1515,10 @@ function SpurtiTree({ student, onUpdateProfile }) {
   const waterCount = student.waterCount || 0;
   const growthPct = waterCount;
 
+  // Decoupled Eligibility Calculations
+  const unlocked = Math.min(100, Math.floor(sp / 10));
+  const remaining = Math.max(0, unlocked - waterCount);
+
   // Determine current stage & description
   const stageIndex = Math.floor(waterCount / 10);
   const STAGES = [
@@ -1549,8 +1553,8 @@ function SpurtiTree({ student, onUpdateProfile }) {
 
   const handleWater = async () => {
     if (watering) return;
-    if (sp < 10) {
-      setErrorMsg('Insufficient SP! Complete study sessions to earn points.');
+    if (remaining <= 0) {
+      setErrorMsg('No waterings available! Complete study sessions to earn more SP.');
       setTimeout(() => setErrorMsg(''), 4000);
       return;
     }
@@ -1568,12 +1572,12 @@ function SpurtiTree({ student, onUpdateProfile }) {
     setWiggle(true);
     setErrorMsg('');
 
-    // Spawn floating numbers
+    // Spawn floating numbers (no SP decrease, show tree growth instead!)
     const bid1 = Date.now();
     const bid2 = Date.now() + 1;
     setFloatBubbles([
       { id: bid1, text: '+1 Water Drop 💧', x: '42%', y: '45%' },
-      { id: bid2, text: '-10 SP ⚡', x: '58%', y: '50%' }
+      { id: bid2, text: 'Tree Grew 🌱', x: '58%', y: '50%' }
     ]);
 
     setTimeout(() => {
@@ -1864,20 +1868,20 @@ function SpurtiTree({ student, onUpdateProfile }) {
 
       <div className="tree-stats-dashboard">
         <div className="tree-stat-tile">
-          <span>Current Water</span>
+          <span>Lifetime SP</span>
+          <strong>⚡ {sp}</strong>
+        </div>
+        <div className="tree-stat-tile">
+          <span>Water Used</span>
           <strong>💧 {waterCount} / 100</strong>
         </div>
         <div className="tree-stat-tile">
-          <span>Growth Pct</span>
-          <strong>🌱 {growthPct}%</strong>
+          <span>Available Waterings</span>
+          <strong>💧 {remaining}</strong>
         </div>
         <div className="tree-stat-tile">
-          <span>Water Left</span>
-          <strong>💧 {100 - waterCount} Left</strong>
-        </div>
-        <div className="tree-stat-tile">
-          <span>SP Required</span>
-          <strong>⚡ {Math.max(0, 1000 - waterCount * 10)} SP</strong>
+          <span>Next Unlock</span>
+          <strong>⚡ {unlocked >= 100 ? 'Max Unlocked' : `${10 - (sp % 10)} SP`}</strong>
         </div>
       </div>
 
@@ -1901,10 +1905,10 @@ function SpurtiTree({ student, onUpdateProfile }) {
 
         <div className="tree-footer" style={{ marginTop: '24px' }}>
           <span className="next-grow" style={{ fontWeight: '500' }}>
-            Available balance: <strong>{sp} SP</strong>
+            Available Waterings: <strong>{remaining} Left</strong>
           </span>
-          <button className="water-btn primary" onClick={handleWater} disabled={watering || sp < 10 || waterCount >= 100}>
-            {watering ? 'Watering...' : 'Water Tree 💧 (10 SP)'}
+          <button className="water-btn primary" onClick={handleWater} disabled={watering || remaining <= 0 || waterCount >= 100}>
+            {watering ? 'Watering...' : 'Water Tree 💧'}
           </button>
         </div>
         {errorMsg && <p className="error" style={{ textAlign: 'center', marginTop: '12px' }}>{errorMsg}</p>}
