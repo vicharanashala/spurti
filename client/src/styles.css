@@ -478,13 +478,18 @@ input:focus, select:focus {
   border-radius: 12px;
   padding: 12px;
   background: rgba(255, 255, 255, 0.4);
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 .sparkline i {
-  flex: 1;
-  min-width: 5px;
+  flex: 1 1 0%;
+  min-width: 0;
   background: var(--rainbow-gradient);
   border-radius: 4px 4px 0 0;
   opacity: 0.85;
+  transition: transform 0.2s ease, opacity 0.2s ease;
 }
 .sparkline i:hover {
   opacity: 1;
