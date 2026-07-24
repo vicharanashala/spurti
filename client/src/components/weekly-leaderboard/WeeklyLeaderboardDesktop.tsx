@@ -8,6 +8,8 @@ import { RegularUserCard } from './RegularUserCard';
 import { FreshWeekEmpty } from './FreshWeekEmpty';
 import { WeeklyChampionsPopup, wasChampionsDismissed, markChampionsDismissed } from '../weekly-recap/WeeklyChampionsPopup';
 import { AIRecoveryCoachPopup, wasCoachDismissed, markCoachDismissed } from '../weekly-recap/AIRecoveryCoachPopup';
+import { DistanceMessage, Bottom50Message } from '../weekly-recap/DistanceMessage';
+import WeeklyGoalCard from '../weekly-recap/WeeklyGoalCard';
 import '../weekly-recap/WeeklyRecap.css';
 
 // ============================================================
@@ -220,6 +222,7 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
   const body = (
     <div className="wl-body">
       <CenterColumn data={data} loading={loading} error={error} onRetry={fetchData}>
+        <WeeklyGoalCard data={recap?.goal} />
         {data?.me?.weeklySp === 0 && data?.week?.phase !== 'calculating' && (
           <FreshWeekEmpty data={data} />
         )}
@@ -255,6 +258,11 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
           recapId={recap?.recapId}
           email={email}
         />
+        <DistanceMessage
+          recap={recapOpen.distanceMessage?.payload}
+          variant={recapOpen.distanceMessage?.variant}
+          onDismiss={recapOpen.closeDistanceMessage}
+        />
       </div>
     );
   }
@@ -280,6 +288,11 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
         recapId={recap?.recapId}
         email={email}
       />
+      <DistanceMessage
+        recap={recapOpen.distanceMessage?.payload}
+        variant={recapOpen.distanceMessage?.variant}
+        onDismiss={recapOpen.closeDistanceMessage}
+      />
     </div>
   );
 }
@@ -289,11 +302,19 @@ export function WeeklyLeaderboardDesktop({ email, profile, inline = false }) {
 // State machine for the Monday-morning recap experience:
 //   1. Champions popup (everyone) — opens first
 //   2. AI Coach popup (bottom-50 only) — opens after Champions closes
-// Each popup shows only once per week (recapId = weekStart key).
+//   3. Subtle "distance message" toast below the popup right after
+//      Champions closes (everyone), and a separate variant for
+//      bottom-50 students after the AI Coach closes.
+// Each popup + message shows only once per week
+// (recapId = weekStart key).
 // ============================================================
 function useWeeklyRecapPopups(email, recap) {
   const [showChampions, setShowChampions] = useState(false);
   const [showCoach, setShowCoach] = useState(false);
+  // Distance message lives in two states: 'champions' (everyone,
+  // shown right after Champions closes) and 'bottom50' (only for
+  // students in the bottom 50, shown after the AI Coach closes).
+  const [distanceMessage, setDistanceMessage] = useState(null);
 
   // When the recap arrives (or user changes), trigger the cascade.
   useEffect(() => {
@@ -314,16 +335,46 @@ function useWeeklyRecapPopups(email, recap) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recap?.recapId, recap?.plan, email]);
 
+  const champMessageDismissed = useMemo(() => {
+    if (!recap?.recapId) return false;
+    try { return !!localStorage.getItem(`rc_distance_dismissed_${recap.recapId}_champions`); }
+    catch { return false; }
+  }, [recap?.recapId]);
+
+  const coachMessageDismissed = useMemo(() => {
+    if (!recap?.recapId) return false;
+    try { return !!localStorage.getItem(`rc_distance_dismissed_${recap.recapId}_coach`); }
+    catch { return false; }
+  }, [recap?.recapId]);
+
   return {
     showChampions,
     showCoach,
+    distanceMessage,
     closeChampions: () => {
       setShowChampions(false);
+      // Show the subtle distance message after Champions closes, but
+      // only once per week.
+      if (!champMessageDismissed && recap?.me) {
+        setDistanceMessage({ variant: 'champions', payload: recap.me });
+        try { localStorage.setItem(`rc_distance_dismissed_${recap.recapId}_champions`, '1'); }
+        catch {}
+      }
       // Cascade to AI Coach if applicable and not yet dismissed.
       if (recap?.plan && recap?.recapId && !wasCoachDismissed(recap.recapId)) {
         setTimeout(() => setShowCoach(true), 400);
       }
     },
-    closeCoach: () => setShowCoach(false)
+    closeCoach: () => {
+      setShowCoach(false);
+      // Show the bottom-50 encouragement message after the coach
+      // closes (only if they actually were in the bottom 50).
+      if (recap?.plan && !coachMessageDismissed) {
+        setDistanceMessage({ variant: 'bottom50', payload: recap.plan });
+        try { localStorage.setItem(`rc_distance_dismissed_${recap.recapId}_coach`, '1'); }
+        catch {}
+      }
+    },
+    closeDistanceMessage: () => setDistanceMessage(null)
   };
 }
