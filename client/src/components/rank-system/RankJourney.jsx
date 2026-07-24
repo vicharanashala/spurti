@@ -247,7 +247,7 @@ export function JourneyProgressTrack({ sp }) {
             sp={r.min}
             currentSp={sp}
             isCompleted={sp >= r.min}
-            theme={r.theme}
+            theme={TIER_THEME[r.tier]}
           />
         ))}
         <div
