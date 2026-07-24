@@ -1015,3 +1015,523 @@ input:focus, select:focus {
     opacity: 1;
   }
 }
+
+/* ==========================================================================
+   Spurti Tree / Plant Growth Feature Styles
+   ========================================================================== */
+.tree-panel {
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 20px;
+  border-top: 4px solid #10b981;
+}
+
+.tree-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.tree-stage-tag {
+  font-size: 13px;
+  font-weight: 800;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tree-container {
+  position: relative;
+  height: 200px;
+  background: linear-gradient(180deg, #eff6ff 0%, #e0f2fe 100%);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  overflow: hidden;
+  padding-bottom: 16px;
+  border: 1px solid rgba(226, 232, 240, 0.5);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.02);
+}
+
+/* Sky sparkles */
+.sky-particles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.star-sparkle {
+  position: absolute;
+  top: 20px;
+  left: 20%;
+  font-size: 20px;
+  animation: pulse-glow 2s infinite alternate;
+}
+@keyframes pulse-glow {
+  0% { transform: scale(0.8); opacity: 0.5; }
+  100% { transform: scale(1.2); opacity: 1; filter: drop-shadow(0 0 8px #fbbf24); }
+}
+
+/* Plant / Pot Display */
+.plant-display {
+  font-size: 80px;
+  line-height: 1;
+  z-index: 2;
+  margin-bottom: -10px;
+  transform-origin: bottom center;
+  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  animation: gentle-sway 6s ease-in-out infinite alternate;
+}
+
+.plant-display.wiggle {
+  animation: plant-bounce 0.8s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+.pot-display {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 1;
+  width: 90px;
+}
+
+.soil-line {
+  width: 80px;
+  height: 6px;
+  background: #78350f;
+  border-radius: 999px;
+  margin-bottom: -2px;
+}
+
+.pot-body {
+  width: 70px;
+  height: 40px;
+  background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+  border-radius: 0 0 16px 16px;
+  border-top: 4px solid #f59e0b;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Watering can & animations */
+.watering-can-animation {
+  position: absolute;
+  top: 15px;
+  right: 25%;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: can-tip 2s ease-in-out forwards;
+}
+
+.watering-can {
+  font-size: 38px;
+  transform: rotate(0deg);
+}
+
+.water-drops {
+  display: flex;
+  gap: 12px;
+  margin-top: 2px;
+  transform: translateX(-15px);
+}
+
+.drop {
+  width: 3px;
+  height: 12px;
+  background: #3b82f6;
+  border-radius: 999px;
+  opacity: 0;
+}
+.drop-1 { animation: drip 0.5s infinite 0.1s; }
+.drop-2 { animation: drip 0.5s infinite 0.3s; }
+.drop-3 { animation: drip 0.5s infinite 0.2s; }
+
+@keyframes can-tip {
+  0% { transform: translate(100px, -20px) rotate(0deg); }
+  25% { transform: translate(0, 0) rotate(-35deg); }
+  75% { transform: translate(0, 0) rotate(-35deg); }
+  100% { transform: translate(100px, -20px) rotate(0deg); }
+}
+
+@keyframes drip {
+  0% { transform: translateY(0); opacity: 1; height: 4px; }
+  100% { transform: translateY(70px); opacity: 0; height: 16px; }
+}
+
+@keyframes gentle-sway {
+  0% { transform: rotate(-2deg); }
+  100% { transform: rotate(2deg); }
+}
+
+@keyframes plant-bounce {
+  0%, 100% { transform: scale(1) rotate(0); }
+  20% { transform: scale(1.2, 0.8) rotate(-4deg); }
+  40% { transform: scale(0.85, 1.15) rotate(4deg); }
+  60% { transform: scale(1.08, 0.92) rotate(-2deg); }
+  80% { transform: scale(0.95, 1.05) rotate(1deg); }
+}
+
+.tree-info {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.tree-desc {
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-bottom: 16px;
+}
+
+.tree-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.next-grow {
+  font-size: 13.5px;
+  color: #334155;
+}
+.next-grow strong {
+  color: #10b981;
+}
+.max-grow {
+  font-size: 13.5px;
+  font-weight: 750;
+  color: #10b981;
+}
+
+.water-btn {
+  min-height: 38px;
+  padding: 0 16px;
+  font-size: 13.5px;
+}
+
+/* ==========================================================================
+   Podium Leaderboard Styles
+   ========================================================================== */
+.leaderboard-panel {
+  border-top: 4px solid #6366f1;
+}
+
+.leaderboard-select {
+  max-width: 220px;
+}
+
+.podium-section {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 16px;
+  margin: 32px 0 40px;
+  padding: 0 8px;
+}
+
+.podium-card {
+  flex: 1;
+  max-width: 200px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 20px;
+  padding: 16px 12px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.podium-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 12px 30px rgba(99, 102, 241, 0.12);
+}
+
+.podium-card.current {
+  border-color: #34d399;
+  background: #f0fdf4;
+  box-shadow: 0 4px 15px rgba(52, 211, 153, 0.1);
+}
+
+.podium-badge {
+  font-size: 32px;
+  margin-bottom: 8px;
+  filter: drop-shadow(0 4px 6px rgba(0,0,0,0.06));
+}
+
+.podium-name {
+  font-size: 15px;
+  font-weight: 800;
+  color: #1e293b;
+  text-align: center;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.podium-email {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.podium-points {
+  font-size: 15px;
+  font-weight: 800;
+  color: #4f46e5;
+  margin-bottom: 12px;
+}
+
+.podium-stand {
+  width: 100%;
+  border-radius: 12px 12px 0 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: #fff;
+  font-weight: 900;
+  font-size: 16px;
+}
+
+/* Pedestal heights & styling */
+.place-1 {
+  height: 70px;
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  box-shadow: 0 4px 10px rgba(245, 158, 11, 0.2);
+}
+.place-2 {
+  height: 50px;
+  background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
+  box-shadow: 0 4px 10px rgba(100, 116, 139, 0.2);
+}
+.place-3 {
+  height: 35px;
+  background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+  box-shadow: 0 4px 10px rgba(180, 83, 9, 0.2);
+}
+
+.podium-card.gold {
+  order: 2;
+  margin-bottom: 0;
+}
+.podium-card.silver {
+  order: 1;
+  margin-bottom: 0;
+}
+.podium-card.bronze {
+  order: 3;
+  margin-bottom: 0;
+}
+
+/* Ranks list design */
+.leaderboard-table th {
+  background: transparent;
+  border-bottom: 2px solid var(--line);
+}
+
+.rank-badge {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #f1f5f9;
+  font-weight: 800;
+  font-size: 13px;
+  color: #475569;
+}
+
+.current-student .rank-badge {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.font-semibold {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.points-col {
+  font-weight: 800;
+  color: #4f46e5;
+}
+
+@media (max-width: 600px) {
+  .podium-section {
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+  .podium-card {
+    width: 100%;
+    max-width: 260px;
+  }
+  .podium-card.gold, .podium-card.silver, .podium-card.bronze {
+    order: unset;
+  }
+  .podium-stand {
+    height: 35px !important;
+  }
+}
+
+/* ==========================================================================
+   Polls Pie Chart & Ring Styles
+   ========================================================================== */
+.polls-panel {
+  border-top: 4px solid #10b981;
+}
+
+.polls-overall-container {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  margin-bottom: 28px;
+}
+
+.polls-chart-wrapper {
+  position: relative;
+  width: 140px;
+  height: 140px;
+}
+
+.pie-svg {
+  transform: rotate(-90deg);
+  width: 100%;
+  height: 100%;
+}
+
+.chart-center-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 10;
+}
+.chart-center-text strong {
+  font-size: 24px;
+  font-weight: 900;
+  color: #1e293b;
+  line-height: 1;
+}
+.chart-center-text span {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.chart-legend {
+  display: grid;
+  gap: 10px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14.5px;
+  color: #334155;
+}
+
+.legend-item .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.legend-item .dot.green { background: #10b981; }
+.legend-item .dot.red { background: #ef4444; }
+
+.legend-total {
+  font-size: 13px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
+.polls-cards-grid {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.poll-session-card {
+  padding: 16px;
+}
+
+.poll-card-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.poll-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+.poll-info strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.poll-info span {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.mini-ring-wrapper {
+  position: relative;
+  width: 44px;
+  height: 44px;
+}
+
+.mini-ring-svg {
+  transform: rotate(-90deg);
+  width: 100%;
+  height: 100%;
+}
+
+.mini-ring-text {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: #1e293b;
+}
+
+@media (max-width: 600px) {
+  .polls-overall-container {
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    text-align: center;
+  }
+}

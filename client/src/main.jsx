@@ -314,6 +314,7 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
+      <SpurtiTree sp={student.totalSp} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'],
         ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
@@ -365,22 +366,59 @@ function LevelStatus({ student }) {
 function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   const [type, setType] = useState('overall');
   const rows = type === 'overall' ? overall : group;
+  
+  const top3 = rows.slice(0, 3);
+  const remaining = rows.slice(3);
+
+  const podium = [];
+  if (top3[1]) podium.push({ ...top3[1], rankIndex: 2 });
+  if (top3[0]) podium.push({ ...top3[0], rankIndex: 1 });
+  if (top3[2]) podium.push({ ...top3[2], rankIndex: 3 });
+
   return (
-    <section className="panel">
+    <section className="panel leaderboard-panel">
       <div className="panel-head">
         <h2>Leaderboard</h2>
-        <select value={type} onChange={e => setType(e.target.value)}>
+        <select value={type} onChange={e => setType(e.target.value)} className="leaderboard-select">
           <option value="overall">Overall Leaderboard</option>
           <option value="my_onboarding_group">My Onboarding Group</option>
         </select>
       </div>
       {type === 'my_onboarding_group' && groupLabel &&
         <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
-      <table className="table">
+      
+      {podium.length > 0 && (
+        <div className="podium-section">
+          {podium.map(student => {
+            const classMap = { 1: 'gold', 2: 'silver', 3: 'bronze' };
+            const medalMap = { 1: '👑', 2: '🥈', 3: '🥉' };
+            const place = student.rankIndex;
+            return (
+              <div key={`${student.maskedEmail}-${place}`} className={`podium-card ${classMap[place]} ${student.isCurrentStudent ? 'current' : ''}`}>
+                <div className="podium-badge">{medalMap[place]}</div>
+                <strong className="podium-name">{student.name}</strong>
+                <span className="podium-email">{student.maskedEmail}</span>
+                <span className="podium-points">{student.totalSp} SP</span>
+                <div className={`podium-stand place-${place}`}>
+                  <span>#{place}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <table className="table leaderboard-table">
         <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
-        <tbody>{rows.map(row => (
+        <tbody>{remaining.map(row => (
           <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
-            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
+            <td>
+              <span className="rank-badge">{row.rank}</span>
+            </td>
+            <td className="font-semibold">{row.name}</td>
+            <td className="text-muted">{row.maskedEmail}</td>
+            <td>Lvl {row.level}</td>
+            <td className="points-col">{row.totalSp} SP</td>
           </tr>
         ))}</tbody>
       </table>
@@ -525,18 +563,67 @@ function pollSortKey(label = '') {
 function Polls({ polls }) {
   if (!polls.length) return <section className="panel empty">No poll records found.</section>;
   const sorted = [...polls].sort((a, b) => pollSortKey(b.sessionLabel) - pollSortKey(a.sessionLabel));
+  
+  const totalAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
+  const totalQuestions = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
+  const totalMissed = totalQuestions - totalAttempted;
+  const attemptedPct = totalQuestions ? Math.round((totalAttempted / totalQuestions) * 100) : 0;
+  const missedPct = 100 - attemptedPct;
+
   return (
-    <section className="panel">
-      <h2>Polls</h2>
-      <div className="cards">
-        {sorted.map(poll => (
-          <article className="card" key={poll._id}>
-            <div className="card-head static">
-              <strong>{poll.sessionLabel}</strong>
-              <span>{poll.attemptedQuestions}/{poll.totalQuestions} attempted</span>
+    <section className="panel polls-panel">
+      <h2>Poll Participation</h2>
+      
+      {totalQuestions > 0 && (
+        <div className="polls-overall-container">
+          <div className="polls-chart-wrapper">
+            <svg viewBox="0 0 36 36" className="pie-svg">
+              <circle cx="18" cy="18" r="15.915" fill="#fff" />
+              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#fec2d1" strokeWidth="4" />
+              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#ef4444" strokeWidth="4" 
+                      strokeDasharray={`${missedPct} ${attemptedPct}`} 
+                      strokeDashoffset="25" />
+              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#10b981" strokeWidth="4" 
+                      strokeDasharray={`${attemptedPct} ${missedPct}`} 
+                      strokeDashoffset={`${25 - missedPct}`} />
+            </svg>
+            <div className="chart-center-text">
+              <strong>{attemptedPct}%</strong>
+              <span>Overall</span>
             </div>
-          </article>
-        ))}
+          </div>
+          <div className="chart-legend">
+            <div className="legend-item"><span className="dot green"></span> <strong>Attempted:</strong> {totalAttempted} ({attemptedPct}%)</div>
+            <div className="legend-item"><span className="dot red"></span> <strong>Missed:</strong> {totalMissed} ({missedPct}%)</div>
+            <div className="legend-total">Total Questions: {totalQuestions} across {polls.length} sessions</div>
+          </div>
+        </div>
+      )}
+
+      <h2>Session Breakdown</h2>
+      <div className="cards polls-cards-grid">
+        {sorted.map(poll => {
+          const pct = poll.totalQuestions ? Math.round((poll.attemptedQuestions / poll.totalQuestions) * 100) : 0;
+          return (
+            <article className="card poll-session-card" key={poll._id}>
+              <div className="poll-card-content">
+                <div className="poll-info">
+                  <strong>{poll.sessionLabel}</strong>
+                  <span>{poll.attemptedQuestions} / {poll.totalQuestions} questions</span>
+                </div>
+                <div className="mini-ring-wrapper">
+                  <svg viewBox="0 0 36 36" className="mini-ring-svg">
+                    <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#f1f5f9" strokeWidth="4" />
+                    <circle cx="18" cy="18" r="15.915" fill="transparent" stroke={pct >= 75 ? "#10b981" : pct >= 50 ? "#f59e0b" : "#ef4444"} strokeWidth="4" 
+                            strokeDasharray={`${pct} ${100 - pct}`} 
+                            strokeDashoffset="25" />
+                  </svg>
+                  <span className="mini-ring-text">{pct}%</span>
+                </div>
+              </div>
+            </article>
+          );
+        })}
       </div>
     </section>
   );
@@ -1359,5 +1446,95 @@ function BadgePopup({ badge, onClose }) {
         <button className="badge-popup-btn" onClick={onClose}>Awesome!</button>
       </div>
     </div>
+  );
+}
+
+function SpurtiTree({ sp }) {
+  const [watering, setWatering] = useState(false);
+  const [wiggle, setWiggle] = useState(false);
+
+  let stage = '🌱 Seedling';
+  let plantEmoji = '🌱';
+  let desc = 'Your Spurti Sprout has just broken through the soil. Keep attending sessions to water it!';
+  let nextMilestone = 150;
+  
+  if (sp >= 1000) {
+    stage = '🌲 Mighty Legend Tree';
+    plantEmoji = '🌲';
+    desc = 'Amazing! Your plant has grown into a giant, majestic Legend Tree. You are a Spurti Champion!';
+    nextMilestone = null;
+  } else if (sp >= 500) {
+    stage = '🌳 Blooming Tree';
+    plantEmoji = '🌳';
+    desc = 'Your plant is now a beautiful blooming tree. It is strong and thriving!';
+    nextMilestone = 1000;
+  } else if (sp >= 300) {
+    stage = '🪴 Thriving Shrub';
+    plantEmoji = '🪴';
+    desc = 'Your plant has grown leaves and is potted nicely. It is healthy and growing fast!';
+    nextMilestone = 500;
+  } else if (sp >= 150) {
+    stage = '🌿 Young Sapling';
+    plantEmoji = '🌿';
+    desc = 'Your sprout has grown into a young sapling with fresh green leaves!';
+    nextMilestone = 300;
+  }
+
+  const handleWater = () => {
+    if (watering) return;
+    setWatering(true);
+    setWiggle(true);
+    setTimeout(() => setWiggle(false), 1000);
+    setTimeout(() => setWatering(false), 2000);
+  };
+
+  const scale = Math.min(1.4, 0.65 + (sp / 1400));
+
+  return (
+    <section className="panel tree-panel">
+      <div className="tree-header">
+        <h2>Spurti Growth Tree</h2>
+        <span className="tree-stage-tag">{stage}</span>
+      </div>
+      <div className="tree-container">
+        <div className="sky-particles">
+          {sp >= 1000 && <span className="star-sparkle select-none">✨</span>}
+        </div>
+        
+        {watering && (
+          <div className="watering-can-animation">
+            <span className="watering-can">🚿</span>
+            <div className="water-drops">
+              <i className="drop drop-1" />
+              <i className="drop drop-2" />
+              <i className="drop drop-3" />
+            </div>
+          </div>
+        )}
+
+        <div className={`plant-display ${wiggle ? 'wiggle' : ''}`} style={{ transform: `scale(${scale})` }}>
+          <span className="plant-emoji select-none">{plantEmoji}</span>
+        </div>
+
+        <div className="pot-display">
+          <div className="soil-line" />
+          <div className="pot-body" />
+        </div>
+      </div>
+
+      <div className="tree-info">
+        <p className="tree-desc">{desc}</p>
+        <div className="tree-footer">
+          {nextMilestone ? (
+            <span className="next-grow">Next growth stage at <strong>{nextMilestone} SP</strong> (current: {sp} SP)</span>
+          ) : (
+            <span className="max-grow">Maximum growth achieved! 🎉</span>
+          )}
+          <button className="water-btn primary" onClick={handleWater} disabled={watering}>
+            {watering ? 'Watering...' : 'Water Plant 💧'}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
