@@ -69,7 +69,7 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} onUpdateProfile={setProfile} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -262,11 +262,47 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onBack, onUpdateProfile }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+
+  const [badgeQueue, setBadgeQueue] = useState([]);
+  const [currentBadge, setCurrentBadge] = useState(null);
+
+  useEffect(() => {
+    if (!student) return;
+    const queue = [];
+    const MILESTONES = [
+      { id: '100', name: 'Centurion', points: 100, icon: '🥉', color: 'bronze' },
+      { id: '200', name: 'Double Centurion', points: 200, icon: '🥈', color: 'silver' },
+      { id: '500', name: 'Half-Kilo', points: 500, icon: '🥇', color: 'gold' },
+      { id: '1000', name: 'Millennium', points: 1000, icon: '💎', color: 'platinum' }
+    ];
+    for (const milestone of MILESTONES) {
+      if (student.totalSp >= milestone.points) {
+        const seen = localStorage.getItem(`badge_seen_${milestone.id}_${student.email}`);
+        if (!seen) {
+          queue.push(milestone);
+        }
+      }
+    }
+    if (queue.length > 0) {
+      setBadgeQueue(queue);
+      setCurrentBadge(queue[0]);
+    }
+  }, [student]);
+
+  const handleCloseBadge = () => {
+    if (currentBadge && student) {
+      localStorage.setItem(`badge_seen_${currentBadge.id}_${student.email}`, 'true');
+      const remaining = badgeQueue.slice(1);
+      setBadgeQueue(remaining);
+      setCurrentBadge(remaining.length > 0 ? remaining[0] : null);
+    }
+  };
+
   return (
     <main className="page compact">
       <header className="topbar">
@@ -278,6 +314,7 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
+      <SpurtiTree student={student} onUpdateProfile={onUpdateProfile} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'],
         ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
@@ -287,6 +324,7 @@ function StudentView({ profile, onBack }) {
       {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} setTab={setTab} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {currentBadge && <BadgePopup badge={currentBadge} onClose={handleCloseBadge} />}
     </main>
   );
 }
@@ -328,22 +366,59 @@ function LevelStatus({ student }) {
 function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   const [type, setType] = useState('overall');
   const rows = type === 'overall' ? overall : group;
+  
+  const top3 = rows.slice(0, 3);
+  const remaining = rows.slice(3);
+
+  const podium = [];
+  if (top3[1]) podium.push({ ...top3[1], rankIndex: 2 });
+  if (top3[0]) podium.push({ ...top3[0], rankIndex: 1 });
+  if (top3[2]) podium.push({ ...top3[2], rankIndex: 3 });
+
   return (
-    <section className="panel">
+    <section className="panel leaderboard-panel">
       <div className="panel-head">
         <h2>Leaderboard</h2>
-        <select value={type} onChange={e => setType(e.target.value)}>
+        <select value={type} onChange={e => setType(e.target.value)} className="leaderboard-select">
           <option value="overall">Overall Leaderboard</option>
           <option value="my_onboarding_group">My Onboarding Group</option>
         </select>
       </div>
       {type === 'my_onboarding_group' && groupLabel &&
         <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
-      <table className="table">
+      
+      {podium.length > 0 && (
+        <div className="podium-section">
+          {podium.map(student => {
+            const classMap = { 1: 'gold', 2: 'silver', 3: 'bronze' };
+            const medalMap = { 1: '👑', 2: '🥈', 3: '🥉' };
+            const place = student.rankIndex;
+            return (
+              <div key={`${student.maskedEmail}-${place}`} className={`podium-card ${classMap[place]} ${student.isCurrentStudent ? 'current' : ''}`}>
+                <div className="podium-badge">{medalMap[place]}</div>
+                <strong className="podium-name">{student.name}</strong>
+                <span className="podium-email">{student.maskedEmail}</span>
+                <span className="podium-points">{student.totalSp} SP</span>
+                <div className={`podium-stand place-${place}`}>
+                  <span>#{place}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <table className="table leaderboard-table">
         <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
-        <tbody>{rows.map(row => (
+        <tbody>{remaining.map(row => (
           <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
-            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
+            <td>
+              <span className="rank-badge">{row.rank}</span>
+            </td>
+            <td className="font-semibold">{row.name}</td>
+            <td className="text-muted">{row.maskedEmail}</td>
+            <td>Lvl {row.level}</td>
+            <td className="points-col">{row.totalSp} SP</td>
           </tr>
         ))}</tbody>
       </table>
@@ -401,11 +476,21 @@ function Sparkline({ points }) {
   const values = points.map(p => p.value);
   const min = Math.min(...values, 0);
   const max = Math.max(...values, 1);
+  
+  // Dynamically compute gap to fit any number of data points without overflow
+  const gapVal = points.length > 120 ? '0px' : points.length > 60 ? '1px' : points.length > 30 ? '2px' : '4px';
+
   return (
-    <div className="sparkline">
+    <div className="sparkline" style={{ gap: gapVal }}>
       {points.map((point, index) => {
         const pct = max === min ? 50 : ((point.value - min) / (max - min)) * 100;
-        return <i key={`${point.label}-${index}`} title={`${point.label}: ${point.value} SP`} style={{ height: `${Math.max(6, pct)}%` }} />;
+        return (
+          <i 
+            key={`${point.label}-${index}`} 
+            title={`${point.label}: ${point.value} SP`} 
+            style={{ height: `${Math.max(6, pct)}%` }} 
+          />
+        );
       })}
     </div>
   );
@@ -416,11 +501,19 @@ function buildBadges(profile) {
   const qualifiedPct = profile.attendance.length ? profile.attendance.filter(a => a.qualified).length / profile.attendance.length : 0;
   const pollAttempted = profile.polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
   const pollTotal = profile.polls.reduce((sum, p) => sum + p.totalQuestions, 0);
-  if (profile.student.rank <= 50) badges.push('Top 50');
-  if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
-  if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
-  if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
-  return badges.length ? badges : ['Getting Started'];
+  
+  // SP Milestone Badges
+  const sp = profile.student.totalSp;
+  if (sp >= 1000) badges.push('💎 Millennium (1000+ SP)');
+  else if (sp >= 500) badges.push('🥇 Half-Kilo (500+ SP)');
+  else if (sp >= 200) badges.push('🥈 Double Centurion (200+ SP)');
+  else if (sp >= 100) badges.push('🥉 Centurion (100+ SP)');
+
+  if (profile.student.rank <= 50) badges.push('👑 Top 50');
+  if (qualifiedPct >= 0.75) badges.push('🔥 Consistent Attendee');
+  if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('⚡ Poll Champion');
+  if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('📈 Above Average');
+  return badges.length ? badges : ['🌱 Getting Started'];
 }
 
 function buildNextActions(profile) {
@@ -480,18 +573,67 @@ function pollSortKey(label = '') {
 function Polls({ polls }) {
   if (!polls.length) return <section className="panel empty">No poll records found.</section>;
   const sorted = [...polls].sort((a, b) => pollSortKey(b.sessionLabel) - pollSortKey(a.sessionLabel));
+  
+  const totalAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
+  const totalQuestions = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
+  const totalMissed = totalQuestions - totalAttempted;
+  const attemptedPct = totalQuestions ? Math.round((totalAttempted / totalQuestions) * 100) : 0;
+  const missedPct = 100 - attemptedPct;
+
   return (
-    <section className="panel">
-      <h2>Polls</h2>
-      <div className="cards">
-        {sorted.map(poll => (
-          <article className="card" key={poll._id}>
-            <div className="card-head static">
-              <strong>{poll.sessionLabel}</strong>
-              <span>{poll.attemptedQuestions}/{poll.totalQuestions} attempted</span>
+    <section className="panel polls-panel">
+      <h2>Poll Participation</h2>
+      
+      {totalQuestions > 0 && (
+        <div className="polls-overall-container">
+          <div className="polls-chart-wrapper">
+            <svg viewBox="0 0 36 36" className="pie-svg">
+              <circle cx="18" cy="18" r="15.915" fill="#fff" />
+              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#fec2d1" strokeWidth="4" />
+              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#ef4444" strokeWidth="4" 
+                      strokeDasharray={`${missedPct} ${attemptedPct}`} 
+                      strokeDashoffset="25" />
+              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#10b981" strokeWidth="4" 
+                      strokeDasharray={`${attemptedPct} ${missedPct}`} 
+                      strokeDashoffset={`${25 - missedPct}`} />
+            </svg>
+            <div className="chart-center-text">
+              <strong>{attemptedPct}%</strong>
+              <span>Overall</span>
             </div>
-          </article>
-        ))}
+          </div>
+          <div className="chart-legend">
+            <div className="legend-item"><span className="dot green"></span> <strong>Attempted:</strong> {totalAttempted} ({attemptedPct}%)</div>
+            <div className="legend-item"><span className="dot red"></span> <strong>Missed:</strong> {totalMissed} ({missedPct}%)</div>
+            <div className="legend-total">Total Questions: {totalQuestions} across {polls.length} sessions</div>
+          </div>
+        </div>
+      )}
+
+      <h2>Session Breakdown</h2>
+      <div className="cards polls-cards-grid">
+        {sorted.map(poll => {
+          const pct = poll.totalQuestions ? Math.round((poll.attemptedQuestions / poll.totalQuestions) * 100) : 0;
+          return (
+            <article className="card poll-session-card" key={poll._id}>
+              <div className="poll-card-content">
+                <div className="poll-info">
+                  <strong>{poll.sessionLabel}</strong>
+                  <span>{poll.attemptedQuestions} / {poll.totalQuestions} questions</span>
+                </div>
+                <div className="mini-ring-wrapper">
+                  <svg viewBox="0 0 36 36" className="mini-ring-svg">
+                    <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#f1f5f9" strokeWidth="4" />
+                    <circle cx="18" cy="18" r="15.915" fill="transparent" stroke={pct >= 75 ? "#10b981" : pct >= 50 ? "#f59e0b" : "#ef4444"} strokeWidth="4" 
+                            strokeDasharray={`${pct} ${100 - pct}`} 
+                            strokeDashoffset="25" />
+                  </svg>
+                  <span className="mini-ring-text">{pct}%</span>
+                </div>
+              </div>
+            </article>
+          );
+        })}
       </div>
     </section>
   );
@@ -1283,3 +1425,504 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
 
 
 createRoot(document.getElementById('root')).render(<App />);
+
+function BadgePopup({ badge, onClose }) {
+  return (
+    <div className="badge-popup-overlay">
+      <div className="badge-popup-card">
+        <div className="badge-popup-confetti">
+          {Array.from({ length: 35 }).map((_, i) => {
+            const colors = ['#6366f1', '#a855f7', '#ec4899', '#3b82f6', '#10b981', '#f59e0b'];
+            const style = {
+              left: `${Math.random() * 100}%`,
+              top: `${-10 - Math.random() * 20}px`,
+              backgroundColor: colors[i % colors.length],
+              transform: `rotate(${Math.random() * 360}deg)`,
+              animationDelay: `${Math.random() * 1.5}s`,
+              animationDuration: `${1.5 + Math.random() * 2.5}s`
+            };
+            return <div key={i} className="confetti-piece" style={style} />;
+          })}
+        </div>
+        <div className={`badge-popup-glow ${badge.color}`} />
+        <div className="badge-popup-icon-container">
+          <span className="badge-popup-icon">{badge.icon}</span>
+        </div>
+        <p className="badge-popup-eyebrow">Milestone Unlocked! 🎉</p>
+        <h2 className="badge-popup-title">{badge.name} Badge</h2>
+        <p className="badge-popup-description">
+          Sensational effort! You have earned this badge for achieving <strong>{badge.points} Spurti Points</strong>. Your consistency and dedication are paying off!
+        </p>
+        <button className="badge-popup-btn" onClick={onClose}>Awesome!</button>
+      </div>
+    </div>
+  );
+}
+
+function playChime() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    
+    // Play a beautiful, soft ascending C-major triad chime
+    const playNote = (freq, delay, duration, vol) => {
+      setTimeout(() => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        gain.gain.setValueAtTime(vol, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + duration);
+      }, delay);
+    };
+
+    playNote(523.25, 0, 0.8, 0.12);   // C5
+    playNote(659.25, 100, 0.8, 0.12); // E5
+    playNote(783.99, 200, 1.0, 0.15); // G5
+  } catch (e) {
+    console.log("Audio play blocked/failed:", e);
+  }
+}
+
+const BRANCH_DEFS = [
+  // Trunk (unlocks at 0 water)
+  { id: 1, x1: 180, y1: 300, x2: 180, y2: 210, thickness: 16, unlock: 0 },
+  // Level 1 Branches
+  { id: 2, x1: 180, y1: 250, x2: 135, y2: 200, thickness: 11, unlock: 10 },
+  { id: 3, x1: 180, y1: 230, x2: 225, y2: 180, thickness: 10, unlock: 20 },
+  { id: 4, x1: 180, y1: 210, x2: 175, y2: 150, thickness: 9, unlock: 30 },
+  // Level 2 Sub-branches
+  { id: 5, x1: 135, y1: 200, x2: 95, y2: 170, thickness: 8, unlock: 40 },
+  { id: 6, x1: 135, y1: 200, x2: 150, y2: 155, thickness: 7, unlock: 45 },
+  { id: 7, x1: 225, y1: 180, x2: 265, y2: 140, thickness: 8, unlock: 50 },
+  { id: 8, x1: 225, y1: 180, x2: 200, y2: 145, thickness: 7, unlock: 55 },
+  // Level 3 Sub-branches
+  { id: 9, x1: 175, y1: 150, x2: 145, y2: 110, thickness: 6, unlock: 60 },
+  { id: 10, x1: 175, y1: 150, x2: 205, y2: 110, thickness: 6, unlock: 65 },
+  // Canopy twigs
+  { id: 11, x1: 95, y1: 170, x2: 65, y2: 150, thickness: 5, unlock: 70 },
+  { id: 12, x1: 95, y1: 170, x2: 105, y2: 130, thickness: 4, unlock: 73 },
+  { id: 13, x1: 265, y1: 140, x2: 295, y2: 120, thickness: 5, unlock: 76 },
+  { id: 14, x1: 265, y1: 140, x2: 250, y2: 105, thickness: 4, unlock: 80 },
+  { id: 15, x1: 145, y1: 110, x2: 120, y2: 80, thickness: 3, unlock: 83 },
+  { id: 16, x1: 205, y1: 110, x2: 230, y2: 80, thickness: 3, unlock: 86 },
+  { id: 17, x1: 145, y1: 110, x2: 155, y2: 75, thickness: 3, unlock: 89 },
+  { id: 18, x1: 205, y1: 110, x2: 195, y2: 75, thickness: 3, unlock: 92 }
+];
+
+function SpurtiTree({ student, onUpdateProfile }) {
+  const [watering, setWatering] = useState(false);
+  const [wiggle, setWiggle] = useState(false);
+  const [floatBubbles, setFloatBubbles] = useState([]);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const sp = student.totalSp || 0;
+  const waterCount = student.waterCount || 0;
+  const growthPct = waterCount;
+
+  // Decoupled Eligibility Calculations
+  const unlocked = Math.min(100, Math.floor(sp / 10));
+  const remaining = Math.max(0, unlocked - waterCount);
+
+  // Determine current stage & description
+  const stageIndex = Math.floor(waterCount / 10);
+  const STAGES = [
+    { name: 'Seed', icon: '🌱', range: '0' },
+    { name: 'Sprout', icon: '🌿', range: '1-10' },
+    { name: 'Seedling', icon: '🪴', range: '11-20' },
+    { name: 'Small Plant', icon: '🍃', range: '21-30' },
+    { name: 'Young Plant', icon: '🌿', range: '31-40' },
+    { name: 'Sapling', icon: '🪵', range: '41-50' },
+    { name: 'Young Tree', icon: '🌳', range: '51-60' },
+    { name: 'Healthy Tree', icon: '🌲', range: '61-70' },
+    { name: 'Beautiful Tree', icon: '🌸', range: '71-80' },
+    { name: 'Majestic Tree', icon: '✨', range: '81-90' },
+    { name: 'Legendary Tree', icon: '👑', range: '91-100' }
+  ];
+  const currentStage = STAGES[Math.min(10, stageIndex)];
+
+  const STAGE_DESCRIPTIONS = [
+    'A tiny seed lies dormant in dry soil, holding inside it the heart of a majestic tree.',
+    'The seed germinates! A delicate root takes hold and the first green shoots emerge.',
+    'A thriving seedling rises. Leaves stretch outward to gather the morning wind.',
+    'A sturdy plant with multiple healthy leaves. Butterflies have begun visiting!',
+    'A rich, young green plant. The leaves react dynamically when watered.',
+    'A woody stem forms! The sapling blooms with occasional wild flowers.',
+    'A thick woody trunk starts supporting a beautiful canopy in the sunlight.',
+    'Foliage thickens, creating a cozy shelter for chirping birds.',
+    'A gorgeous, lush tree full of colorful blossoms. Nature is thriving here.',
+    'Canopy expands massively, sparkling with magical light after each watering.',
+    'A legendary tree of unmatched stature. Fireflies dance under golden rays!'
+  ];
+  const stageDesc = STAGE_DESCRIPTIONS[Math.min(10, stageIndex)];
+
+  const handleWater = async () => {
+    if (watering) return;
+    if (remaining <= 0) {
+      setErrorMsg('No waterings available! Complete study sessions to earn more SP.');
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+    if (waterCount >= 100) {
+      setErrorMsg('Your tree is already fully grown! 🌲');
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+
+    // Play synthesized sound
+    playChime();
+
+    // Trigger local animations
+    setWatering(true);
+    setWiggle(true);
+    setErrorMsg('');
+
+    // Spawn floating numbers (no SP decrease, show tree growth instead!)
+    const bid1 = Date.now();
+    const bid2 = Date.now() + 1;
+    setFloatBubbles([
+      { id: bid1, text: '+1 Water Drop 💧', x: '42%', y: '45%' },
+      { id: bid2, text: 'Tree Grew 🌱', x: '58%', y: '50%' }
+    ]);
+
+    setTimeout(() => {
+      setFloatBubbles([]);
+    }, 1800);
+
+    // Call database endpoint after can tilts
+    setTimeout(async () => {
+      try {
+        const r = await fetch(`${API}/student/water`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: student.email })
+        });
+        const data = await r.json();
+        if (r.ok && data.success) {
+          onUpdateProfile(data.profile);
+        } else {
+          setErrorMsg(data.error || 'Failed to water.');
+        }
+      } catch {
+        setErrorMsg('Network error.');
+      }
+    }, 900);
+
+    setTimeout(() => {
+      setWiggle(false);
+      setWatering(false);
+    }, 2000);
+  };
+
+  // --- Procedural Branching Calculations ---
+  const renderedBranches = BRANCH_DEFS.map(b => {
+    if (waterCount <= b.unlock) return null;
+    // grows to full length over 10 waterings
+    const progress = Math.min(1.0, (waterCount - b.unlock) / 10);
+    const cx2 = b.x1 + (b.x2 - b.x1) * progress;
+    const cy2 = b.y1 + (b.y2 - b.y1) * progress;
+    // thickness grows as tree grows
+    const cthickness = b.thickness * (0.4 + 0.6 * (waterCount / 100));
+    return { ...b, cx2, cy2, cthickness };
+  }).filter(Boolean);
+
+  // --- Procedural Leaves Calculations ---
+  const leaves = [];
+  renderedBranches.forEach(b => {
+    // End leaf: starts growing once branch reaches 80% completion
+    const leafUnlock = b.unlock + 8;
+    if (waterCount >= leafUnlock) {
+      const progress = Math.min(1.0, (waterCount - leafUnlock) / 5);
+      const scale = progress * 7;
+      const angle = b.x2 < b.x1 ? -40 : b.x2 > b.x1 ? 40 : 0;
+      leaves.push({
+        id: `leaf-end-${b.id}`,
+        x: b.cx2,
+        y: b.cy2,
+        scale,
+        angle
+      });
+    }
+
+    // Mid-length leaf: starts growing once branch reaches 40% completion
+    const midLeafUnlock = b.unlock + 4;
+    if (waterCount >= midLeafUnlock && b.id > 1) {
+      const progress = Math.min(1.0, (waterCount - midLeafUnlock) / 5);
+      const scale = progress * 5;
+      const mx = b.x1 + (b.cx2 - b.x1) * 0.65;
+      const my = b.y1 + (b.cy2 - b.y1) * 0.65;
+      const angle = b.x2 < b.x1 ? -20 : 20;
+      leaves.push({
+        id: `leaf-mid-${b.id}`,
+        x: mx,
+        y: my,
+        scale,
+        angle
+      });
+    }
+  });
+
+  // --- Ground Flower calculations ---
+  const flowers = [];
+  const flowerPositions = [
+    { x: 120, y: 298, unlock: 35, color: '#f43f5e' }, // rose pink
+    { x: 245, y: 299, unlock: 45, color: '#eab308' }, // yellow
+    { x: 145, y: 301, unlock: 60, color: '#ec4899' }, // deep pink
+    { x: 215, y: 297, unlock: 75, color: '#3b82f6' }  // sky blue
+  ];
+  flowerPositions.forEach((fp, idx) => {
+    if (waterCount >= fp.unlock) {
+      const progress = Math.min(1.0, (waterCount - fp.unlock) / 5);
+      flowers.push({ ...fp, id: `flower-${idx}`, scale: progress * 0.7 });
+    }
+  });
+
+  return (
+    <section className="panel tree-panel">
+      <div className="tree-header">
+        <div>
+          <h2>Spurti Ecosystem</h2>
+          <p className="muted">Earn SP in class and water your tree to nurture it to Legendary level!</p>
+        </div>
+        <span className="tree-stage-tag">{currentStage.name} {currentStage.icon}</span>
+      </div>
+
+      <div className="tree-frame-wrapper">
+        {/* Progress Ring wrapping the plant card */}
+        <div className="progress-ring-container">
+          <svg viewBox="0 0 360 360" className="progress-svg-bg">
+            {/* Soft backdrop progress line */}
+            <circle cx="180" cy="180" r="170" fill="transparent" stroke="rgba(99, 102, 241, 0.05)" strokeWidth="4" />
+            {/* Active glow progress ring */}
+            <circle cx="180" cy="180" r="170" fill="transparent" stroke="url(#progress-rainbow-grad)" strokeWidth="4" 
+                    strokeDasharray="1068.14" 
+                    strokeDashoffset={1068.14 - (1068.14 * growthPct) / 100} 
+                    strokeLinecap="round" 
+                    transform="rotate(-90 180 180)" />
+            <defs>
+              <linearGradient id="progress-rainbow-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#6366f1" />
+                <stop offset="50%" stopColor="#a855f7" />
+                <stop offset="100%" stopColor="#ec4899" />
+              </linearGradient>
+              <linearGradient id="sunbeam-grad" x1="1" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.18" />
+                <stop offset="100%" stopColor="#f59e0b" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+
+        {/* Tree Render Canvas */}
+        <div className="tree-canvas-container">
+          {floatBubbles.map(fb => (
+            <span key={fb.id} className="floating-bubble" style={{ left: fb.x, top: fb.y }}>
+              {fb.text}
+            </span>
+          ))}
+
+          <svg viewBox="0 0 360 360" className="tree-svg-canvas">
+            {/* Background Sky Light */}
+            <radialGradient id="sky-glow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor={waterCount >= 91 ? "#fef3c7" : "#eff6ff"} stopOpacity="0.4" />
+              <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+            </radialGradient>
+            <rect width="360" height="360" fill="url(#sky-glow)" rx="16" />
+
+            {/* Sunlight rays (unlocks Stage 6, 60+ water) */}
+            {waterCount >= 60 && (
+              <g className="sunbeams" opacity="0.8">
+                <polygon points="360,0 220,360 270,360" fill="url(#sunbeam-grad)" />
+                <polygon points="360,0 120,360 170,360" fill="url(#sunbeam-grad)" />
+                <polygon points="360,0 0,220 0,280" fill="url(#sunbeam-grad)" />
+              </g>
+            )}
+
+            {/* Clouds (unlocks Stage 5, 50+ water) */}
+            {waterCount >= 50 && (
+              <g className="clouds-bg">
+                <path d="M 30 50 Q 40 35 55 42 Q 70 35 80 50 L 25 50 Z" fill="rgba(255, 255, 255, 0.75)" />
+                <path d="M 280 70 Q 290 55 305 62 Q 320 55 330 70 L 275 70 Z" fill="rgba(255, 255, 255, 0.75)" />
+              </g>
+            )}
+
+            {/* Soil / Ground */}
+            <ellipse cx="180" cy="300" rx="100" ry="12" fill={watering ? "#5c2505" : "#78350f"} />
+            
+            {/* Soil Cracks (Stage 0 only) */}
+            {waterCount === 0 && (
+              <path d="M 120 300 Q 130 297 150 299 M 165 302 Q 175 300 195 299 M 205 297 Q 220 299 235 298" 
+                    stroke="#451a03" strokeWidth="1.5" fill="transparent" />
+            )}
+
+            {/* Grass (unlocks Stage 1+, 5+ water) */}
+            {waterCount >= 5 && (
+              <g stroke="#10b981" strokeWidth="2.5" fill="transparent" strokeLinecap="round">
+                {/* Grass Left */}
+                <path d="M 95 300 Q 92 292 90 288" />
+                <path d="M 98 300 Q 98 290 100 286" />
+                {/* Grass Center */}
+                <path d="M 172 301 Q 170 292 168 288" />
+                <path d="M 176 301 Q 177 291 180 287" />
+                {/* Grass Right */}
+                <path d="M 255 299 Q 256 291 259 287" />
+              </g>
+            )}
+
+            {/* Ground Flowers */}
+            {flowers.map(flower => (
+              <g key={flower.id} transform={`translate(${flower.x}, ${flower.y}) scale(${flower.scale})`}>
+                <circle cx="0" cy="0" r="4.5" fill="#f59e0b" />
+                <circle cx="-5" cy="0" r="3.5" fill={flower.color} />
+                <circle cx="5" cy="0" r="3.5" fill={flower.color} />
+                <circle cx="0" cy="-5" r="3.5" fill={flower.color} />
+                <circle cx="0" cy="5" r="3.5" fill={flower.color} />
+              </g>
+            ))}
+
+            {/* Butterflies (unlocks Stage 3+, 30+ water) */}
+            {waterCount >= 30 && (
+              <g className="butterfly-1">
+                <path d="M 0 0 C -4 -5 -9 -3 -7 1 C -5 5 0 2 0 0" fill="#a855f7" />
+                <path d="M 0 0 C 4 -5 9 -3 7 1 C 5 5 0 2 0 0" fill="#ec4899" />
+                <circle cx="0" cy="2" r="1.5" fill="#1e1b4b" />
+              </g>
+            )}
+            {waterCount >= 45 && (
+              <g className="butterfly-2">
+                <path d="M 0 0 C -4 -5 -9 -3 -7 1 C -5 5 0 2 0 0" fill="#06b6d4" />
+                <path d="M 0 0 C 4 -5 9 -3 7 1 C 5 5 0 2 0 0" fill="#3b82f6" />
+                <circle cx="0" cy="2" r="1.5" fill="#1e1b4b" />
+              </g>
+            )}
+
+            {/* Sitting Bird (unlocks Stage 5+, 50+ water) */}
+            {waterCount >= 50 && (
+              <g transform="translate(133, 192) scale(0.65)" className="sitting-bird">
+                <ellipse cx="0" cy="0" rx="9" ry="7" fill="#3b82f6" />
+                <circle cx="7" cy="-5" r="5" fill="#3b82f6" />
+                <path d="M 11 -5 L 15 -4 L 11 -3 Z" fill="#fbbf24" />
+                <path d="M -7 0 L -13 -4 L -11 3 Z" fill="#1d4ed8" />
+                <circle cx="6" cy="-6" r="1" fill="#fff" />
+              </g>
+            )}
+
+            {/* Fireflies (unlocks Stage 10, 91+ water) */}
+            {waterCount >= 91 && (
+              <g className="fireflies">
+                <circle cx="90" cy="110" r="2.5" fill="#fef08a" className="ff-1" />
+                <circle cx="150" cy="70" r="2" fill="#fef08a" className="ff-2" />
+                <circle cx="230" cy="130" r="2.2" fill="#fef08a" className="ff-3" />
+                <circle cx="270" cy="90" r="1.8" fill="#fef08a" className="ff-4" />
+                <circle cx="120" cy="160" r="2.4" fill="#fef08a" className="ff-5" />
+              </g>
+            )}
+
+            {/* SVGs Tree Group */}
+            <g className={`tree-branches ${wiggle ? 'wiggle' : ''}`} style={{ transformOrigin: '180px 300px' }}>
+              {/* Golden Ambient Halo (Stage 10) */}
+              {waterCount >= 91 && (
+                <ellipse cx="180" cy="150" rx="80" ry="85" fill="transparent" stroke="#f59e0b" strokeWidth="8" opacity="0.12" strokeDasharray="10 6" className="halo-glow" style={{ transformOrigin: '180px 150px' }} />
+              )}
+
+              {/* Render branches */}
+              {renderedBranches.map(b => (
+                <line key={b.id} 
+                      x1={b.x1} y1={b.y1} 
+                      x2={b.cx2} y2={b.cy2} 
+                      stroke="#451a03" 
+                      strokeWidth={b.cthickness} 
+                      strokeLinecap="round" />
+              ))}
+
+              {/* Render leaves */}
+              {leaves.map(leaf => (
+                <path key={leaf.id} 
+                      d="M 0 0 C -5 -9 -11 -10 -11 -4 C -11 2 -5 5 0 0 Z" 
+                      fill={waterCount >= 81 ? "#10b981" : "#059669"}
+                      stroke="#047857"
+                      strokeWidth="0.5"
+                      transform={`translate(${leaf.x}, ${leaf.y}) rotate(${leaf.angle}) scale(${leaf.scale / 7})`}
+                      className="tree-leaf-item"
+                      filter={waterCount >= 81 ? "drop-shadow(0 0 2px rgba(16,185,129,0.3))" : ""} />
+              ))}
+
+              {/* Stage 0 Heartbeat Seedling inside soil */}
+              {waterCount === 0 && (
+                <g className="heartbeat-seed">
+                  <circle cx="180" cy="295" r="4.5" fill="#f59e0b" />
+                  <path d="M 180 292 Q 182 288 185 287" stroke="#10b981" strokeWidth="1.5" fill="transparent" />
+                </g>
+              )}
+            </g>
+
+            {/* Watering can animation overlay */}
+            {watering && (
+              <g className="can-group">
+                <text x="240" y="80" fontSize="42" className="can-emoji">🚿</text>
+                <g className="drip-group">
+                  <line x1="220" y1="90" x2="200" y2="140" stroke="#3b82f6" strokeWidth="3" strokeDasharray="5 5" className="drip-line-1" />
+                  <line x1="230" y1="95" x2="210" y2="145" stroke="#60a5fa" strokeWidth="3" strokeDasharray="5 5" className="drip-line-2" />
+                  <line x1="240" y1="90" x2="220" y2="140" stroke="#3b82f6" strokeWidth="3" strokeDasharray="5 5" className="drip-line-3" />
+                </g>
+              </g>
+            )}
+          </svg>
+        </div>
+      </div>
+
+      <div className="tree-stats-dashboard">
+        <div className="tree-stat-tile">
+          <span>Lifetime SP</span>
+          <strong>⚡ {sp}</strong>
+        </div>
+        <div className="tree-stat-tile">
+          <span>Water Used</span>
+          <strong>💧 {waterCount} / 100</strong>
+        </div>
+        <div className="tree-stat-tile">
+          <span>Available Waterings</span>
+          <strong>💧 {remaining}</strong>
+        </div>
+        <div className="tree-stat-tile">
+          <span>Next Unlock</span>
+          <strong>⚡ {unlocked >= 100 ? 'Max Unlocked' : `${10 - (sp % 10)} SP`}</strong>
+        </div>
+      </div>
+
+      <div className="tree-info">
+        <p className="tree-desc">{stageDesc}</p>
+        
+        {/* Stepper Timeline */}
+        <div className="tree-stepper-track">
+          <div className="stepper-line-fill" style={{ width: `${(Math.min(10, stageIndex) / 10) * 100}%` }} />
+          {STAGES.map((s, idx) => {
+            const active = idx <= stageIndex;
+            const current = idx === stageIndex;
+            return (
+              <div key={s.name} className={`stepper-node ${active ? 'active' : ''} ${current ? 'current' : ''}`} title={`Stage ${idx}: ${s.name} (${s.range} Water)`}>
+                <span className="step-icon">{s.icon}</span>
+                <span className="step-label">{s.name}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="tree-footer" style={{ marginTop: '24px' }}>
+          <span className="next-grow" style={{ fontWeight: '500' }}>
+            Available Waterings: <strong>{remaining} Left</strong>
+          </span>
+          <button className="water-btn primary" onClick={handleWater} disabled={watering || remaining <= 0 || waterCount >= 100}>
+            {watering ? 'Watering...' : 'Water Tree 💧'}
+          </button>
+        </div>
+        {errorMsg && <p className="error" style={{ textAlign: 'center', marginTop: '12px' }}>{errorMsg}</p>}
+      </div>
+    </section>
+  );
+}

@@ -230,6 +230,7 @@ async function studentPayload(student) {
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
       poll2Completed: Boolean(student.poll2Completed),
+      waterCount: Number(student.waterCount || 0),
       eligibleForVibeGoals: isVibeEligible(student)
     },
     transactions,
@@ -265,6 +266,30 @@ api.get('/config', (_req, res) => res.json({
   survey: surveyPublic(SURVEY),
   poll2: surveyPublic(POLL2)
 }));
+
+api.post('/student/water', async (req, res) => {
+  const email = await studentEmailFromRequest(req) || normalizeEmail(req.body?.email);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+
+  const waterCount = student.waterCount || 0;
+  const unlocked = Math.min(100, Math.floor(student.totalSp / 10));
+
+  if (waterCount >= unlocked) {
+    return res.status(400).json({ error: 'No waterings available! Earn more SP first.' });
+  }
+  if (waterCount >= 100) {
+    return res.status(400).json({ error: 'Tree is already fully grown! Max waterings reached.' });
+  }
+
+  // ONLY increment waterCount! Do NOT modify student.totalSp!
+  student.waterCount = waterCount + 1;
+  await student.save();
+
+  res.json({ success: true, profile: await studentPayload(student) });
+});
 
 api.get('/me', async (req, res) => {
   const email = await studentEmailFromRequest(req);
