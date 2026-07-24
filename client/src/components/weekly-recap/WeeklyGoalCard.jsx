@@ -221,7 +221,7 @@ function WeeklyGoalCard({ data }) {
       <div className="wgc-card__head">
         <div className="wgc-card__eyebrow">{title} · THIS WEEK</div>
         <h3 className="wgc-card__headline">{headline}</h3>
-        <p className="wgc-card__sub">{sub}</p>
+        <p className="wgc-card__sub">{subhead}</p>
       </div>
 
       <div className="wgc-card__targets">
