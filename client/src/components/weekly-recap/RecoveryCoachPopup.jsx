@@ -191,13 +191,24 @@ export function RecoveryCoachPopup({ open, onClose, me, recapId, email, focusDay
 }
 
 export function wasRecoveryCoachDismissed(recapId) {
+  if (popupsAlwaysMode()) return false;
   if (!recapId) return true;
   try { return !!localStorage.getItem(`rcp_dismissed_${recapId}`); }
   catch { return false; }
 }
 
 export function markRecoveryCoachDismissed(recapId) {
+  if (popupsAlwaysMode()) return;
   if (!recapId) return;
   try { localStorage.setItem(`rcp_dismissed_${recapId}`, '1'); }
   catch {}
+}
+
+export function popupsAlwaysMode() {
+  if (typeof window === 'undefined') return false;
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    const v = (sp.get('popups') || '').toLowerCase();
+    return v === 'always' || v === '1' || v === 'true';
+  } catch { return false; }
 }
