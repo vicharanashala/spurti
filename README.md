@@ -148,4 +148,17 @@ This direction can be evaluated through:
 ## Positioning
 
 This is a general educational motivation engine. It is not only for internships, and it is not only a points table. It is a self-regulated learning support system and research direction that helps students see their progress, stay encouraged, recover from setbacks, and complete any meaningful learning journey.
-Displaying PRODUCT.md.
+
+---
+
+## Premium Weekly Recap Experience — `feat/share-export` branch
+
+When a student opens Spurti after Monday 06:00 IST for the first time that week, a 3-stage premium cascade fires automatically before the dashboard becomes interactive:
+
+1. **WeeklyChampionsPopup** — top-10 leaderboard of last week's winners with celebration effects
+2. **WeeklyLearningInsightsPopup** — Top-10 on the front, then **auto-flips after 10 seconds** to personalized AI performance insights on the back
+3. **RecoveryCoachPopup** — only for bottom-50 students: calm, never-shaming AI recovery plan with Mon–Sat tasks and estimated outcomes
+
+A 16-rank progression system (**Bronze III → Master**) replaces the old Bronze→Legend hierarchy, and a 4×6 SP Trend heatmap visualizes the student's category-day activity with clickable weakest cells that open the Recovery Coach pre-focused on that day.
+
+Full feature documentation: see [`FEATURES.md`](./FEATURES.md) (Part 2, features 18–22).

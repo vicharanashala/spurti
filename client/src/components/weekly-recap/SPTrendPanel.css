@@ -1,0 +1,283 @@
+/* ============================================================
+   SPTrendPanel — premium glass card matching the rest of the
+   dashboard's design language (blue → violet → indigo gradient).
+   ============================================================ */
+
+.spt {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--text);
+  --spt-grid: rgba(99, 102, 241, 0.12);
+  --spt-axis: rgba(71, 85, 105, 0.7);
+}
+
+/* Top summary line — always rendered (your locked decision). */
+.spt-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.10), rgba(139, 92, 246, 0.06));
+  border: 1px solid rgba(99, 102, 241, 0.18);
+}
+.spt-summary__icon {
+  width: 18px; height: 18px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  font-size: 10px; font-weight: 800;
+  flex-shrink: 0;
+}
+.spt-summary__text {
+  font-size: 12px; font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+/* Trend line area */
+.spt-trend {
+  position: relative;
+  padding: 4px 6px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.spt-trend__svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.spt-trend__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 4px 2px;
+}
+.spt-trend__last {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.spt-trend__last-sp {
+  font-size: 18px; font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  line-height: 1;
+}
+.spt-trend__last-label {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.10em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.spt-chip {
+  font-size: 11px; font-weight: 800;
+  letter-spacing: 0.02em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+.spt-chip--up {
+  background: rgba(16, 185, 129, 0.16);
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.30);
+}
+.spt-chip--down {
+  background: rgba(244, 63, 94, 0.14);
+  color: #9f1239;
+  border: 1px solid rgba(244, 63, 94, 0.30);
+}
+.spt-chip--flat {
+  background: rgba(100, 116, 139, 0.16);
+  color: #475569;
+  border: 1px solid rgba(100, 116, 139, 0.30);
+}
+
+/* Confetti — same animation as the Insights popup */
+.spt-confetti {
+  position: absolute; inset: 0; pointer-events: none; z-index: 2;
+  overflow: hidden;
+  border-radius: 12px;
+}
+.spt-confetti__bit {
+  position: absolute;
+  top: 0;
+  border-radius: 2px;
+  opacity: 0.92;
+  animation: spt-fall 2.4s linear infinite;
+}
+@keyframes spt-fall {
+  0%   { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+  10%  { opacity: 0.95; }
+  100% { transform: translate(var(--spt-drift, 0), 100%) rotate(720deg); opacity: 0; }
+}
+
+/* Phase heatmap */
+.spt-heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.spt-heatmap__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.spt-heatmap__eyebrow {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.spt-heatmap__best {
+  font-size: 10px; font-weight: 700;
+  color: #047857;
+  background: rgba(16, 185, 129, 0.10);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.spt-heatmap__grid {
+  display: grid;
+  gap: 3px;
+}
+.spt-heatmap__row {
+  display: grid;
+  grid-template-columns: 80px repeat(6, 1fr);
+  gap: 3px;
+  align-items: stretch;
+}
+.spt-heatmap__row--header { margin-bottom: 1px; }
+.spt-heatmap__cell {
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  min-height: 28px;
+}
+.spt-heatmap__cell--corner { background: transparent; }
+.spt-heatmap__cell--label {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-muted);
+  background: transparent;
+  justify-content: flex-start;
+  padding-left: 4px;
+}
+.spt-heatmap__cell--label.is-today {
+  color: var(--accent);
+  font-weight: 900;
+}
+.spt-heatmap__cell--label.is-best {
+  color: #047857;
+  font-weight: 900;
+}
+.spt-heatmap__cell--data {
+  appearance: none;
+  border: 1px solid rgba(99, 102, 241, 0.10);
+  background: rgba(255, 255, 255, 0.65);
+  cursor: default;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  position: relative;
+  transition: transform 0.1s, box-shadow 0.15s, border-color 0.15s;
+  --spt-cell-color: var(--accent, #6366f1);
+}
+.spt-heatmap__cell--data.is-today {
+  border-color: rgba(56, 189, 248, 0.45);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.20) inset;
+}
+.spt-heatmap__cell--data.is-best {
+  border-color: rgba(16, 185, 129, 0.55);
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.30) inset, 0 0 8px rgba(16, 185, 129, 0.20);
+}
+.spt-heatmap__cell--data.is-weak:not(:disabled) {
+  border-color: rgba(99, 102, 241, 0.35);
+  cursor: pointer;
+}
+.spt-heatmap__cell--data.is-weak:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 1px var(--spt-cell-color) inset, 0 0 12px rgba(99, 102, 241, 0.32);
+  border-color: var(--spt-cell-color);
+}
+.spt-heatmap__cell--b0 { background: rgba(148, 163, 184, 0.10); color: var(--text-dim); }
+.spt-heatmap__cell--b1 { background: color-mix(in srgb, var(--spt-cell-color) 22%, transparent); }
+.spt-heatmap__cell--b2 { background: color-mix(in srgb, var(--spt-cell-color) 45%, transparent); }
+.spt-heatmap__cell--b3 { background: color-mix(in srgb, var(--spt-cell-color) 70%, transparent); }
+.spt-heatmap__cell--b4 {
+  background: var(--spt-cell-color);
+  color: #fff;
+  font-weight: 900;
+}
+.spt-heatmap__cell-sp {
+  font-size: 9.5px; font-weight: 800;
+}
+.spt-heatmap__cell-best {
+  position: absolute;
+  top: 1px; right: 3px;
+  font-size: 8px;
+  font-weight: 900;
+  color: #047857;
+}
+
+.spt-heatmap__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+.spt-heatmap__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.spt-heatmap__legend-dot {
+  width: 10px; height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+  border: 1px solid rgba(99, 102, 241, 0.15);
+}
+.spt-heatmap__legend-spacer { flex: 1; }
+.spt-heatmap__legend-item--cta {
+  color: var(--accent);
+  font-style: italic;
+}
+
+/* Bottom CTA */
+.spt-cta {
+  display: flex;
+  justify-content: flex-end;
+}
+.spt-cta__btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #10b981 100%);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.30);
+  transition: filter 0.15s, transform 0.1s;
+}
+.spt-cta__btn:hover { filter: brightness(1.08); }
+.spt-cta__btn:active { transform: translateY(1px); }
+.spt-cta__arrow { font-size: 13px; }
