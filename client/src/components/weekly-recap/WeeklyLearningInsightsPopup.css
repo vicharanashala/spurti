@@ -27,20 +27,22 @@
 @media (max-width: 720px)  { .wli-stack { width: min(92vw, 600px); } }
 
 .wli-overlay__close {
-  position: absolute; top: -52px; right: 0;
-  width: 40px; height: 40px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.10);
-  color: rgba(255, 255, 255, 0.92);
+  position: absolute; top: 14px; right: 14px;
+  width: 36px; height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.95);
   font-size: 22px; line-height: 1;
   border-radius: 50%;
   cursor: pointer;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   transition: background 0.15s, transform 0.1s;
-  z-index: 4;
+  z-index: 6;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
 }
-.wli-overlay__close:hover { background: rgba(255, 255, 255, 0.22); }
+.wli-overlay__close:hover { background: rgba(255, 255, 255, 0.24); }
 .wli-overlay__close:active { transform: scale(0.94); }
 
 /* Card flip wrapper */
