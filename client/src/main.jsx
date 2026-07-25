@@ -21,6 +21,16 @@ import './components/weekly-recap/WeeklyLearningInsightsPopup.css';
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
 
+// Local-dev auth bypass: when SPURTI_DEV_AUTH=1 is set on the server, it
+// accepts ?devEmail=… (or x-dev-email header) as the authenticated student.
+// Hook the URL into every /api/me fetch so the dashboard can preview.
+const DEV_EMAIL = (() => {
+  try {
+    return new URLSearchParams(window.location.search).get('devEmail') || '';
+  } catch { return ''; }
+})();
+const DEV_HEADERS = DEV_EMAIL ? { 'x-dev-email': DEV_EMAIL } : {};
+
 function App() {
   const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('admin') === '1' ? 'admin-login' : 'landing');
   const [profile, setProfile] = useState(null);
@@ -57,7 +67,7 @@ function App() {
         setConfig(nextConfig);
 
         if (view !== 'admin-login') {
-          const meRes = await fetch(`${API}/me`);
+          const meRes = await fetch(`${API}/me`, { headers: DEV_HEADERS });
           if (meRes.ok) {
             const data = await meRes.json();
             if (data.authenticated && data.profile && active) {
