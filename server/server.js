@@ -17,6 +17,10 @@ import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
 import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
+import weeklyRouter from './routes/weekly.js';
+import recapRouter from './routes/recap.js';
+import spTrendRouter from './routes/spTrend.js';
+import { startWeeklyRecapScheduler } from './services/weeklyRecapScheduler.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -148,6 +152,14 @@ async function getSamagamaUser(chatengineToken) {
 }
 
 async function studentEmailFromRequest(req) {
+  // Local-dev bypass: when SPURTI_DEV_AUTH=1 is set, accept an `x-dev-email`
+  // header (or `?devEmail=…` query param) as the authenticated student.
+  // This lets you preview the dashboard without the Samagama auth server.
+  // Never active in production (the env var must be explicitly set).
+  if (process.env.SPURTI_DEV_AUTH === '1') {
+    const devEmail = (req.headers['x-dev-email'] || req.query?.devEmail || '').toString().trim();
+    if (devEmail) return normalizeEmail(devEmail);
+  }
   const cookies = parseCookies(req.headers.cookie || '');
   const data = await getSamagamaUser(cookies.chatengine_token);
   // Samagama's /api/auth/me nests the user as { user: { email, ... } };
@@ -738,6 +750,12 @@ function last24Hours(now) {
 
 app.use('/api', api);
 app.use('/spurti/api', api);
+  app.use('/api/weekly', weeklyRouter);
+  app.use('/spurti/api/weekly', weeklyRouter);
+  app.use('/api/weekly', recapRouter);
+  app.use('/spurti/api/weekly', recapRouter);
+  app.use('/api/weekly', spTrendRouter);
+  app.use('/spurti/api/weekly', spTrendRouter);
 
 if (fs.existsSync(clientDist)) {
   app.use('/spurti', express.static(clientDist));
@@ -749,6 +767,7 @@ if (fs.existsSync(clientDist)) {
 }
 
 mongoose.connect(MONGO_URI).then(() => {
+  startWeeklyRecapScheduler();
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
 }).catch((error) => {
   console.error(error);

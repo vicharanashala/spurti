@@ -1,9 +1,35 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import { EntryPill } from './components/replay/EntryPill.tsx';
+import { WeeklyReplayModal } from './components/replay/WeeklyReplayModal.tsx';
+import { FinalJourneyModal } from './components/replay/FinalJourneyModal.tsx';
+import { ShareCard } from './components/replay/ShareCard.tsx';
+import { isFinalJourneyUnlocked, buildReplayHistory } from './components/replay/replayEngine';
+import './components/replay/replay.css';
+import { WeeklyLeaderboardDesktop } from './components/weekly-leaderboard/WeeklyLeaderboardDesktop.tsx';
+import './components/weekly-leaderboard/WeeklyLeaderboardDesktop.css';
+import { RankJourney } from './components/rank-system/RankJourney';
+import { SPTrendPanel } from './components/weekly-recap/SPTrendPanel';
+import './components/weekly-recap/SPTrendPanel.css';
+import { RecoveryCoachPopup } from './components/weekly-recap/RecoveryCoachPopup';
+import './components/weekly-recap/RecoveryCoachPopup.css';
+import { WeeklyLearningInsightsPopup } from './components/weekly-recap/WeeklyLearningInsightsPopup';
+import './components/weekly-recap/WeeklyLearningInsightsPopup.css';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
+
+// Local-dev auth bypass: when SPURTI_DEV_AUTH=1 is set on the server, it
+// accepts ?devEmail=… (or x-dev-email header) as the authenticated student.
+// Hook the URL into every /api/me fetch so the dashboard can preview.
+const DEV_EMAIL = (() => {
+  try {
+    return new URLSearchParams(window.location.search).get('devEmail') || '';
+  } catch { return ''; }
+})();
+const DEV_HEADERS = DEV_EMAIL ? { 'x-dev-email': DEV_EMAIL } : {};
 
 function App() {
   const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('admin') === '1' ? 'admin-login' : 'landing');
@@ -41,7 +67,7 @@ function App() {
         setConfig(nextConfig);
 
         if (view !== 'admin-login') {
-          const meRes = await fetch(`${API}/me`);
+          const meRes = await fetch(`${API}/me`, { headers: DEV_HEADERS });
           if (meRes.ok) {
             const data = await meRes.json();
             if (data.authenticated && data.profile && active) {
@@ -262,13 +288,76 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
+class StudentViewErrorBoundary extends React.Component {
+    constructor(props) { super(props); this.state = { err: null }; }
+    static getDerivedStateFromError(err) { return { err }; }
+    componentDidCatch(err, info) {
+      // Dump to localStorage so we can curl it from the server.
+      try {
+        localStorage.setItem('__spurti_last_error', JSON.stringify({
+          message: err?.message,
+          stack: err?.stack,
+          info: info?.componentStack?.slice(0, 500)
+        }));
+      } catch {}
+    }
+    render() {
+      if (this.state.err) {
+        return (
+          <div style={{ padding: 20, fontFamily: 'monospace', color: '#b91c1c' }}>
+            <h2>⚠ Render error</h2>
+            <pre style={{ whiteSpace: 'pre-wrap' }}>{String(this.state.err?.message || this.state.err)}</pre>
+          </div>
+        );
+      }
+      return this.props.children;
+    }
+  }
+
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
+  const [weeklyOpen, setWeeklyOpen] = useState(false);
+  const [spTrend, setSpTrend] = useState(null);
+  const [recap, setRecap] = useState(null);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryFocusDay, setRecoveryFocusDay] = useState(null);
+  const [recoveryMe, setRecoveryMe] = useState(null);
+  const [recoveryRecapId, setRecoveryRecapId] = useState(null);
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+
+  useEffect(() => {
+    if (!student?.email) return;
+    let cancelled = false;
+    fetch(`${API}/weekly/sp-trend?email=${encodeURIComponent(student.email)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (!cancelled && j) setSpTrend(j); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [student?.email]);
+
+  useEffect(() => {
+    if (!student?.email) return;
+    let cancelled = false;
+    fetch(`${API}/weekly/recap?email=${encodeURIComponent(student.email)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (!cancelled && j) setRecap(j); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [student?.email]);
+
+  const openRecoveryForDay = (focus) => {
+    setRecoveryFocusDay(focus?.weekday || null);
+    setRecoveryMe(recap?.me || profile?.student || null);
+    setRecoveryRecapId(recap?.recapId || null);
+    setRecoveryOpen(true);
+  };
+
   return (
+    <StudentViewErrorBoundary>
     <main className="page compact">
+      <ReplaySection profile={profile} />
       <header className="topbar">
         {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
         <div>
@@ -277,17 +366,63 @@ function StudentView({ profile, onBack }) {
         </div>
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
-      <LevelStatus student={student} />
+      <RankJourney sp={Number(student.totalSp) || 0} profile={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'],
+      {spTrend && (
+        <section className="panel" style={{ marginTop: 12 }}>
+          <div className="panel-head">
+            <h2>SP Trend</h2>
+            <span className="muted" style={{ fontSize: 12 }}>Your weekly SP trajectory + where to focus</span>
+          </div>
+          <SPTrendPanel data={spTrend} me={recap?.me} onOpenRecoveryCoach={openRecoveryForDay} />
+        </section>
+      )}
+      <WeeklyLeaderboardDesktop email={student.email} profile={student} inline />
+      <RecoveryCoachPopup
+        open={recoveryOpen}
+        onClose={() => setRecoveryOpen(false)}
+        me={recoveryMe}
+        recapId={recoveryRecapId}
+        email={student.email}
+        focusDay={recoveryFocusDay}
+      />
+      <Tabs tab={tab} setTab={setTab} tabs={[
+        ['bank','SP Bank'],
+        ['polls','Polls'],
         ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
-        ['leaderboard','Leaderboard']]} />
+        ['leaderboard','Leaderboard'],
+        ['replays','Replays']
+      ]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} setTab={setTab} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'replays' && (
+        <section className="panel">
+          <h3 style={{ margin: '12px 0 8px' }}>📼 Replay History</h3>
+          <p style={{ margin: '0 0 12px', color: '#64748b', fontSize: 12 }}>Past weekly recaps synthesized from your activity data. Click any to re-watch.</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
+            {buildReplayHistory(profile, 6).map((w, i) => (
+              <button
+                key={i}
+                type="button"
+                className="replay-history-card"
+                onClick={() => { setWeeklyOpen(true); }}
+                style={{ textAlign: 'left', padding: 10, border: '1px solid #d9e1ec', borderRadius: 10, background: '#fff', cursor: 'pointer' }}
+              >
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#7C3AED' }}>Week of</div>
+                <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 6 }}>{w.weekStartIso}</div>
+                <div style={{ fontSize: 11, color: '#475569' }}>
+                  {w.sessionsAttended} sessions · {w.pollsAnswered} polls · +{w.spEarned} SP
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
     </main>
+    </StudentViewErrorBoundary>
   );
 }
 
@@ -1281,5 +1416,37 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
+function ReplaySection({ profile }) {
+  const [weeklyOpen, setWeeklyOpen] = useState(false);
+  const [finalOpen, setFinalOpen] = useState(false);
+  const [share, setShare] = useState(null);
+  const [unlocked, setUnlocked] = useState(false);
+  useEffect(() => {
+    setUnlocked(isFinalJourneyUnlocked(profile || {}));
+  }, [profile]);
+  if (!profile || !profile.student) return null;
+  return (
+    <>
+      <div className="entry-pill-row">
+        <EntryPill kind="weekly" onClick={() => setWeeklyOpen(true)} />
+        {unlocked && (
+          <span style={{ display: 'inline-block', marginLeft: 10 }}>
+            <EntryPill kind="final" onClick={() => setFinalOpen(true)} />
+          </span>
+        )}
+      </div>
+      <WeeklyReplayModal open={weeklyOpen} onClose={() => setWeeklyOpen(false)} profile={profile} onOpenShare={() => setShare({ kind: 'weekly' })} />
+      <FinalJourneyModal open={finalOpen} onClose={() => setFinalOpen(false)} profile={profile} studentName={profile.student.name} onOpenShare={() => setShare({ kind: 'final' })} />
+      {share && (
+        <ShareCard
+          open={true}
+          kind={share.kind}
+          profile={profile}
+          onClose={() => setShare(null)}
+        />
+      )}
+    </>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);
