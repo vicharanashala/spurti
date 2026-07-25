@@ -1,15 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import './RecoveryCoachPopup.css';
 
 // ============================================================
 // RecoveryCoachPopup (case 4)
 // Full-screen premium popup shown AFTER the WeeklyLearningInsightsPopup
-// for students in the bottom 50 of the previous week. Never uses
-// the words "Bottom 50". Instead provides a calm, AI-style recovery
+// for students in the bottom 50 of the previous week. Never uses the
+// words "Bottom 50". Instead provides a calm, AI-style recovery
 // plan with a Mon-Sat schedule, predicted outcomes, and an
 // encouraging message. Auto-dismisses after 12 seconds, or via the
 // "Start My Recovery Plan" / "Dismiss" buttons.
+//
+// focusDay prop: when provided, the matching day row gets a one-shot
+// pulse-glow + scrollIntoView animation so the user sees the
+// recovery tasks for that day immediately when the popup opens.
 // ============================================================
 
 const RECOVERY_PLAN = [
@@ -35,7 +39,7 @@ function estimateOutcomes(me) {
 
 function buildObservations(me) {
   const list = [];
-  if ((me?.attendanceCount || 0) >= 1) list.push('You showed up this week — that’s the foundation.');
+  if ((me?.attendanceCount || 0) >= 1) list.push("You showed up this week — that's the foundation.");
   if ((me?.pollCount || 0) >= 1) list.push('You already completed some polls — keep that streak going.');
   if ((me?.challengeCount || 0) >= 1) list.push('You engaged with a weekly challenge — momentum is real.');
   if ((me?.weeklySp || 0) > 0) list.push(`You already earned ${me.weeklySp} SP last week — that's a base.`);
@@ -43,14 +47,28 @@ function buildObservations(me) {
   return list.slice(0, 3);
 }
 
-export function RecoveryCoachPopup({ open, onClose, me, recapId, email }) {
+export function RecoveryCoachPopup({ open, onClose, me, recapId, email, focusDay }) {
   const [dismissed, setDismissed] = useState(false);
+  const dayRefs = useRef({});
 
+  // Auto-dismiss after 12 seconds.
   useEffect(() => {
     if (!open) return;
     const t = setTimeout(() => { setDismissed(true); onClose?.(); }, 12000);
     return () => clearTimeout(t);
   }, [open, onClose]);
+
+  // One-shot pulse-glow + scrollIntoView when focusDay is provided.
+  useEffect(() => {
+    if (!open || !focusDay) return;
+    const node = dayRefs.current[focusDay];
+    if (node) {
+      try { node.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch {}
+      node.classList.add('rcp-day--focused');
+      const t = setTimeout(() => node.classList.remove('rcp-day--focused'), 2400);
+      return () => { clearTimeout(t); node.classList.remove('rcp-day--focused'); };
+    }
+  }, [open, focusDay]);
 
   if (!open || !me) return null;
 
@@ -107,7 +125,11 @@ export function RecoveryCoachPopup({ open, onClose, me, recapId, email }) {
               <div className="rcp__section-eyebrow">📅 Mon → Sat · Recovery Plan</div>
               <div className="rcp__plan">
                 {RECOVERY_PLAN.map(d => (
-                  <div key={d.day} className="rcp__plan-day">
+                  <div
+                    key={d.day}
+                    className="rcp__plan-day"
+                    ref={el => { dayRefs.current[d.day] = el; }}
+                  >
                     <div className="rcp__plan-day-name">{d.day}</div>
                     {d.items.map((it, i) => (
                       <div key={i} className="rcp__plan-item">

@@ -127,6 +127,19 @@
   border-radius: 10px;
   background: linear-gradient(135deg, rgba(56, 189, 248, 0.06), rgba(16, 185, 129, 0.04));
   border: 1px solid rgba(56, 189, 248, 0.18);
+  transition: box-shadow 0.4s ease, transform 0.4s ease, background 0.4s ease;
+}
+.rcp__plan-day--focused {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.22), rgba(99, 102, 241, 0.14));
+  border-color: rgba(56, 189, 248, 0.55);
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.32);
+  animation: rcp-day-pulse 1.2s ease-out 2;
+}
+@keyframes rcp-day-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.65); }
+  60%  { box-shadow: 0 0 0 10px rgba(56, 189, 248, 0.0); }
+  100% { box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.32); }
 }
 .rcp__plan-day-name {
   font-size: 10px; font-weight: 800; letter-spacing: 0.10em; text-transform: uppercase;
