@@ -305,6 +305,9 @@ class StudentViewErrorBoundary extends React.Component {
     }
   }
 
+const MyJourney = () => null;
+const Commitments = () => null;
+
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
   const [weeklyOpen, setWeeklyOpen] = useState(false);
@@ -377,9 +380,17 @@ function StudentView({ profile, onBack }) {
         email={student.email}
         focusDay={recoveryFocusDay}
       />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['replays','Replays']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[
+        ['bank','SP Bank'],
+        ['polls','Polls'],
+        ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
+        ['leaderboard','Leaderboard'],
+        ['replays','Replays']
+      ]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
+      {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} setTab={setTab} />}
+      {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
       {tab === 'replays' && (
         <section className="panel">
