@@ -287,7 +287,7 @@ function ChampionCard({ recap, me, caseKey }) {
   );
 }
 
-function InsightsCard({ insights, caseKey }) {
+function InsightsCard({ insights, caseKey, onClose }) {
   return (
     <div className="wli-card wli-card--back">
       <div className="wli-card__head">
@@ -358,7 +358,7 @@ function InsightsCard({ insights, caseKey }) {
 
       <div className="wli-card__cta">
         <p className="wli-card__congrats">{insights.cta}</p>
-        <button type="button" className="wli-card__btn" data-wli-action="done">Got it — Start My Week</button>
+        <button type="button" className="wli-card__btn" data-wli-action="done" onClick={onClose}>Got it — Start My Week</button>
       </div>
     </div>
   );
@@ -412,7 +412,7 @@ export function WeeklyLearningInsightsPopup({ open, onClose, recap, me, caseKey,
                 <ChampionCard recap={recap} me={me} caseKey={caseKey} />
               </div>
               <div className="wli-card-face wli-card-face--back">
-                {insights && <InsightsCard insights={insights} caseKey={caseKey} />}
+                {insights && <InsightsCard insights={insights} caseKey={caseKey} onClose={onClose} />}
               </div>
             </div>
             <div className="wli-foot">
@@ -438,13 +438,27 @@ export function WeeklyLearningInsightsPopup({ open, onClose, recap, me, caseKey,
 }
 
 // ----- Dismissal flag helpers -----
+// When the URL has `?popups=always` (or `?popups=1`), the popup shows on
+// every page open — useful for local dev. Production behavior (once-per-week)
+// is preserved otherwise.
+export function popupsAlwaysMode() {
+  if (typeof window === 'undefined') return false;
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    const v = (sp.get('popups') || '').toLowerCase();
+    return v === 'always' || v === '1' || v === 'true';
+  } catch { return false; }
+}
+
 export function wasInsightsDismissed(recapId) {
+  if (popupsAlwaysMode()) return false;
   if (!recapId) return true;
   try { return !!localStorage.getItem(`wli_dismissed_${recapId}`); }
   catch { return false; }
 }
 
 export function markInsightsDismissed(recapId) {
+  if (popupsAlwaysMode()) return;
   if (!recapId) return;
   try { localStorage.setItem(`wli_dismissed_${recapId}`, '1'); }
   catch {}

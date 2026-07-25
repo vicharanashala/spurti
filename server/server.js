@@ -126,6 +126,14 @@ async function getSamagamaUser(chatengineToken) {
 }
 
 async function studentEmailFromRequest(req) {
+  // Local-dev bypass: when SPURTI_DEV_AUTH=1 is set, accept an `x-dev-email`
+  // header (or `?devEmail=…` query param) as the authenticated student.
+  // This lets you preview the dashboard without the Samagama auth server.
+  // Never active in production (the env var must be explicitly set).
+  if (process.env.SPURTI_DEV_AUTH === '1') {
+    const devEmail = (req.headers['x-dev-email'] || req.query?.devEmail || '').toString().trim();
+    if (devEmail) return normalizeEmail(devEmail);
+  }
   const cookies = parseCookies(req.headers.cookie || '');
   const data = await getSamagamaUser(cookies.chatengine_token);
   // Samagama's /api/auth/me nests the user as { user: { email, ... } };

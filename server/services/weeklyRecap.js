@@ -162,6 +162,28 @@ export async function finalizePreviousWeek({ force = false } = {}) {
     { upsert: true, new: true }
   );
 
+  // Dispatch the recovery emails to the bottom-50 students. Idempotent:
+  // skip if this recap has already been mailed.
+  try {
+    if (!recap.recoveryEmailsSentAt) {
+      const { sendRecoveryEmailsToBottom50 } = await import('./mailer.js');
+      const { sent, failed } = await sendRecoveryEmailsToBottom50(recap);
+      await WeeklyRecap.updateOne(
+        { _id: recap._id },
+        {
+          $set: {
+            recoveryEmailsSentAt: new Date(),
+            recoveryEmailsSentCount: sent,
+            recoveryEmailsFailedCount: failed
+          }
+        }
+      );
+      console.log(`[recap] mailed bottom-50: sent=${sent} failed=${failed}`);
+    }
+  } catch (err) {
+    console.error('[recap] recovery mailer failed:', err?.message);
+  }
+
   return recap;
 }
 
