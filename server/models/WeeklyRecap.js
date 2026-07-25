@@ -31,12 +31,7 @@ const weeklyRecapSchema = new mongoose.Schema({
   bottom50:   { type: [recapEntrySchema], default: [] },
   // Full ranking saved for any future debug/replay
   allRanked:  { type: [recapEntrySchema], default: [] },
-  finalizedAt: { type: Date, default: Date.now },
-  // When the recovery emails were dispatched to the bottom-50 list.
-  // Used for idempotency: the scheduler skips re-sends if this is set.
-  recoveryEmailsSentAt: { type: Date, default: null },
-  recoveryEmailsSentCount: { type: Number, default: 0 },
-  recoveryEmailsFailedCount: { type: Number, default: 0 }
+  finalizedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
 weeklyRecapSchema.index({ weekStart: 1 }, { unique: true });

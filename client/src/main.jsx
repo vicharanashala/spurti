@@ -11,25 +11,9 @@ import './components/replay/replay.css';
 import { WeeklyLeaderboardDesktop } from './components/weekly-leaderboard/WeeklyLeaderboardDesktop.tsx';
 import './components/weekly-leaderboard/WeeklyLeaderboardDesktop.css';
 import { RankJourney } from './components/rank-system/RankJourney';
-import { SPTrendPanel } from './components/weekly-recap/SPTrendPanel';
-import './components/weekly-recap/SPTrendPanel.css';
-import { RecoveryCoachPopup } from './components/weekly-recap/RecoveryCoachPopup';
-import './components/weekly-recap/RecoveryCoachPopup.css';
-import { WeeklyLearningInsightsPopup } from './components/weekly-recap/WeeklyLearningInsightsPopup';
-import './components/weekly-recap/WeeklyLearningInsightsPopup.css';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
-
-// Local-dev auth bypass: when SPURTI_DEV_AUTH=1 is set on the server, it
-// accepts ?devEmail=… (or x-dev-email header) as the authenticated student.
-// Hook the URL into every /api/me fetch so the dashboard can preview.
-const DEV_EMAIL = (() => {
-  try {
-    return new URLSearchParams(window.location.search).get('devEmail') || '';
-  } catch { return ''; }
-})();
-const DEV_HEADERS = DEV_EMAIL ? { 'x-dev-email': DEV_EMAIL } : {};
 
 function App() {
   const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('admin') === '1' ? 'admin-login' : 'landing');
@@ -67,7 +51,7 @@ function App() {
         setConfig(nextConfig);
 
         if (view !== 'admin-login') {
-          const meRes = await fetch(`${API}/me`, { headers: DEV_HEADERS });
+          const meRes = await fetch(`${API}/me`);
           if (meRes.ok) {
             const data = await meRes.json();
             if (data.authenticated && data.profile && active) {
@@ -308,43 +292,9 @@ class StudentViewErrorBoundary extends React.Component {
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
   const [weeklyOpen, setWeeklyOpen] = useState(false);
-  const [spTrend, setSpTrend] = useState(null);
-  const [recap, setRecap] = useState(null);
-  const [recoveryOpen, setRecoveryOpen] = useState(false);
-  const [recoveryFocusDay, setRecoveryFocusDay] = useState(null);
-  const [recoveryMe, setRecoveryMe] = useState(null);
-  const [recoveryRecapId, setRecoveryRecapId] = useState(null);
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
-
-  useEffect(() => {
-    if (!student?.email) return;
-    let cancelled = false;
-    fetch(`${API}/weekly/sp-trend?email=${encodeURIComponent(student.email)}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(j => { if (!cancelled && j) setSpTrend(j); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [student?.email]);
-
-  useEffect(() => {
-    if (!student?.email) return;
-    let cancelled = false;
-    fetch(`${API}/weekly/recap?email=${encodeURIComponent(student.email)}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(j => { if (!cancelled && j) setRecap(j); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [student?.email]);
-
-  const openRecoveryForDay = (focus) => {
-    setRecoveryFocusDay(focus?.weekday || null);
-    setRecoveryMe(recap?.me || profile?.student || null);
-    setRecoveryRecapId(recap?.recapId || null);
-    setRecoveryOpen(true);
-  };
-
   return (
     <StudentViewErrorBoundary>
     <main className="page compact">
@@ -359,24 +309,7 @@ function StudentView({ profile, onBack }) {
       </header>
       <RankJourney sp={Number(student.totalSp) || 0} profile={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      {spTrend && (
-        <section className="panel" style={{ marginTop: 12 }}>
-          <div className="panel-head">
-            <h2>SP Trend</h2>
-            <span className="muted" style={{ fontSize: 12 }}>Your weekly SP trajectory + where to focus</span>
-          </div>
-          <SPTrendPanel data={spTrend} me={recap?.me} onOpenRecoveryCoach={openRecoveryForDay} />
-        </section>
-      )}
       <WeeklyLeaderboardDesktop email={student.email} profile={student} inline />
-      <RecoveryCoachPopup
-        open={recoveryOpen}
-        onClose={() => setRecoveryOpen(false)}
-        me={recoveryMe}
-        recapId={recoveryRecapId}
-        email={student.email}
-        focusDay={recoveryFocusDay}
-      />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['replays','Replays']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
