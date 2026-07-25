@@ -4,6 +4,8 @@ import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
 import Student from './models/Student.js';
@@ -94,6 +96,33 @@ function surveyPublic(cfg) {
 }
 
 const app = express();
+
+// 1. Add Helmet for HTTP header security
+app.use(helmet());
+
+// 2. Configure and add the Rate Limiter
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 500, // Increased from 100 to 500 to forgive panic-refreshing
+  
+  // Send a JSON response instead of a plain text string
+  handler: (req, res, next, options) => {
+    res.status(options.statusCode).json({
+      success: false,
+      error: 'Too Many Requests',
+      message: 'Our servers are taking a quick breather. Please try again in a few minutes!'
+    });
+  },
+  
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// CRITICAL FIX: Only apply this to API routes, not the whole application!
+// (If your backend routes don't start with /api, you can use app.use(apiLimiter) 
+// but the max: 500 limit will still protect legitimate users)
+app.use('/api', apiLimiter);
+
 const api = express.Router();
 const liveViewers = new Map();
 
