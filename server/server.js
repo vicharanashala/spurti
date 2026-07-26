@@ -14,9 +14,12 @@ import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
+import Challenge from './models/Challenge.js';
+import ChallengeVote from './models/ChallengeVote.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
 import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
+import { castVote, withdrawVote, resolveChallenge, buildActiveState, buildProposedState } from './services/challenge.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -516,6 +519,66 @@ function registerSurveyRoutes(base, cfg) {
 }
 registerSurveyRoutes('/survey', SURVEY);
 registerSurveyRoutes('/poll2', POLL2);
+
+// ---- Upvote Challenges (voting + resolution) ---------------------------------
+async function challengeStudent(req) {
+  const email = normalizeEmail(req.query.email || req.body?.email) || await studentEmailFromRequest(req);
+  if (!email) return null;
+  return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+}
+
+api.get('/challenges/proposed', async (req, res) => {
+  const student = await challengeStudent(req);
+  if (!student) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const state = await buildProposedState(student.email);
+    res.json(state);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+api.get('/challenges/active', async (req, res) => {
+  const student = await challengeStudent(req);
+  if (!student) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const state = await buildActiveState(student.email);
+    res.json(state);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+api.post('/challenges/:id/vote', async (req, res) => {
+  const student = await challengeStudent(req);
+  if (!student) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const state = await castVote(student.email, req.params.id, req.body?.spPoints);
+    res.json(state);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+api.post('/challenges/:id/withdraw', async (req, res) => {
+  const student = await challengeStudent(req);
+  if (!student) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const state = await withdrawVote(student.email, req.params.id);
+    res.json(state);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+api.post('/admin/challenges/:id/resolve', adminGuard, async (req, res) => {
+  try {
+    const challenge = await resolveChallenge(req.params.id);
+    res.json({ challenge });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 api.get('/admin/stats', adminGuard, async (_req, res) => {
   const [yetToOnboard, excusedStudents, sessions, txns, activeStudents] = await Promise.all([

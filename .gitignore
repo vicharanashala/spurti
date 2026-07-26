@@ -22,5 +22,3 @@ pipeline/.env
 server.log
 sp-runs/
 
-# student data — LOCAL ONLY, never commit (untracked 2026-07-14)
-data/
