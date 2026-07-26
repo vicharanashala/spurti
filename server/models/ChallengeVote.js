@@ -9,6 +9,6 @@ const challengeVoteSchema = new mongoose.Schema({
   withdrawnAt: { type: Date, default: null }
 }, { timestamps: true });
 
-challengeVoteSchema.index({ email: 1, challengeId: 1, status: 1 }, { unique: true });
+challengeVoteSchema.index({ email: 1, challengeId: 1 }, { unique: true });
 
 export default mongoose.model('ChallengeVote', challengeVoteSchema);

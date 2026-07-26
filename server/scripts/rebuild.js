@@ -195,7 +195,7 @@ async function run() {
   await mongoose.connect(MONGO_URI);
 
   await Promise.all([
-    // Student.deleteMany({}), // SKIPPED - students already seeded
+    Student.deleteMany({}),
     Session.deleteMany({}),
     AttendanceRecord.deleteMany({}),
     PollRecord.deleteMany({}),
@@ -204,7 +204,7 @@ async function run() {
   ]);
 
   const roster = parseRoster();
-  // await Student.insertMany(roster); // SKIPPED - students already seeded
+  await Student.insertMany(roster);
   const students = await Student.find().sort({ name: 1 });
   const byEmail = new Map();
   const byAltEmail = new Map();
@@ -219,7 +219,7 @@ async function run() {
 
   const balances = new Map();
   for (const student of students) {
-    await addTransaction(student, 'initial', '', 100, 'Initial Spurti Points credited by system on onboarding.', student.internshipStartDate, balances);
+    await addTransaction(student, 'initial', '', 100, 'Initial Spurti Points credited by system on onboarding.', student.internshipStartDate || new Date(), balances);
   }
 
   for (const sessionConfig of SESSIONS) {

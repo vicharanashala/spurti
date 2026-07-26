@@ -1303,10 +1303,15 @@ function ChallengesHub({ student }) {
             const myVote = userVotes[c._id] || 0;
             const inputVal = voteInputs[c._id] || '';
             const inputSp = +inputVal || 0;
-            const tooHigh = inputSp > balance - myVote;
+            const tooHigh = inputSp > balance;
             const totalInvested = c.totalSpInvested || 0;
             const maxInvested = Math.max(1, ...challenges.map(x => x.totalSpInvested || 0));
             const barPct = Math.round((totalInvested / maxInvested) * 100);
+
+            const now = Date.now();
+            const votingStarted = now >= new Date(c.votingStartDate).getTime();
+            const votingEnded = now > new Date(c.votingEndDate).getTime();
+            const votingOpen = votingStarted && !votingEnded;
 
             return (
               <article className="ch-card" key={c._id}>
@@ -1325,7 +1330,13 @@ function ChallengesHub({ student }) {
                 </div>
 
                 <div className="ch-meta">
-                  Voting closes {new Date(c.votingEndDate).toLocaleDateString()}
+                  {!votingStarted ? (
+                    `Voting starts ${new Date(c.votingStartDate).toLocaleDateString()}`
+                  ) : votingEnded ? (
+                    `Voting ended on ${new Date(c.votingEndDate).toLocaleDateString()} · Awaiting resolution`
+                  ) : (
+                    `Voting closes ${new Date(c.votingEndDate).toLocaleDateString()}`
+                  )}
                 </div>
 
                 {myVote > 0 && (
@@ -1335,17 +1346,18 @@ function ChallengesHub({ student }) {
                 )}
 
                 <div className="ch-actions">
-                  <input type="number" min="1" max={balance - myVote}
+                  <input type="number" min="1" max={balance}
                     placeholder="SP to vote"
+                    disabled={!votingOpen}
                     value={inputVal}
                     onChange={e => setVoteInputs({ ...voteInputs, [c._id]: e.target.value })} />
-                  <button className="primary" disabled={!inputVal || inputSp <= 0 || tooHigh}
+                  <button className="primary" disabled={!votingOpen || !inputVal || inputSp <= 0 || tooHigh}
                     onClick={() => vote(c._id)}>Vote</button>
                   {myVote > 0 && (
-                    <button className="secondary" onClick={() => withdraw(c._id)}>Withdraw</button>
+                    <button className="secondary" disabled={!votingOpen} onClick={() => withdraw(c._id)}>Withdraw</button>
                   )}
                 </div>
-                {tooHigh && <p className="ch-warn">Not enough SP (balance: {balance - myVote})</p>}
+                {tooHigh && <p className="ch-warn">Not enough SP (balance: {balance})</p>}
               </article>
             );
           })}
