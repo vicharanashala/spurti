@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Summership SP Record</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <section id="introPage" class="intro-page">
+      <div class="intro-copy">
+        <div class="eyebrow">Spurti Motivation Engine</div>
+        <h1>Your presence, effort, and participation now count.</h1>
+        <p class="lead">
+          Spurti Points are a simple way to track learning energy through the program. Every session you attend,
+          every activity you try, and every meaningful participation signal helps build your record.
+        </p>
+        <div class="motivation-band">
+          <strong>Presence matters.</strong>
+          <span>We are tracking attendance and activity because consistent participation is part of learning, not just final marks.</span>
+        </div>
+        <div class="rule-grid">
+          <div class="rule-card">
+            <span class="rule-value">100 SP</span>
+            <strong>You begin with a base</strong>
+            <p>Every student starts with 100 Spurti Points as the initial motivation balance.</p>
+          </div>
+          <div class="rule-card">
+            <span class="rule-value">75%</span>
+            <strong>Attendance must qualify</strong>
+            <p>You get +5 SP only if you attend at least 75% of a session. Partial attendance below 75% gives 0 SP. Absence gives -5 SP.</p>
+          </div>
+          <div class="rule-card">
+            <span class="rule-value">+10 / +5</span>
+            <strong>Activities add more</strong>
+            <p>If your item matched, you get +10 SP. If you participated but did not match, you get +5 SP.</p>
+          </div>
+        </div>
+        <div class="example-grid">
+          <div class="example-card">
+            <div class="example-title">Absolute SP example</div>
+            <p>Current SP = 110. Attendance gives +10 SP. New SP = <strong>120</strong>.</p>
+          </div>
+          <div class="example-card">
+            <div class="example-title">Percentage SP example</div>
+            <p>Current SP = 110. Activity gives +10%. SP added = 11. New SP = <strong>121</strong>.</p>
+          </div>
+          <div class="example-card">
+            <div class="example-title">Deduction example</div>
+            <p>Current SP = 110. Missed activity deducts 10 SP. New SP = <strong>100</strong>.</p>
+          </div>
+        </div>
+        <button id="startSearch" class="primary-btn" type="button">Go check your SP here</button>
+      </div>
+      <aside class="score-preview">
+        <div class="preview-head">
+          <span>Sample journey</span>
+          <strong>125</strong>
+        </div>
+        <div class="preview-row"><span>Initial SP</span><strong>100</strong></div>
+        <div class="preview-row"><span>Morning presence</span><strong>+5</strong></div>
+        <div class="preview-row"><span>Evening presence</span><strong>+5</strong></div>
+        <div class="preview-row"><span>Activity matched</span><strong>+10</strong></div>
+        <div class="preview-row"><span>Another session</span><strong>+5</strong></div>
+        <div class="preview-note">Your actual SP depends on your own attendance and activity records.</div>
+      </aside>
+    </section>
+
+    <section id="searchPage" class="search-page hidden">
+      <header class="search-header">
+        <button id="backHome" class="ghost-btn" type="button">Back</button>
+        <div>
+          <h1>Find your record</h1>
+          <p>Enter your name, email, or alternate email. Only matching records will be shown.</p>
+        </div>
+      </header>
+
+      <section class="search-panel">
+        <label for="searchInput">Name or email</label>
+        <div class="search-row">
+          <input id="searchInput" type="search" placeholder="Example: student@email.com" autocomplete="off" />
+          <button id="searchBtn" class="primary-btn" type="button">Search</button>
+        </div>
+        <div id="searchHint" class="search-hint">Type at least 2 characters to search.</div>
+      </section>
+
+      <section id="matches" class="matches"></section>
+      <section id="record" class="record-panel"></section>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
