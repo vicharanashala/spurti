@@ -65,7 +65,21 @@ const APPLY = process.env.APPLY === '1';
 
 // 09:05 IST = 03:35 UTC. wEnd = min(first-instance-end, 11:00 IST). Per-day end overrides (IST) take precedence.
 const WINDOW_END_OVERRIDE_IST = { '2026-05-22': '11:00' };
+// From EVENING_CUTOVER the daily standup moved from the morning (09:05-11:00 IST)
+// to the evening. On/after this date, score presence in [EVENING_WSTART_IST,
+// EVENING_WEND_IST] IST (5-min join grace, mirroring the old morning window) and
+// pick the mandatory meeting that overlaps THAT window (an all-day/leftover
+// morning room must not steal the slot). Dates before the cutover are unchanged.
+const EVENING_CUTOVER = '2026-07-16';
+const EVENING_WSTART_IST = '20:05';
+const EVENING_WEND_IST = '21:00';
 const GRACE_DATE = '2026-06-06'; // exceptional: 1 min join = full att + full poll
+// Polls also moved off Zoom to the Spandan evening classroom at the evening
+// cutover. On/after this date the poll (B) score comes from `spandan_polls`
+// (correctness, percentiled to the day's top scorer); strictly before it, from
+// the frozen `zoom_polls` mirror (participation) exactly as history has it — so
+// old poll SP is never disturbed. Same date as the evening attendance cutover.
+const SPANDAN_CUTOFF = process.env.SPANDAN_CUTOFF || EVENING_CUTOVER;
 const STAFF = new Set([
   'dled@iitrpr.ac.in', 'prakash.hegade@gmail.com',
   'sudarshansudarshan@gmail.com', 'sudarshan@iitrpr.ac.in', 'rajankrsna@gmail.com',
@@ -116,16 +130,53 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   const byDate = {}; for (const m of meetings) (byDate[m.date] = byDate[m.date] || []).push(m);
   const sessions = [];
   for (const date of Object.keys(byDate).sort()) {
-    const first = byDate[date].filter((m) => isMandatory(m.topic) && (m.participantsCount || 0) >= 10).sort((a, b) => new Date(a.startTime) - new Date(b.startTime))[0];
-    if (!first) continue;
-    const wStart = utcFromISTDate(date, '09:05');
-    const wEnd = WINDOW_END_OVERRIDE_IST[date] ? utcFromISTDate(date, WINDOW_END_OVERRIDE_IST[date]) : Math.min(new Date(first.endTime).getTime(), utcFromISTDate(date, '11:00'));
+    const mandatory = byDate[date].filter((m) => isMandatory(m.topic) && (m.participantsCount || 0) >= 10);
+    if (!mandatory.length) continue;
+    let first, wStart, wEnd;
+    if (date >= EVENING_CUTOVER) {
+      // evening standup: fixed [20:05, 21:00] IST window; pick the mandatory meeting
+      // that overlaps it most so a leftover all-day/morning room can't steal the slot.
+      wStart = utcFromISTDate(date, EVENING_WSTART_IST);
+      const wCap = utcFromISTDate(date, EVENING_WEND_IST);
+      const scored = mandatory.map((m) => {
+        const ms = new Date(m.startTime).getTime(), me = new Date(m.endTime).getTime();
+        return { m, ov: Math.max(0, Math.min(me, wCap) - Math.max(ms, wStart)) };
+      }).sort((a, b) => b.ov - a.ov)[0];
+      if (!scored || scored.ov <= 0) continue; // no mandatory meeting overlaps the evening window
+      first = scored.m;
+      wEnd = Math.min(new Date(first.endTime).getTime(), wCap);
+    } else {
+      first = mandatory.sort((a, b) => new Date(a.startTime) - new Date(b.startTime))[0];
+      wStart = utcFromISTDate(date, '09:05');
+      wEnd = WINDOW_END_OVERRIDE_IST[date] ? utcFromISTDate(date, WINDOW_END_OVERRIDE_IST[date]) : Math.min(new Date(first.endTime).getTime(), utcFromISTDate(date, '11:00'));
+    }
     sessions.push({ date, uuid: first._id, topic: first.topic, wStart, wEnd, label: dayLabel(first.topic) });
   }
 
   // 3. per-student per-session attendance (A) + poll (B), all from the mirror
   const students = new Map(); // email -> { name, firstAtt, rows:[{date,order,cat,delta,reason}] }
   const touch = (email, name) => { const e = email.toLowerCase().trim(); if (!students.has(e)) students.set(e, { name: name || e, firstAtt: null, rows: [] }); const o = students.get(e); if (name && !name.includes('@')) o.name = name; return o; };
+
+  // Spandan evening-poll mirror (Day-N sessions >= SPANDAN_CUTOFF), keyed by date.
+  // Poll (B) here is correctness-based, percentiled to the day's TOP scorer:
+  // pct = pointsEarned / dayTopPoints * 100, then the same 10/5/3/0 band ladder.
+  const spandanByDate = new Map();
+  for (const sp of await sak.collection('spandan_polls').find({ date: { $gte: SPANDAN_CUTOFF } }).toArray()) {
+    const prev = spandanByDate.get(sp.date);
+    if (!prev || (sp.studentCount || 0) > (prev.studentCount || 0)) spandanByDate.set(sp.date, sp); // one Day-N/day; keep the fullest
+  }
+  const scoreSpandanPoll = (sp, label) => {
+    const top = sp.topPoints || (sp.students || []).reduce((mx, x) => Math.max(mx, x.pointsEarned || 0), 0);
+    for (const x of sp.students || []) {
+      const e = String(x.email || '').toLowerCase().trim(); if (!e) continue;
+      const pct = top ? Math.round((x.pointsEarned || 0) / top * 1000) / 10 : 0;
+      const d = tier(pct);
+      // Short bank message: conveys correctness-based + relative-to-day-top in one line.
+      touch(e).rows.push({ date: sp.date, order: 2, cat: 'poll', delta: d,
+        reason: `${label} (${ddmon(sp.date)}): ${pct}% of day's top poll score -> ${d > 0 ? '+' : ''}${d} SP (correctness-based).` });
+    }
+  };
+
   for (const s of sessions) {
     const winMin = Math.round((s.wEnd - s.wStart) / 60000);
     // attendance via zoom_attendance mirror (firstJoin/lastLeave), clipped to window
@@ -146,18 +197,27 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       touch(e, v.name).rows.push({ date: s.date, order: 1, cat: 'attendance', delta: d, reason: `${s.label} (${ddmon(s.date)}): present ${mins} of ${winMin} min (${pct}%) within official ${istHHMM(s.wStart)}-${istHHMM(s.wEnd)} IST window -> ${d > 0 ? '+' : ''}${d} SP.` });
       const o = students.get(e); if (!o.firstAtt || s.date < o.firstAtt) o.firstAtt = s.date;
     }
-    // poll participation via zoom_polls for the same instance
-    const polls = await sak.collection('zoom_polls').find({ meetingUuid: s.uuid }).toArray();
-    const totalQ = new Set(polls.map((p) => p.question)).size;
-    if (totalQ > 0) {
-      const ans = new Map(); for (const p of polls) { const e = String(p.email || '').toLowerCase().trim(); if (!e) continue; if (!ans.has(e)) ans.set(e, new Set()); if (p.answer && String(p.answer).trim()) ans.get(e).add(p.question); }
-      const present = new Set([...segByEmail.keys(), ...ans.keys()]);
-      for (const e of present) {
-        const a = (s.date === GRACE_DATE && segByEmail.has(e)) ? totalQ : (ans.get(e) || new Set()).size; const pct = Math.round(a / totalQ * 1000) / 10; const d = tier(pct);
-        touch(e).rows.push({ date: s.date, order: 2, cat: 'poll', delta: d, reason: `${s.label} (${ddmon(s.date)}): answered ${a} of ${totalQ} poll questions (${pct}%) -> ${d > 0 ? '+' : ''}${d} SP.` });
+    // poll (B): Spandan evening performance on/after the cutoff; Zoom participation before it.
+    if (s.date >= SPANDAN_CUTOFF) {
+      const sp = spandanByDate.get(s.date);
+      if (sp) { scoreSpandanPoll(sp, s.label); spandanByDate.delete(s.date); } // consumed: covered by an evening session
+    } else {
+      // poll participation via zoom_polls for the same instance
+      const polls = await sak.collection('zoom_polls').find({ meetingUuid: s.uuid }).toArray();
+      const totalQ = new Set(polls.map((p) => p.question)).size;
+      if (totalQ > 0) {
+        const ans = new Map(); for (const p of polls) { const e = String(p.email || '').toLowerCase().trim(); if (!e) continue; if (!ans.has(e)) ans.set(e, new Set()); if (p.answer && String(p.answer).trim()) ans.get(e).add(p.question); }
+        const present = new Set([...segByEmail.keys(), ...ans.keys()]);
+        for (const e of present) {
+          const a = (s.date === GRACE_DATE && segByEmail.has(e)) ? totalQ : (ans.get(e) || new Set()).size; const pct = Math.round(a / totalQ * 1000) / 10; const d = tier(pct);
+          touch(e).rows.push({ date: s.date, order: 2, cat: 'poll', delta: d, reason: `${s.label} (${ddmon(s.date)}): answered ${a} of ${totalQ} poll questions (${pct}%) -> ${d > 0 ? '+' : ''}${d} SP.` });
+        }
       }
     }
   }
+
+  // Spandan poll days with no mandatory evening session still earn poll SP (label from the Day number).
+  for (const [, sp] of spandanByDate) scoreSpandanPoll(sp, 'Day ' + sp.dayNumber);
 
   // 4. assemble ledger, ROSTER-DRIVEN union: base 100 to every started intern.
   const ledger = []; const setAside = []; const finalBal = new Map(); const zeroOut = []; const nameByCanon = new Map();
