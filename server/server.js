@@ -17,6 +17,7 @@ import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
 import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
+import { buildSpaState } from './services/spa.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -361,6 +362,15 @@ api.post('/vibe/bet/:id/settle', async (req, res) => {
   await settleBetDemo(bet, result);
   const fresh = await Student.findOne({ email: student.email }).lean();
   res.json(await buildVibeState(fresh));
+});
+
+// ---- SPA → SP (peer-teaching endorsement points; ALL cohorts) ----------------
+// DISPLAY ONLY: SP is scored + credited by the pipeline rubric; this just reads
+// the `spaprogresses` summary + student total. Universal, no cohort gate.
+api.get('/spa/state', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  res.json(await buildSpaState(student));
 });
 
 // ---- Standup commitments (weekly, attendance-only; keep-the-stake) -----------

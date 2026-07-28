@@ -282,6 +282,10 @@ input {
 .empty { color: var(--muted); }
 
 .bank { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.bank-controls { display: flex; gap: 10px; align-items: center; }
+.bank-controls label { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); font-weight: 700; }
+.bank-controls select { min-height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; }
+.bank-foot { margin-top: 10px; font-size: 12.5px; }
 .bank-header, .bank-row {
   display: grid;
   grid-template-columns: 180px 80px 80px 80px minmax(260px, 1fr);

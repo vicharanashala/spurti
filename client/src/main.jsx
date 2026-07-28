@@ -286,14 +286,99 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank', 'SP Bank'],['polls', 'Polls'],...(student.eligibleForVibeGoals? [['journey', 'My Journey'], ['vibe', 'Commitments']] : []),['leaderboard', 'Leaderboard'],['pca', 'PCA Exercise']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
+        ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
+        ['spa','SPA Points'],
+        ['leaderboard','Leaderboard'],['pca', 'PCA Exercise']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
-      {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} setTab={setTab} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} />}
+      {tab === 'spa' && <SpaModule student={student} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
       {tab === 'pca' && <PCAInteractive />}
     </main>
+  );
+}
+
+// SPA → SP (display only). SP is scored + credited by the pipeline rubric
+// (+5 per validated question learned, +8 per validated peer taught, capped 50/30,
+// minus a one-time audit/fraud penalty) and lands in the SP Bank automatically.
+// This tab just reads the rubric's `spaprogresses` summary. Universal across cohorts.
+function SpaModule({ student }) {
+  const email = student.email;
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
+      setData(await r.json());
+    })();
+  }, [email]);
+
+  if (!data) return <section className="panel">Loading your SPA points…</section>;
+  if (!data.hasActivity) return (
+    <section className="panel empty">
+      <h2>SPA — Peer Teaching Points</h2>
+      <p className="muted">No validated SPA endorsements on record yet for <b>{data.activity}</b>. Learn a question and get endorsed, or endorse a peer — SP lands in your SP Bank automatically as each is validated.</p>
+    </section>
+  );
+
+  const { learn, teach, penalty, creditedSp, maxSp, config } = data;
+
+  return (
+    <div className="jr">
+      <section className="panel jr-intro">
+        <h2>SPA — Peer Teaching Points</h2>
+        <p className="muted">For <b>{data.activity}</b>, SP is credited to your <b>SP Bank automatically</b> as each endorsement is validated — <b>+{config.learnUnit} SP</b> per question you learn, <b>+{config.teachUnit} SP</b> per peer you teach. No claiming needed.</p>
+      </section>
+
+      <div className="jr-grid">
+        {/* Track A — Learning */}
+        <section className="jr-card phase-spa">
+          <div className="jr-head"><span className="jr-n">A</span><h3>Learning</h3><span className="jr-sp">+{learn.sp} SP</span></div>
+          <p className="jr-sub">Questions you were validly endorsed on</p>
+          <div className="jr-stats">
+            <div><strong>{learn.validated}</strong><span>validated</span></div>
+            <div><strong>{learn.credited}</strong><span>credited</span></div>
+            <div><strong>×{learn.unit}</strong><span>SP each</span></div>
+          </div>
+          {learn.validated > learn.cap && <div className="jr-splits"><span className="jr-pill amber">Capped at {learn.cap} — extra {learn.validated - learn.cap} not counted</span></div>}
+        </section>
+
+        {/* Track B — Teaching */}
+        <section className="jr-card phase-vibe">
+          <div className="jr-head"><span className="jr-n">B</span><h3>Teaching</h3><span className="jr-sp">+{teach.sp} SP</span></div>
+          <p className="jr-sub">Peers you validly endorsed</p>
+          <div className="jr-stats">
+            <div><strong>{teach.validated}</strong><span>validated</span></div>
+            <div><strong>{teach.credited}</strong><span>credited</span></div>
+            <div><strong>×{teach.unit}</strong><span>SP each</span></div>
+          </div>
+          {teach.validated > teach.cap && <div className="jr-splits"><span className="jr-pill amber">Capped at {teach.cap} — extra {teach.validated - teach.cap} not counted</span></div>}
+        </section>
+      </div>
+
+      <section className="panel">
+        <div className="panel-head"><h2>SPA SP summary</h2></div>
+        <table className="table">
+          <tbody>
+            <tr><td>Learning (Track A) — {learn.credited} × {config.learnUnit}</td><td style={{ textAlign: 'right' }}>+{learn.sp} SP</td></tr>
+            <tr><td>Teaching (Track B) — {teach.credited} × {config.teachUnit}</td><td style={{ textAlign: 'right' }}>+{teach.sp} SP</td></tr>
+            <tr><td><b>Total credited to SP Bank</b> <span className="muted">(max {maxSp})</span></td><td style={{ textAlign: 'right' }}><b>+{creditedSp} SP</b></td></tr>
+            {penalty.done && penalty.applied > 0 && (
+              <tr className="error">
+                <td>{penalty.fraud ? '⚠️ Fraud penalty' : '⚠️ Audit-failure penalty'} — −{Math.round(penalty.rate * 100)}% of current SP{penalty.at ? ` on ${new Date(penalty.at).toLocaleDateString()}` : ''}</td>
+                <td style={{ textAlign: 'right' }}>−{penalty.applied} SP</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+        <p className="muted" style={{ marginTop: 12 }}>
+          ✅ Auto-credited to your SP Bank — current balance <b>{data.totalSp} SP</b>.
+          {penalty.done && penalty.applied > 0 ? ' An integrity penalty was applied (see the debit row in your SP Bank).' : ''}
+        </p>
+      </section>
+    </div>
   );
 }
 
@@ -443,12 +528,40 @@ function Tabs({ tab, setTab, tabs }) {
 }
 
 function SpBank({ transactions }) {
+  const [size, setSize] = useState(10);
+  // Server sends oldest→newest (sorted dateTime asc); show newest first.
+  const rows = useMemo(() => [...transactions].reverse(), [transactions]);
+  const shown = rows.slice(0, size);
+  const downloadCsv = () => {
+    const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [['Date & time', 'Credit', 'Debit', 'Balance', 'Reason'].join(',')].concat(
+      rows.map(tx => [
+        new Date(tx.dateTime).toLocaleString(),
+        tx.appliedDelta > 0 ? tx.appliedDelta : '',
+        tx.appliedDelta < 0 ? tx.appliedDelta : '',
+        tx.balanceAfter, tx.reason
+      ].map(esc).join(',')));
+    const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'sp-bank-statement.csv'; a.click();
+    URL.revokeObjectURL(url);
+  };
   return (
     <section className="panel">
-      <h2>SP Bank Statement</h2>
+      <div className="panel-head">
+        <h2>SP Bank</h2>
+        <div className="bank-controls">
+          <label>Show
+            <select value={size} onChange={e => setSize(Number(e.target.value))}>
+              <option value={10}>10</option><option value={20}>20</option><option value={50}>50</option>
+            </select>
+          </label>
+          <button className="secondary" onClick={downloadCsv}>Download CSV</button>
+        </div>
+      </div>
       <div className="bank">
         <div className="bank-header"><span>Date & time</span><span>Credit</span><span>Debit</span><span>Balance</span><span>Reason</span></div>
-        {transactions.map(tx => (
+        {shown.map(tx => (
           <div className="bank-row" key={tx._id}>
             <span>{new Date(tx.dateTime).toLocaleString()}</span>
             <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
@@ -458,6 +571,7 @@ function SpBank({ transactions }) {
           </div>
         ))}
       </div>
+      <p className="muted bank-foot">Showing {Math.min(size, rows.length)} of {rows.length} — download CSV for the full statement.</p>
     </section>
   );
 }

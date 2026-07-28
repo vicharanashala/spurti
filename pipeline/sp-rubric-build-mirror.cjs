@@ -85,6 +85,18 @@ const STAFF = new Set([
   'sudarshansudarshan@gmail.com', 'sudarshan@iitrpr.ac.in', 'rajankrsna@gmail.com',
 ]);
 
+// ── SPA → SP (peer-teaching endorsement points; Pattern A: rubric-recomputed) ──
+// SP for the SPA activity, scored here alongside attendance/poll so it is
+// regenerated every rebuild (wipe-safe by construction — no preserved category).
+// Only VALIDATED endorsements count (status approved|audit_passed); the raw
+// act_spa_transactions.deltaSPA ledger is a runaway compounding value and is
+// never used. Two capped tracks + a one-time integrity penalty on current SP.
+// Source: act_spa_endorsements + act_spa_transactions (mirrored 6-hourly).
+const SPA_LEARN_UNIT = 5, SPA_LEARN_CAP = 50;   // +5 SP / validated question learned, cap 50 → max 250
+const SPA_TEACH_UNIT = 8, SPA_TEACH_CAP = 30;   // +8 SP / validated peer taught,     cap 30 → max 240
+const SPA_FRAUD_RATE = 0.5, SPA_AUDIT_RATE = 0.2;
+const SPA_GOOD = ['approved', 'audit_passed'];
+
 const isMandatory = (t) => /stand|orientation/i.test(t) && !/breakout|weekend|nptel|special|support|non[- ]?mandatory/i.test(t);
 const tier = (pct) => { pct = Math.min(100, pct); return pct >= 90 ? 10 : pct >= 75 ? 5 : pct >= 50 ? 3 : 0; };
 const dstr = (d) => { if (!d) return null; const x = new Date(d); return isNaN(x) ? null : x.toISOString().slice(0, 10); };
@@ -219,8 +231,35 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   // Spandan poll days with no mandatory evening session still earn poll SP (label from the Day number).
   for (const [, sp] of spandanByDate) scoreSpandanPoll(sp, 'Day ' + sp.dayNumber);
 
+  // 3b. SPA → per-canon validated learn/teach events (dated) + integrity flags.
+  //     emailToCanon is fully built by now, so we can fold aliases correctly.
+  const spaByCanon = new Map(); // canon -> { learn:[YYYY-MM-DD...], teach:[...] }
+  const spaFlag = new Map();    // canon -> { auditFail?, fraud? }
+  const canonOf = (e) => { const k = String(e || '').toLowerCase().trim(); return emailToCanon.get(k) || k; };
+  const touchSpa = (c) => { let o = spaByCanon.get(c); if (!o) { o = { learn: [], teach: [] }; spaByCanon.set(c, o); } return o; };
+  for (const en of await sak.collection('act_spa_endorsements').find(
+        { status: { $in: SPA_GOOD } },
+        { projection: { learnerEmail: 1, teacherEmail: 1, approvedAt: 1, updatedAt: 1, createdAt: 1 } }).toArray()) {
+    const d = dstr(en.approvedAt) || dstr(en.updatedAt) || dstr(en.createdAt); if (!d) continue;
+    if (en.learnerEmail) touchSpa(canonOf(en.learnerEmail)).learn.push(d);
+    if (en.teacherEmail) touchSpa(canonOf(en.teacherEmail)).teach.push(d);
+  }
+  // Genuine fraud = net teacher_fraud_penalty + fraud_penalty_reversal < 0, with
+  // operator "Testing" rows excluded (they are demote-feature tests, all reversed).
+  for (const f of await sak.collection('act_spa_transactions').aggregate([
+        { $match: { transactionType: { $in: ['teacher_fraud_penalty', 'fraud_penalty_reversal'] }, reason: { $not: /testing/i } } },
+        { $group: { _id: { $toLower: '$email' }, net: { $sum: '$deltaSPA' } } }]).toArray()) {
+    if (f.net < 0) { const c = canonOf(f._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), fraud: true }); }
+  }
+  for (const a of await sak.collection('act_spa_transactions').aggregate([
+        { $match: { transactionType: { $in: ['audit_failure_learner_penalty', 'audit_failure_teacher_penalty'] } } },
+        { $group: { _id: { $toLower: '$email' } } }]).toArray()) {
+    const c = canonOf(a._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), auditFail: true });
+  }
+
   // 4. assemble ledger, ROSTER-DRIVEN union: base 100 to every started intern.
   const ledger = []; const setAside = []; const finalBal = new Map(); const zeroOut = []; const nameByCanon = new Map();
+  const spaSummary = []; // per-canon SPA breakdown for the web-app SPA tab (spaprogresses)
   const candidates = new Map(); // identity email -> { start, emails:[..], name }
   // (a) confirmed candidates interns (incl. those who never attended). Start comes
   //     from the person's OWN record (internStart), not an alias-polluted lookup.
@@ -241,9 +280,32 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     const best = new Map();
     for (const e of info.emails) { const o = students.get(e); if (!o) continue; if (info.name === cand && o.name && !o.name.includes('@')) info.name = o.name; for (const r of o.rows) { if (r.date < info.start) continue; const k = r.date + '|' + r.cat; const cur = best.get(k); if (!cur || r.delta > cur.delta) best.set(k, r); } }
     const rows = [{ date: info.start, order: 0, cat: 'initial', delta: 100, reason: `Base Spurti Points (100) credited on internship start date ${info.start}.` }, ...best.values()];
+    // SPA rows (Pattern A): one consolidated 'spa' row per day, cumulative caps
+    // across days. These bypass the (date|cat) best-dedup by being pushed directly.
+    const spa = spaByCanon.get(cand); const flags = spaFlag.get(cand) || {};
+    let spaLearnUsed = 0, spaTeachUsed = 0;
+    if (spa) {
+      const byDay = new Map(); // date -> { learn, teach }
+      for (const d of spa.learn.slice().sort()) { if (spaLearnUsed >= SPA_LEARN_CAP) break; spaLearnUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.learn++; byDay.set(d, o); }
+      for (const d of spa.teach.slice().sort()) { if (spaTeachUsed >= SPA_TEACH_CAP) break; spaTeachUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.teach++; byDay.set(d, o); }
+      for (const [d, o] of byDay) {
+        const delta = o.learn * SPA_LEARN_UNIT + o.teach * SPA_TEACH_UNIT; if (!delta) continue;
+        const parts = []; if (o.learn) parts.push(`${o.learn} learned`); if (o.teach) parts.push(`${o.teach} taught`);
+        rows.push({ date: d, order: 3, cat: 'spa', delta, reason: `SPA (${ddmon(d)}): ${parts.join(' + ')} (validated) -> +${delta} SP.` });
+      }
+    }
+    // Integrity penalty: one-time -% of current total SP (fraud takes precedence).
+    const penRate = flags.fraud ? SPA_FRAUD_RATE : (flags.auditFail ? SPA_AUDIT_RATE : 0);
+    let spaPenalty = 0;
+    if (penRate > 0) {
+      spaPenalty = Math.round(rows.reduce((a, r) => a + r.delta, 0) * penRate);
+      if (spaPenalty > 0) rows.push({ date: TODAY, order: 9, cat: 'spa', delta: -spaPenalty,
+        reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.` });
+    }
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
     finalBal.set(cand, bal); nameByCanon.set(cand, info.name);
+    if (spa || penRate > 0) spaSummary.push({ email: cand, learnValidated: spa ? spa.learn.length : 0, teachValidated: spa ? spa.teach.length : 0, learnCredited: spaLearnUsed, teachCredited: spaTeachUsed, auditFail: !!flags.auditFail, fraud: !!flags.fraud, penaltyApplied: spaPenalty });
   }
   for (const [e, o] of students) { if (STAFF.has(e) || matched.has(e) || emailToCanon.has(e)) continue; setAside.push({ email: e, name: o.name, rows: o.rows.length }); }
 
@@ -287,6 +349,12 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   const docs = ledger.map((r) => { const idx = r.reason.indexOf(': '); return { email: r.email, studentId: idMap.get(r.email), category: r.cat, sessionLabel: r.cat === 'initial' ? '' : (idx > 0 ? r.reason.slice(0, idx) : ''), deltaMode: 'absolute', deltaValue: r.delta, appliedDelta: r.delta, balanceAfter: r.balanceAfter, reason: r.reason, dateTime: new Date(r.date + (r.cat === 'initial' ? 'T00:00:00.000Z' : 'T09:00:00.000Z')), createdAt: new Date(), updatedAt: new Date() }; });
   let ins = 0; for (let i = 0; i < docs.length; i += 2000) { await Tx.insertMany(docs.slice(i, i + 2000), { ordered: false }); ins += Math.min(2000, docs.length - i); }
   console.log(`APPLIED -> students upserted ${sBulk.length}, old txns deleted ${del}, new txns inserted ${ins}`);
+  // SPA summary for the web-app SPA tab (display only; SP itself is in the ledger above).
+  const Spa = sak.collection('spaprogresses');
+  const spaOps = spaSummary.map((s) => ({ updateOne: { filter: { email: s.email },
+    update: { $set: { ...s, activity: 'Activity 1: Linear Algebra', updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, upsert: true } }));
+  for (let i = 0; i < spaOps.length; i += 1000) await Spa.bulkWrite(spaOps.slice(i, i + 1000), { ordered: false });
+  console.log(`SPA -> spaprogresses upserted ${spaOps.length}`);
   // RECONCILE: the new ledger is the COMPLETE source of truth — all current SP is
   // rubric-generated (initial/attendance/poll only; no admin/discretionary txns
   // exist). Any student NOT in the new ledger must be cleared so the leaderboard
