@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
-import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
+import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL, CHALLENGE_JOB_INTERVAL_MS } from './config.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
@@ -66,6 +66,61 @@ global.offlineStudents = [
     status: 'excused',
     internshipStartDate: new Date(),
     surveyCompleted: false
+  },
+  {
+    _id: '64f7b60e653198e3b56a5551',
+    name: 'Test Student 1',
+    email: 'test.student1@vled.test',
+    alternateEmail: 'test.student1.alt@vled.test',
+    totalSp: 100,
+    highestSpEver: 100,
+    status: 'active',
+    internshipStartDate: new Date(),
+    surveyCompleted: false
+  },
+  {
+    _id: '64f7b60e653198e3b56a5552',
+    name: 'Test Student 2',
+    email: 'test.student2@vled.test',
+    alternateEmail: 'test.student2.alt@vled.test',
+    totalSp: 120,
+    highestSpEver: 120,
+    status: 'active',
+    internshipStartDate: new Date(),
+    surveyCompleted: false
+  },
+  {
+    _id: '64f7b60e653198e3b56a5553',
+    name: 'Test Student 3',
+    email: 'test.student3@vled.test',
+    alternateEmail: 'test.student3.alt@vled.test',
+    totalSp: 150,
+    highestSpEver: 150,
+    status: 'active',
+    internshipStartDate: new Date(),
+    surveyCompleted: false
+  },
+  {
+    _id: '64f7b60e653198e3b56a5554',
+    name: 'Test Student 4',
+    email: 'test.student4@vled.test',
+    alternateEmail: 'test.student4.alt@vled.test',
+    totalSp: 80,
+    highestSpEver: 80,
+    status: 'active',
+    internshipStartDate: new Date(),
+    surveyCompleted: false
+  },
+  {
+    _id: '64f7b60e653198e3b56a5555',
+    name: 'Test Student 5',
+    email: 'test.student5@vled.test',
+    alternateEmail: 'test.student5.alt@vled.test',
+    totalSp: 100,
+    highestSpEver: 100,
+    status: 'active',
+    internshipStartDate: new Date(),
+    surveyCompleted: false
   }
 ];
 global.offlineChallenges = [];
@@ -76,6 +131,9 @@ global.offlineTransactions = [
     category: 'initial',
     dateTime: new Date(Date.now() - 5*24*3600*1000),
     appliedDelta: 100,
+    balanceAfter: 100,
+    sessionLabel: 'Day 1 (Onboarding)',
+    reason: 'Initial Onboarding Points',
     description: 'Initial Onboarding Points'
   },
   {
@@ -84,6 +142,9 @@ global.offlineTransactions = [
     category: 'attendance',
     dateTime: new Date(Date.now() - 2*24*3600*1000),
     appliedDelta: 50,
+    balanceAfter: 150,
+    sessionLabel: 'Day 3 (Session)',
+    reason: 'Session Attendance Bonus',
     description: 'Session Attendance Bonus'
   }
 ];
@@ -202,8 +263,18 @@ async function getSamagamaUser(chatengineToken) {
 
 async function studentEmailFromRequest(req) {
   if (global.isOfflineMode) {
-    req.vibeData = { vibeOnbPct: 90, vibeAiPct: 80, vibeMernPct: 75 };
-    return 'nitesh@verify.com';
+    const cookies = parseCookies(req.headers.cookie || '');
+    const token = cookies.chatengine_token || req.headers['x-chatengine-token'];
+    if (token) {
+      const student = global.offlineStudents.find(s =>
+        s.email === token || s.alternateEmail === token || String(s._id) === String(token)
+      );
+      if (student) {
+        req.vibeData = { vibeOnbPct: 90, vibeAiPct: 80, vibeMernPct: 75 };
+        return student.email;
+      }
+    }
+    return null;
   }
   const cookies = parseCookies(req.headers.cookie || '');
   const data = await getSamagamaUser(cookies.chatengine_token);
@@ -484,6 +555,7 @@ api.post('/confirm', async (req, res) => {
     }
     const payload = await studentPayload(student);
     payload.vibeCourse = { onboarding: null, aiFundamentals: null, mernStack: null };
+    res.cookie('chatengine_token', student.email, { path: '/' });
     return res.json(payload);
   }
 
@@ -503,6 +575,32 @@ api.post('/confirm', async (req, res) => {
     console.error('confirm error:', err?.message);
     res.status(500).json({ error: 'Confirmation failed. Please try again.' });
   }
+});
+
+api.post('/dev/login-as', async (req, res) => {
+  if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEV_LOGIN !== '1') {
+    return res.status(403).json({ error: 'Dev login is disabled in production.' });
+  }
+
+  const { email } = req.body || {};
+  const normalized = normalizeEmail(email);
+  if (!normalized) return res.status(400).json({ error: 'Email is required' });
+
+  let student;
+  if (global.isOfflineMode) {
+    student = global.offlineStudents.find(s => normalizeEmail(s.email) === normalized || normalizeEmail(s.alternateEmail) === normalized);
+  } else {
+    student = await Student.findOne({ $or: [{ email: normalized }, { alternateEmail: normalized }] }).lean();
+  }
+
+  if (!student) {
+    return res.status(404).json({ error: `Student with email ${email} not found.` });
+  }
+
+  res.cookie('chatengine_token', student.email, { path: '/' });
+  const payload = await studentPayload(student);
+  payload.vibeCourse = { onboarding: 90, aiFundamentals: 80, mernStack: 75 };
+  res.json({ authenticated: true, profile: payload });
 });
 
 api.get('/leaderboard', async (req, res) => {
@@ -847,14 +945,17 @@ mongoose.connect(MONGO_URI).then(() => {
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
 
   // ── P2P Challenge background jobs ──────────────────────────────────────────
-  // runSettleChallengesJob → every 5 minutes (handles expiry and settlements)
-  setInterval(() => runSettleChallengesJob().catch(e => console.error('[Job:settle-challenges]', e.message)), 5 * 60 * 1000).unref?.();
-  console.log('P2P Challenge background jobs scheduled.');
+  setInterval(() => runSettleChallengesJob().catch(e => console.error('[Job:settle-challenges]', e.message)), CHALLENGE_JOB_INTERVAL_MS).unref?.();
+  console.log(`P2P Challenge background jobs scheduled (interval: ${CHALLENGE_JOB_INTERVAL_MS}ms).`);
 }).catch((error) => {
   global.isOfflineMode = true;
   console.warn('⚠️ MongoDB connection failed. Starting server in Offline/Demo mode on port:', PORT);
   console.warn(error.message);
   app.listen(PORT, () => console.log(`Spurti app running in DEMO mode at http://localhost:${PORT}/`));
+
+  // ── P2P Challenge background jobs (offline/demo mode) ───────────────────────
+  setInterval(() => runSettleChallengesJob().catch(e => console.error('[Job:settle-challenges]', e.message)), CHALLENGE_JOB_INTERVAL_MS).unref?.();
+  console.log(`P2P Challenge background jobs scheduled in offline/demo mode (interval: ${CHALLENGE_JOB_INTERVAL_MS}ms).`);
 });
 
 

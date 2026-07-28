@@ -1,34 +1,48 @@
 import Challenge from '../models/Challenge.js';
-import { settleChallenge } from '../routes/challenges.js';
+import { settleChallenge, forfeitChallenge } from '../routes/challenges.js';
 import { getSimulatedProgress } from '../services/dummyProgress.js';
 
 /**
  * Runs the check for pending challenge timeouts.
- * Challenges that have exceeded the 2-hour response window without a response
- * are marked as 'expired'.
+ * Challenges that have exceeded the response window without a response
+ * are marked as 'expired' and the challenger forfeits their wager.
  */
 export async function expirePendingChallenges() {
   const now = new Date();
-  const expiredCount = await Challenge.updateMany(
-    {
-      status: 'pending',
-      respondTimeoutAt: { $lt: now }
-    },
-    {
-      $set: { status: 'expired' },
-      $push: {
-        auditTrail: {
-          at: now,
-          actor: 'system',
-          action: 'expire',
-          detail: 'Auto-expired: 2-hour response window exceeded.'
-        }
+
+  if (global.isOfflineMode) {
+    const expired = global.offlineChallenges.filter(c =>
+      c.status === 'pending' && new Date(c.respondTimeoutAt) < now
+    );
+    for (const c of expired) {
+      try {
+        await forfeitChallenge(c);
+      } catch (err) {
+        console.error(`[Job:expire] Failed to forfeit offline challenge ${c._id}:`, err.message);
       }
     }
-  );
+    if (expired.length > 0) {
+      console.log(`[Job:expire] Auto-expired ${expired.length} pending offline challenges.`);
+    }
+    return;
+  }
 
-  if (expiredCount.modifiedCount > 0) {
-    console.log(`[Job:expire] Auto-expired ${expiredCount.modifiedCount} pending challenges.`);
+  // Find all pending challenges where respondTimeoutAt is in the past
+  const expiredChallenges = await Challenge.find({
+    status: 'pending',
+    respondTimeoutAt: { $lt: now }
+  });
+
+  for (const c of expiredChallenges) {
+    try {
+      await forfeitChallenge(c);
+    } catch (err) {
+      console.error(`[Job:expire] Failed to forfeit challenge ${c._id}:`, err.message);
+    }
+  }
+
+  if (expiredChallenges.length > 0) {
+    console.log(`[Job:expire] Auto-expired ${expiredChallenges.length} pending challenges.`);
   }
 }
 
@@ -38,6 +52,35 @@ export async function expirePendingChallenges() {
  */
 export async function resolveEndedChallenges() {
   const now = new Date();
+
+  if (global.isOfflineMode) {
+    const ended = global.offlineChallenges.filter(c =>
+      c.status === 'active' && new Date(c.endAt) < now
+    );
+    for (const c of ended) {
+      try {
+        const challengerProg = getSimulatedProgress(c._id, c.challengerId, c.topic, 1);
+        const opponentProg = getSimulatedProgress(c._id, c.opponentId, c.topic, 1);
+        c.progressFinal = {
+          challenger: challengerProg,
+          opponent: opponentProg
+        };
+        if (challengerProg > opponentProg) {
+          await settleChallenge(c, 'challenger', `Challenger won with progress: Challenger ${challengerProg} vs Opponent ${opponentProg}.`, 'auto');
+        } else if (opponentProg > challengerProg) {
+          await settleChallenge(c, 'opponent', `Opponent won with progress: Opponent ${opponentProg} vs Challenger ${challengerProg}.`, 'auto');
+        } else {
+          await settleChallenge(c, 'void', `Challenge ended in a tie: Challenger ${challengerProg} vs Opponent ${opponentProg}. Wagers returned.`, 'auto');
+        }
+      } catch (err) {
+        console.error(`[Job:resolve] Failed to settle offline challenge ${c._id}:`, err.message);
+      }
+    }
+    if (ended.length > 0) {
+      console.log(`[Job:resolve] Resolved ${ended.length} ended active offline challenges.`);
+    }
+    return;
+  }
 
   // Find all active challenges where endAt is in the past
   const endedChallenges = await Challenge.find({

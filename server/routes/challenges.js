@@ -5,6 +5,7 @@ import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
 import { authenticateStudent, validateChallengeAccess } from '../middleware/challengeMiddleware.js';
 import { getSimulatedProgress } from '../services/dummyProgress.js';
+import { CHALLENGE_RESPONSE_WINDOW_MS, CHALLENGE_MIN_DURATION_MS, CHALLENGE_MAX_DURATION_MS, CHALLENGE_DEBUG_DURATION_MS } from '../config.js';
 
 const router = express.Router();
 
@@ -65,8 +66,14 @@ export async function createChallengeTxn({ email, studentId, category, appliedDe
 
 // Helper to perform the settlement of an active challenge
 export async function settleChallenge(challenge, outcome, reason, settledBy = 'auto') {
-  const challenger = await Student.findById(challenge.challengerId);
-  const opponent = await Student.findById(challenge.opponentId);
+  let challenger, opponent;
+  if (global.isOfflineMode) {
+    challenger = global.offlineStudents.find(s => String(s._id) === String(challenge.challengerId));
+    opponent = global.offlineStudents.find(s => String(s._id) === String(challenge.opponentId));
+  } else {
+    challenger = await Student.findById(challenge.challengerId);
+    opponent = await Student.findById(challenge.opponentId);
+  }
 
   if (!challenger || !opponent) {
     challenge.status = 'void';
@@ -74,11 +81,14 @@ export async function settleChallenge(challenge, outcome, reason, settledBy = 'a
     challenge.settledAt = new Date();
     challenge.settledBy = settledBy;
     challenge.auditTrail.push({
+      at: new Date(),
       actor: 'system',
       action: 'void',
       detail: challenge.resultReason
     });
-    await challenge.save();
+    if (!global.isOfflineMode) {
+      await challenge.save();
+    }
     return;
   }
 
@@ -88,11 +98,14 @@ export async function settleChallenge(challenge, outcome, reason, settledBy = 'a
     challenge.settledAt = new Date();
     challenge.settledBy = settledBy;
     challenge.auditTrail.push({
+      at: new Date(),
       actor: settledBy === 'admin' ? 'admin' : 'system',
       action: 'void',
       detail: challenge.resultReason
     });
-    await challenge.save();
+    if (!global.isOfflineMode) {
+      await challenge.save();
+    }
     return;
   }
 
@@ -105,39 +118,67 @@ export async function settleChallenge(challenge, outcome, reason, settledBy = 'a
   const newWinnerSp = winner.totalSp + bet;
   const newLoserSp = Math.max(0, loser.totalSp - bet); // Clamp at 0 just in case
 
-  // Update Students in DB
-  await Student.updateOne(
-    { _id: winner._id },
-    {
-      $inc: { totalSp: bet },
-      $max: { highestSpEver: newWinnerSp }
-    }
-  );
-  await Student.updateOne(
-    { _id: loser._id },
-    {
-      $inc: { totalSp: -bet }
-    }
-  );
+  if (global.isOfflineMode) {
+    winner.totalSp = newWinnerSp;
+    winner.highestSpEver = Math.max(winner.highestSpEver || 0, newWinnerSp);
+    loser.totalSp = newLoserSp;
 
-  // Write SP Transactions bypassing Mongoose enum validation
-  await createChallengeTxn({
-    email: winner.email,
-    studentId: winner._id,
-    category: 'challenge_win',
-    appliedDelta: bet,
-    balanceAfter: newWinnerSp,
-    reason: `Won challenge against ${loser.name}: ${challenge.topicRef.label}`
-  });
+    global.offlineTransactions.push({
+      _id: new mongoose.Types.ObjectId().toString(),
+      email: winner.email,
+      category: 'challenge_win',
+      dateTime: new Date(),
+      appliedDelta: bet,
+      balanceAfter: newWinnerSp,
+      reason: `Won challenge against ${loser.name}: ${challenge.topicRef.label}`,
+      description: `Won challenge against ${loser.name}: ${challenge.topicRef.label}`
+    });
 
-  await createChallengeTxn({
-    email: loser.email,
-    studentId: loser._id,
-    category: 'challenge_loss',
-    appliedDelta: -bet,
-    balanceAfter: newLoserSp,
-    reason: `Lost challenge against ${winner.name}: ${challenge.topicRef.label}`
-  });
+    global.offlineTransactions.push({
+      _id: new mongoose.Types.ObjectId().toString(),
+      email: loser.email,
+      category: 'challenge_loss',
+      dateTime: new Date(),
+      appliedDelta: -bet,
+      balanceAfter: newLoserSp,
+      reason: `Lost challenge against ${winner.name}: ${challenge.topicRef.label}`,
+      description: `Lost challenge against ${winner.name}: ${challenge.topicRef.label}`
+    });
+  } else {
+    // Update Students in DB
+    await Student.updateOne(
+      { _id: winner._id },
+      {
+        $inc: { totalSp: bet },
+        $max: { highestSpEver: newWinnerSp }
+      }
+    );
+    await Student.updateOne(
+      { _id: loser._id },
+      {
+        $inc: { totalSp: -bet }
+      }
+    );
+
+    // Write SP Transactions bypassing Mongoose enum validation
+    await createChallengeTxn({
+      email: winner.email,
+      studentId: winner._id,
+      category: 'challenge_win',
+      appliedDelta: bet,
+      balanceAfter: newWinnerSp,
+      reason: `Won challenge against ${loser.name}: ${challenge.topicRef.label}`
+    });
+
+    await createChallengeTxn({
+      email: loser.email,
+      studentId: loser._id,
+      category: 'challenge_loss',
+      appliedDelta: -bet,
+      balanceAfter: newLoserSp,
+      reason: `Lost challenge against ${winner.name}: ${challenge.topicRef.label}`
+    });
+  }
 
   // Update Challenge document
   challenge.status = 'completed';
@@ -147,12 +188,85 @@ export async function settleChallenge(challenge, outcome, reason, settledBy = 'a
   challenge.settledAt = new Date();
   challenge.settledBy = settledBy;
   challenge.auditTrail.push({
+    at: new Date(),
     actor: settledBy === 'admin' ? 'admin' : 'system',
     action: 'settled',
     detail: `Winner: ${winner.name} (${outcome === 'challenger' ? challenge.progressFinal.challenger : challenge.progressFinal.opponent}), Loser: ${loser.name} (${outcome === 'challenger' ? challenge.progressFinal.opponent : challenge.progressFinal.challenger})`
   });
 
-  await challenge.save();
+  if (!global.isOfflineMode) {
+    await challenge.save();
+  }
+}
+
+export async function forfeitChallenge(challenge) {
+  const now = new Date();
+  let challenger;
+  if (global.isOfflineMode) {
+    challenger = global.offlineStudents.find(s => String(s._id) === String(challenge.challengerId));
+  } else {
+    challenger = await Student.findById(challenge.challengerId);
+  }
+
+  if (!challenger) {
+    challenge.status = 'expired';
+    challenge.auditTrail.push({
+      at: now,
+      actor: 'system',
+      action: 'expire',
+      detail: 'Auto-expired: challenger student not found.'
+    });
+    if (!global.isOfflineMode) {
+      await challenge.save();
+    }
+    return;
+  }
+
+  const bet = challenge.betAmount;
+  const newSp = Math.max(0, challenger.totalSp - bet);
+
+  if (global.isOfflineMode) {
+    challenger.totalSp = newSp;
+    global.offlineTransactions.push({
+      _id: new mongoose.Types.ObjectId().toString(),
+      email: challenger.email,
+      category: 'challenge_expired_forfeit',
+      dateTime: now,
+      appliedDelta: -bet,
+      balanceAfter: newSp,
+      reason: `Challenge invitation expired without response. Wager of ${bet} SP forfeited.`,
+      description: `Challenge invitation expired without response. Wager of ${bet} SP forfeited.`
+    });
+  } else {
+    // Update Student
+    await Student.updateOne(
+      { _id: challenger._id },
+      { $inc: { totalSp: -bet } }
+    );
+
+    // Write Forfeit Transaction bypassing schema validation
+    await createChallengeTxn({
+      email: challenger.email,
+      studentId: challenger._id,
+      category: 'challenge_expired_forfeit',
+      appliedDelta: -bet,
+      balanceAfter: newSp,
+      reason: `Challenge invitation expired without response. Wager of ${bet} SP forfeited.`
+    });
+  }
+
+  challenge.status = 'expired';
+  challenge.settledAt = now;
+  challenge.auditTrail.push({
+    at: now,
+    actor: 'system',
+    action: 'expire',
+    detail: `Auto-expired: response window exceeded. Challenger forfeited ${bet} SP.`
+  });
+
+  if (!global.isOfflineMode) {
+    await challenge.save();
+  }
 }
 
 // ─── ENDPOINTS ──────────────────────────────────────────────────────────────
@@ -305,7 +419,7 @@ router.post('/', authenticateStudent, async (req, res) => {
       return res.status(400).json({ error: `You only have ${availableSp} available SP (Wager requires ${bet} SP).` });
     }
     const requestedAt = new Date();
-    const respondTimeoutAt = new Date(requestedAt.getTime() + 2 * 60 * 60 * 1000);
+    const respondTimeoutAt = new Date(requestedAt.getTime() + CHALLENGE_RESPONSE_WINDOW_MS);
     const topicLabels = { vibe_course: 'Vibe Course Progress', matrix_questions: 'Matrix Questions', poll_accuracy: 'Poll Accuracy' };
     const challenge = {
       _id: new mongoose.Types.ObjectId().toString(),
@@ -404,7 +518,7 @@ router.post('/', authenticateStudent, async (req, res) => {
     };
 
     const requestedAt = new Date();
-    const respondTimeoutAt = new Date(requestedAt.getTime() + 2 * 60 * 60 * 1000); // 2 hours
+    const respondTimeoutAt = new Date(requestedAt.getTime() + CHALLENGE_RESPONSE_WINDOW_MS); // 2 hours
 
     const challenge = new Challenge({
       challengerId: req.student._id,
@@ -551,7 +665,7 @@ router.get('/mine', authenticateStudent, async (req, res) => {
 
 // GET /api/challenges/:id
 router.get('/:id', authenticateStudent, validateChallengeAccess, async (req, res) => {
-  const c = req.challenge.toObject();
+  const c = typeof req.challenge.toObject === 'function' ? req.challenge.toObject() : { ...req.challenge };
   const now = Date.now();
 
   if (c.status === 'pending') {
@@ -594,8 +708,10 @@ router.post('/:id/accept', authenticateStudent, validateChallengeAccess, async (
     }
 
     const startAt = new Date();
-    const durationDays = 3;
-    const endAt = new Date(startAt.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    const diffTime = Math.abs(new Date(challenge.topicRef.windowEnd) - new Date(challenge.topicRef.windowStart));
+    const durationDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 3;
+    const activeMs = CHALLENGE_DEBUG_DURATION_MS !== null ? CHALLENGE_DEBUG_DURATION_MS : (durationDays * 24 * 60 * 60 * 1000);
+    const endAt = new Date(startAt.getTime() + activeMs);
 
     challenge.status = 'active';
     challenge.respondedAt = startAt;
@@ -665,7 +781,8 @@ router.post('/:id/accept', authenticateStudent, validateChallengeAccess, async (
     // Reconstruct duration days from topicRef windowEnd setting
     const diffTime = Math.abs(challenge.topicRef.windowEnd - challenge.topicRef.windowStart);
     const durationDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 3;
-    const endAt = new Date(startAt.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    const activeMs = CHALLENGE_DEBUG_DURATION_MS !== null ? CHALLENGE_DEBUG_DURATION_MS : (durationDays * 24 * 60 * 60 * 1000);
+    const endAt = new Date(startAt.getTime() + activeMs);
 
     challenge.status = 'active';
     challenge.respondedAt = startAt;

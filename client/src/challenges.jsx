@@ -62,7 +62,7 @@ function useDebounce(fn, delay) {
 }
 
 // ─── ACTIVE CHALLENGES WIDGET (Main Tab Screen) ──────────────────────────────
-export function ActiveChallengesWidget({ onViewChallenge, onStartChallenge }) {
+export function ActiveChallengesWidget({ student, onViewChallenge, onStartChallenge }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -212,10 +212,10 @@ export function ActiveChallengesWidget({ onViewChallenge, onStartChallenge }) {
               </thead>
               <tbody>
                 {history.map(c => {
-                  const isChallenger = c.challengerEmail === profile.email;
+                  const isChallenger = c.challengerEmail === student.email;
                   const opponentName = isChallenger ? c.opponentName : c.challengerName;
                   const outcome = c.status === 'completed'
-                    ? (c.winnerId && c.winnerId.toString() === profile._id?.toString() || c.winnerId === profile._id ? 'Won' : 'Lost')
+                    ? (String(c.winnerId) === String(student._id) ? 'Won' : 'Lost')
                     : c.status.toUpperCase();
 
                   const outcomeStyle = outcome === 'Won'
@@ -377,8 +377,23 @@ export function ChallengeBrowser({ onClose, studentSp }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!selectedTopic) {
+      alert('Please select a topic for the challenge (Step 1).');
+      return;
+    }
+    if (!selectedPeer) {
+      alert('Please select an opponent peer (Step 2). Make sure to click their name from the search suggestions.');
+      return;
+    }
     const wager = Number(betAmount);
-    if (!selectedTopic || !selectedPeer || isNaN(wager) || wager < 1 || wager > availableSp) return;
+    if (isNaN(wager) || wager < 1) {
+      alert('Wager must be at least 1 SP.');
+      return;
+    }
+    if (wager > availableSp) {
+      alert(`Wager exceeds your available SP balance (${availableSp} SP).`);
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -534,7 +549,7 @@ export function ChallengeBrowser({ onClose, studentSp }) {
           <button
             type="submit"
             className="primary"
-            disabled={submitting || !selectedTopic || !selectedPeer || Number(betAmount) < 1 || Number(betAmount) > availableSp}
+            disabled={submitting}
           >
             {submitting ? 'Sending Request...' : 'Issue Challenge'}
           </button>

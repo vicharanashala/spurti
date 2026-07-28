@@ -8,14 +8,27 @@
  */
 
 import mongoose from 'mongoose';
-import { getStudentFromRequest } from './auth.js';
+import { getStudentFromRequest, parseCookies } from './auth.js';
 import Challenge from '../models/Challenge.js';
 
 // ─── 1. authenticateStudent ───────────────────────────────────────────────────
 export async function authenticateStudent(req, res, next) {
   if (global.isOfflineMode) {
-    req.student = global.offlineStudents.find(s => s.email === 'nitesh@verify.com');
-    return next();
+    const cookies = parseCookies(req.headers.cookie || '');
+    const token = cookies.chatengine_token || req.headers['x-chatengine-token'];
+    if (token) {
+      const student = global.offlineStudents.find(s =>
+        s.email === token || s.alternateEmail === token || String(s._id) === String(token)
+      );
+      if (student) {
+        req.student = student;
+        return next();
+      }
+    }
+    return res.status(401).json({
+      error: 'Authentication required. Please log in.',
+      code: 'UNAUTHENTICATED'
+    });
   }
 
   // DEV ONLY — bypass Samagama auth in non-production environments when the

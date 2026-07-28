@@ -134,6 +134,44 @@ function Landing({ config, onStudent }) {
               <a className="primary link-button" href="/">Go to Samagama Login</a>
             </div>
           )}
+          {/* Dev Quick Login Helper (for local testing) */}
+          <div style={{ marginTop: 24, padding: 16, background: 'rgba(255, 255, 255, 0.05)', borderRadius: 8, border: '1px dashed var(--line)', maxWidth: 480 }}>
+            <strong style={{ fontSize: 13, color: 'var(--muted)', display: 'block', marginBottom: 8 }}>Dev Quick Login (Local Testing):</strong>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {[
+                { name: 'Student 1', email: 'test.student1@vled.test' },
+                { name: 'Student 2', email: 'test.student2@vled.test' },
+                { name: 'Student 3', email: 'test.student3@vled.test' },
+                { name: 'Nitesh', email: 'nitesh@verify.com' }
+              ].map(student => (
+                <button
+                  key={student.email}
+                  className="secondary"
+                  style={{ padding: '6px 10px', fontSize: 12, minHeight: 'auto' }}
+                  onClick={async () => {
+                    try {
+                      const res = await fetch(`${API}/dev/login-as`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: student.email })
+                      });
+                      if (res.ok) {
+                        const data = await res.json();
+                        onStudent(data.profile);
+                      } else {
+                        const err = await res.json();
+                        alert('Dev login failed: ' + (err.error || 'unknown error'));
+                      }
+                    } catch (err) {
+                      alert('Network error during dev login');
+                    }
+                  }}
+                >
+                  {student.name}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </section>
       {config.allowStudentSearch && searchOpen && <SearchModal onClose={() => setSearchOpen(false)} onStudent={onStudent} />}
@@ -327,9 +365,9 @@ function StudentView({ profile, onBack }) {
               onClose={() => setChallengeScreen('widget')}
             />
           )}
-          {/* Default sub-screen: active challenges widget */}
           {challengeScreen === 'widget' && (
             <ActiveChallengesWidget
+              student={student}
               onViewChallenge={(id) => { setViewingChallengeId(id); setChallengeScreen('detail'); }}
               onStartChallenge={() => setChallengeScreen('browser')}
             />
@@ -704,7 +742,9 @@ function SpTrendChart({ transactions }) {
     return () => obs.disconnect();
   }, []);
 
-  if (!transactions || transactions.length === 0) {
+  // Filter out transactions with invalid balanceAfter to prevent NaN in SVG paths
+  const validTransactions = transactions.filter(tx => Number.isFinite(Number(tx.balanceAfter)));
+  if (validTransactions.length === 0) {
     return (
       <div style={{ color: 'var(--muted)', fontSize: 13, paddingTop: 8 }}>
         SP trend data will appear here once transactions are recorded.
@@ -712,26 +752,26 @@ function SpTrendChart({ transactions }) {
     );
   }
 
+  const spValues = validTransactions.map(tx => Number(tx.balanceAfter) || 0);
+  const minSP = Math.min(...spValues);
+  const maxSP = Math.max(...spValues);
+  const spRange = maxSP - minSP || 1;
+
   const PAD = { top: 12, right: 16, bottom: 36, left: 44 };
   const H = 180;
   const W = 560; // SVG internal coordinate width (viewBox)
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top - PAD.bottom;
 
-  const spValues = transactions.map(tx => Number(tx.balanceAfter) || 0);
-  const minSP = Math.min(...spValues);
-  const maxSP = Math.max(...spValues);
-  const spRange = maxSP - minSP || 1;
-
-  const pts = transactions.map((tx, i) => ({
-    x: PAD.left + (transactions.length === 1 ? innerW / 2 : (i / (transactions.length - 1)) * innerW),
+  const pts = validTransactions.map((tx, i) => ({
+    x: PAD.left + (validTransactions.length === 1 ? innerW / 2 : (i / (validTransactions.length - 1)) * innerW),
     y: PAD.top + innerH - ((Number(tx.balanceAfter) - minSP) / spRange) * innerH,
     tx
   }));
 
   // When there is only one data point, a bare 'M x,y' path is invisible.
   // Draw a short horizontal segment centred on the single point instead.
-  const linePath = transactions.length === 1
+  const linePath = validTransactions.length === 1
     ? `M${(pts[0].x - 20).toFixed(1)},${pts[0].y.toFixed(1)} L${(pts[0].x + 20).toFixed(1)},${pts[0].y.toFixed(1)}`
     : pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
 
@@ -752,7 +792,7 @@ function SpTrendChart({ transactions }) {
 
   // X-axis label density: show ~1 label per 60px of real container width
   const maxLabels = Math.max(2, Math.floor(width / 60));
-  const labelStep = Math.ceil(transactions.length / maxLabels);
+  const labelStep = Math.ceil(validTransactions.length / maxLabels);
 
   function abbreviateLabel(label = '') {
     // "Day 10 (26 May)" -> "D10", "15 May Morning" -> "15 May", long labels truncated

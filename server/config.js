@@ -63,3 +63,11 @@ export const SESSION_THRESHOLDS_MINUTES = {
 };
 
 export const SESSION_THRESHOLDS_PCT = 0.75; // default % of session duration to qualify
+
+// P2P Challenge Timers & Limits
+export const CHALLENGE_RESPONSE_WINDOW_MS = Number(process.env.CHALLENGE_RESPONSE_WINDOW_MS || 7200000); // Default: 2 hours
+export const CHALLENGE_MIN_DURATION_MS = Number(process.env.CHALLENGE_MIN_DURATION_MS || 86400000);     // Default: 1 day
+export const CHALLENGE_MAX_DURATION_MS = Number(process.env.CHALLENGE_MAX_DURATION_MS || 604800000);    // Default: 7 days
+export const CHALLENGE_JOB_INTERVAL_MS = Number(process.env.CHALLENGE_JOB_INTERVAL_MS || 300000);        // Default: 5 minutes
+export const CHALLENGE_DEBUG_DURATION_MS = process.env.CHALLENGE_DEBUG_DURATION_MS ? Number(process.env.CHALLENGE_DEBUG_DURATION_MS) : null;
+
