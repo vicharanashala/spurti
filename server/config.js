@@ -63,3 +63,9 @@ export const SESSION_THRESHOLDS_MINUTES = {
 };
 
 export const SESSION_THRESHOLDS_PCT = 0.75; // default % of session duration to qualify
+
+// Streak feature thresholds
+export const STREAK_ATTENDANCE_THRESHOLD = 85; // minimum attendance % to qualify for a streak day
+export const STREAK_POLL_THRESHOLD = 85;        // minimum poll % to qualify for a streak day
+export const STREAK_INITIAL_HEARTS = 2;          // streak savers per internship
+export const STREAK_CUTOFF_DATE = '2026-07-16'; // only students with internshipStartDate >= this get streaks
