@@ -68,6 +68,11 @@ const STAFF = new Set([
   'dled@iitrpr.ac.in', 'prakash.hegade@gmail.com',
   'sudarshansudarshan@gmail.com', 'sudarshan@iitrpr.ac.in', 'rajankrsna@gmail.com',
 ]);
+// Categories THIS script owns (fully recomputed every run) vs. discretionary
+// award rows written by the app (admin manual + peer-review FAQ) that must be
+// PRESERVED across rebuilds — never wiped (the 3d self-wipe bug).
+const OWNED_CATS = ['initial', 'attendance', 'poll'];
+const PRESERVED_CATS = ['manual', 'peer_faq'];
 
 const isMandatory = (t) => /stand|orientation/i.test(t) && !/breakout|weekend|nptel|special|support|non[- ]?mandatory/i.test(t);
 const tier = (pct) => { pct = Math.min(100, pct); return pct >= 90 ? 10 : pct >= 75 ? 5 : pct >= 50 ? 3 : 0; };
@@ -119,6 +124,23 @@ async function participants(uuid) {
     for (const e of emails) { rosterIds.add(e); if (d) vinsBy.set(e, d); }
     if (u.applicationStatus === 'rejected' || u.deletedAt) { for (const e of emails) rejectedSet.add(e); continue; }
     if (d) { internCanon.set(canon, emails); for (const e of emails) emailToCanon.set(e, canon); nameBy.set(canon, u.name || canon); }
+  }
+
+  // 1b. Preserve discretionary awards (admin manual + peer-review FAQ). This
+  //     script fully recomputes initial/attendance/poll each run; award rows the
+  //     app writes into sakshi_spurti.sptransactions must survive the rebuild,
+  //     else the nightly delete-and-reinsert erases them (the 3d self-wipe). We
+  //     fold their deltas into each student's running balance and re-point
+  //     balanceAfter below, but never delete/recreate them — so awardedBy,
+  //     createdAt and other metadata are kept intact.
+  const preservedByCanon = new Map(); // canon email -> [{ _id, date, order, cat, delta, reason }]
+  for (const t of await sak.collection('sptransactions').find({ category: { $in: PRESERVED_CATS } }).toArray()) {
+    const e = String(t.email || '').toLowerCase().trim(); if (!e) continue;
+    const canon = emailToCanon.get(e) || e;
+    const date = dstr(t.dateTime) || dstr(t.createdAt) || TODAY;
+    const delta = Number(typeof t.appliedDelta === 'number' ? t.appliedDelta : t.deltaValue) || 0;
+    if (!preservedByCanon.has(canon)) preservedByCanon.set(canon, []);
+    preservedByCanon.get(canon).push({ _id: t._id, date, order: 3, cat: t.category, delta, reason: t.reason || '' });
   }
 
   // 2. mandatory first-instance per day + official window
@@ -185,6 +207,7 @@ async function participants(uuid) {
     const best = new Map();
     for (const e of info.emails) { const o = students.get(e); if (!o) continue; if (info.name === cand && o.name && !o.name.includes('@')) info.name = o.name; for (const r of o.rows) { if (r.date < info.start) continue; const k = r.date + '|' + r.cat; const cur = best.get(k); if (!cur || r.delta > cur.delta) best.set(k, r); } }
     const rows = [{ date: info.start, order: 0, cat: 'initial', delta: 100, reason: `Base Spurti Points (100) credited on internship start date ${info.start}.` }, ...best.values()];
+    for (const p of (preservedByCanon.get(cand) || [])) rows.push(p); // fold discretionary awards into the running balance
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
     finalBal.set(cand, bal); nameByCanon.set(cand, info.name);
@@ -225,14 +248,17 @@ async function participants(uuid) {
   }
   for (let i = 0; i < sBulk.length; i += 1000) await Students.bulkWrite(sBulk.slice(i, i + 1000), { ordered: false });
   const idMap = new Map(); for (const s of await Students.find({ email: { $in: emails } }, { projection: { email: 1 } }).toArray()) idMap.set(s.email, s._id);
-  // replace transactions
-  let del = 0; for (let i = 0; i < emails.length; i += 500) { const r = await Tx.deleteMany({ email: { $in: emails.slice(i, i + 500) } }); del += r.deletedCount; }
-  const docs = ledger.map((r) => { const idx = r.reason.indexOf(': '); return { email: r.email, studentId: idMap.get(r.email), category: r.cat, sessionLabel: r.cat === 'initial' ? '' : (idx > 0 ? r.reason.slice(0, idx) : ''), deltaMode: 'absolute', deltaValue: r.delta, appliedDelta: r.delta, balanceAfter: r.balanceAfter, reason: r.reason, dateTime: new Date(r.date + (r.cat === 'initial' ? 'T00:00:00.000Z' : 'T09:00:00.000Z')), createdAt: new Date(), updatedAt: new Date() }; });
+  // replace ONLY the categories this script owns; discretionary award rows are kept in place.
+  let del = 0; for (let i = 0; i < emails.length; i += 500) { const r = await Tx.deleteMany({ email: { $in: emails.slice(i, i + 500) }, category: { $in: OWNED_CATS } }); del += r.deletedCount; }
+  const docs = ledger.filter((r) => !r._id).map((r) => { const idx = r.reason.indexOf(': '); return { email: r.email, studentId: idMap.get(r.email), category: r.cat, sessionLabel: r.cat === 'initial' ? '' : (idx > 0 ? r.reason.slice(0, idx) : ''), deltaMode: 'absolute', deltaValue: r.delta, appliedDelta: r.delta, balanceAfter: r.balanceAfter, reason: r.reason, dateTime: new Date(r.date + (r.cat === 'initial' ? 'T00:00:00.000Z' : 'T09:00:00.000Z')), createdAt: new Date(), updatedAt: new Date() }; });
   let ins = 0; for (let i = 0; i < docs.length; i += 2000) { await Tx.insertMany(docs.slice(i, i + 2000), { ordered: false }); ins += Math.min(2000, docs.length - i); }
-  console.log(`APPLIED -> students upserted ${sBulk.length}, old txns deleted ${del}, new txns inserted ${ins}`);
+  // re-point balanceAfter on preserved award rows (kept in place, metadata intact)
+  const presOps = ledger.filter((r) => r._id).map((r) => ({ updateOne: { filter: { _id: r._id }, update: { $set: { balanceAfter: r.balanceAfter } } } }));
+  let upd = 0; for (let i = 0; i < presOps.length; i += 1000) { const r = await Tx.bulkWrite(presOps.slice(i, i + 1000), { ordered: false }); upd += (r.modifiedCount || 0); }
+  console.log(`APPLIED -> students upserted ${sBulk.length}, owned txns deleted ${del}, new txns inserted ${ins}, awards preserved/repointed ${presOps.length} (modified ${upd})`);
   // zero students who attended but are future-start or yet-to-onboard (meter not started)
   if (zeroOut.length) {
-    let zdel = 0; for (let i = 0; i < zeroOut.length; i += 500) { const r = await Tx.deleteMany({ email: { $in: zeroOut.slice(i, i + 500) } }); zdel += r.deletedCount; }
+    let zdel = 0; for (let i = 0; i < zeroOut.length; i += 500) { const r = await Tx.deleteMany({ email: { $in: zeroOut.slice(i, i + 500) }, category: { $in: OWNED_CATS } }); zdel += r.deletedCount; }
     for (let i = 0; i < zeroOut.length; i += 1000) await Students.bulkWrite(zeroOut.slice(i, i + 1000).map((email) => ({ updateOne: { filter: { email }, update: { $set: { totalSp: 0 } } } })), { ordered: false });
     console.log(`ZEROED -> ${zeroOut.length} future-start/yet-to-onboard students (txns deleted ${zdel}, totalSp=0)`);
   }
