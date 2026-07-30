@@ -65,11 +65,49 @@ const APPLY = process.env.APPLY === '1';
 
 // 09:05 IST = 03:35 UTC. wEnd = min(first-instance-end, 11:00 IST). Per-day end overrides (IST) take precedence.
 const WINDOW_END_OVERRIDE_IST = { '2026-05-22': '11:00' };
+// From EVENING_CUTOVER the daily standup moved from the morning (09:05-11:00 IST)
+// to the evening. On/after this date, score presence in [EVENING_WSTART_IST,
+// EVENING_WEND_IST] IST (5-min join grace, mirroring the old morning window) and
+// pick the mandatory meeting that overlaps THAT window (an all-day/leftover
+// morning room must not steal the slot). Dates before the cutover are unchanged.
+const EVENING_CUTOVER = '2026-07-16';
+const EVENING_WSTART_IST = '20:05';
+const EVENING_WEND_IST = '21:00';
 const GRACE_DATE = '2026-06-06'; // exceptional: 1 min join = full att + full poll
+// Polls also moved off Zoom to the Spandan evening classroom at the evening
+// cutover. On/after this date the poll (B) score comes from `spandan_polls`
+// (correctness, percentiled to the day's top scorer); strictly before it, from
+// the frozen `zoom_polls` mirror (participation) exactly as history has it — so
+// old poll SP is never disturbed. Same date as the evening attendance cutover.
+const SPANDAN_CUTOFF = process.env.SPANDAN_CUTOFF || EVENING_CUTOVER;
 const STAFF = new Set([
   'dled@iitrpr.ac.in', 'prakash.hegade@gmail.com',
   'sudarshansudarshan@gmail.com', 'sudarshan@iitrpr.ac.in', 'rajankrsna@gmail.com',
 ]);
+
+// ── SPA → SP (peer-teaching endorsement points; Pattern A: rubric-recomputed) ──
+// SP for the SPA activity, scored here alongside attendance/poll so it is
+// regenerated every rebuild (wipe-safe by construction — no preserved category).
+// Only VALIDATED endorsements count (status approved|audit_passed); the raw
+// act_spa_transactions.deltaSPA ledger is a runaway compounding value and is
+// never used. Two capped tracks + a one-time integrity penalty on current SP.
+// Source: act_spa_endorsements + act_spa_transactions (mirrored 6-hourly).
+const SPA_LEARN_UNIT = 5, SPA_LEARN_CAP = 50;   // +5 SP / validated question learned, cap 50 → max 250
+const SPA_TEACH_UNIT = 8, SPA_TEACH_CAP = 30;   // +8 SP / validated peer taught,     cap 30 → max 240
+const SPA_FRAUD_RATE = 0.5, SPA_AUDIT_RATE = 0.2;
+const SPA_GOOD = ['approved', 'audit_passed'];
+
+// ── Query answering → SP (Pattern A: rubric-recomputed) ──────────────────────
+// +5 SP per DISTINCT peer query a student answered (from
+// act_query_reviews.peer.submittedAnswerHistory), self-answers excluded, no cap.
+// Answering only — asking a question earns nothing.
+const QUERY_UNIT = 5;
+
+// ── PRESERVED categories — NOT recomputable from Zoom source, so they must survive
+// the delete-and-rebuild (else the wipe erases them every run). 'manual' = ViBe/
+// standup commitment SP (stake debits + wins) AND admin manual awards; 'peer_faq' =
+// peer-review FAQ awards. We fold their deltas back into each student's balance.
+const PRESERVED_CATS = ['manual', 'peer_faq'];
 
 const isMandatory = (t) => /stand|orientation/i.test(t) && !/breakout|weekend|nptel|special|support|non[- ]?mandatory/i.test(t);
 const tier = (pct) => { pct = Math.min(100, pct); return pct >= 90 ? 10 : pct >= 75 ? 5 : pct >= 50 ? 3 : 0; };
@@ -116,16 +154,53 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   const byDate = {}; for (const m of meetings) (byDate[m.date] = byDate[m.date] || []).push(m);
   const sessions = [];
   for (const date of Object.keys(byDate).sort()) {
-    const first = byDate[date].filter((m) => isMandatory(m.topic) && (m.participantsCount || 0) >= 10).sort((a, b) => new Date(a.startTime) - new Date(b.startTime))[0];
-    if (!first) continue;
-    const wStart = utcFromISTDate(date, '09:05');
-    const wEnd = WINDOW_END_OVERRIDE_IST[date] ? utcFromISTDate(date, WINDOW_END_OVERRIDE_IST[date]) : Math.min(new Date(first.endTime).getTime(), utcFromISTDate(date, '11:00'));
+    const mandatory = byDate[date].filter((m) => isMandatory(m.topic) && (m.participantsCount || 0) >= 10);
+    if (!mandatory.length) continue;
+    let first, wStart, wEnd;
+    if (date >= EVENING_CUTOVER) {
+      // evening standup: fixed [20:05, 21:00] IST window; pick the mandatory meeting
+      // that overlaps it most so a leftover all-day/morning room can't steal the slot.
+      wStart = utcFromISTDate(date, EVENING_WSTART_IST);
+      const wCap = utcFromISTDate(date, EVENING_WEND_IST);
+      const scored = mandatory.map((m) => {
+        const ms = new Date(m.startTime).getTime(), me = new Date(m.endTime).getTime();
+        return { m, ov: Math.max(0, Math.min(me, wCap) - Math.max(ms, wStart)) };
+      }).sort((a, b) => b.ov - a.ov)[0];
+      if (!scored || scored.ov <= 0) continue; // no mandatory meeting overlaps the evening window
+      first = scored.m;
+      wEnd = Math.min(new Date(first.endTime).getTime(), wCap);
+    } else {
+      first = mandatory.sort((a, b) => new Date(a.startTime) - new Date(b.startTime))[0];
+      wStart = utcFromISTDate(date, '09:05');
+      wEnd = WINDOW_END_OVERRIDE_IST[date] ? utcFromISTDate(date, WINDOW_END_OVERRIDE_IST[date]) : Math.min(new Date(first.endTime).getTime(), utcFromISTDate(date, '11:00'));
+    }
     sessions.push({ date, uuid: first._id, topic: first.topic, wStart, wEnd, label: dayLabel(first.topic) });
   }
 
   // 3. per-student per-session attendance (A) + poll (B), all from the mirror
   const students = new Map(); // email -> { name, firstAtt, rows:[{date,order,cat,delta,reason}] }
   const touch = (email, name) => { const e = email.toLowerCase().trim(); if (!students.has(e)) students.set(e, { name: name || e, firstAtt: null, rows: [] }); const o = students.get(e); if (name && !name.includes('@')) o.name = name; return o; };
+
+  // Spandan evening-poll mirror (Day-N sessions >= SPANDAN_CUTOFF), keyed by date.
+  // Poll (B) here is correctness-based, percentiled to the day's TOP scorer:
+  // pct = pointsEarned / dayTopPoints * 100, then the same 10/5/3/0 band ladder.
+  const spandanByDate = new Map();
+  for (const sp of await sak.collection('spandan_polls').find({ date: { $gte: SPANDAN_CUTOFF } }).toArray()) {
+    const prev = spandanByDate.get(sp.date);
+    if (!prev || (sp.studentCount || 0) > (prev.studentCount || 0)) spandanByDate.set(sp.date, sp); // one Day-N/day; keep the fullest
+  }
+  const scoreSpandanPoll = (sp, label) => {
+    const top = sp.topPoints || (sp.students || []).reduce((mx, x) => Math.max(mx, x.pointsEarned || 0), 0);
+    for (const x of sp.students || []) {
+      const e = String(x.email || '').toLowerCase().trim(); if (!e) continue;
+      const pct = top ? Math.round((x.pointsEarned || 0) / top * 1000) / 10 : 0;
+      const d = tier(pct);
+      // Short bank message: conveys correctness-based + relative-to-day-top in one line.
+      touch(e).rows.push({ date: sp.date, order: 2, cat: 'poll', delta: d,
+        reason: `${label} (${ddmon(sp.date)}): ${pct}% of day's top poll score -> ${d > 0 ? '+' : ''}${d} SP (correctness-based).` });
+    }
+  };
+
   for (const s of sessions) {
     const winMin = Math.round((s.wEnd - s.wStart) / 60000);
     // attendance via zoom_attendance mirror (firstJoin/lastLeave), clipped to window
@@ -146,21 +221,95 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       touch(e, v.name).rows.push({ date: s.date, order: 1, cat: 'attendance', delta: d, reason: `${s.label} (${ddmon(s.date)}): present ${mins} of ${winMin} min (${pct}%) within official ${istHHMM(s.wStart)}-${istHHMM(s.wEnd)} IST window -> ${d > 0 ? '+' : ''}${d} SP.` });
       const o = students.get(e); if (!o.firstAtt || s.date < o.firstAtt) o.firstAtt = s.date;
     }
-    // poll participation via zoom_polls for the same instance
-    const polls = await sak.collection('zoom_polls').find({ meetingUuid: s.uuid }).toArray();
-    const totalQ = new Set(polls.map((p) => p.question)).size;
-    if (totalQ > 0) {
-      const ans = new Map(); for (const p of polls) { const e = String(p.email || '').toLowerCase().trim(); if (!e) continue; if (!ans.has(e)) ans.set(e, new Set()); if (p.answer && String(p.answer).trim()) ans.get(e).add(p.question); }
-      const present = new Set([...segByEmail.keys(), ...ans.keys()]);
-      for (const e of present) {
-        const a = (s.date === GRACE_DATE && segByEmail.has(e)) ? totalQ : (ans.get(e) || new Set()).size; const pct = Math.round(a / totalQ * 1000) / 10; const d = tier(pct);
-        touch(e).rows.push({ date: s.date, order: 2, cat: 'poll', delta: d, reason: `${s.label} (${ddmon(s.date)}): answered ${a} of ${totalQ} poll questions (${pct}%) -> ${d > 0 ? '+' : ''}${d} SP.` });
+    // poll (B): Spandan evening performance on/after the cutoff; Zoom participation before it.
+    if (s.date >= SPANDAN_CUTOFF) {
+      const sp = spandanByDate.get(s.date);
+      if (sp) { scoreSpandanPoll(sp, s.label); spandanByDate.delete(s.date); } // consumed: covered by an evening session
+    } else {
+      // poll participation via zoom_polls for the same instance
+      const polls = await sak.collection('zoom_polls').find({ meetingUuid: s.uuid }).toArray();
+      const totalQ = new Set(polls.map((p) => p.question)).size;
+      if (totalQ > 0) {
+        const ans = new Map(); for (const p of polls) { const e = String(p.email || '').toLowerCase().trim(); if (!e) continue; if (!ans.has(e)) ans.set(e, new Set()); if (p.answer && String(p.answer).trim()) ans.get(e).add(p.question); }
+        const present = new Set([...segByEmail.keys(), ...ans.keys()]);
+        for (const e of present) {
+          const a = (s.date === GRACE_DATE && segByEmail.has(e)) ? totalQ : (ans.get(e) || new Set()).size; const pct = Math.round(a / totalQ * 1000) / 10; const d = tier(pct);
+          touch(e).rows.push({ date: s.date, order: 2, cat: 'poll', delta: d, reason: `${s.label} (${ddmon(s.date)}): answered ${a} of ${totalQ} poll questions (${pct}%) -> ${d > 0 ? '+' : ''}${d} SP.` });
+        }
       }
     }
   }
 
+  // Spandan poll days with no mandatory evening session still earn poll SP (label from the Day number).
+  for (const [, sp] of spandanByDate) scoreSpandanPoll(sp, 'Day ' + sp.dayNumber);
+
+  // 3b. SPA → per-canon validated learn/teach events (dated) + integrity flags.
+  //     emailToCanon is fully built by now, so we can fold aliases correctly.
+  const spaByCanon = new Map(); // canon -> { learn:[YYYY-MM-DD...], teach:[...] }
+  const spaFlag = new Map();    // canon -> { auditFail?, fraud? }
+  const canonOf = (e) => { const k = String(e || '').toLowerCase().trim(); return emailToCanon.get(k) || k; };
+  const touchSpa = (c) => { let o = spaByCanon.get(c); if (!o) { o = { learn: [], teach: [] }; spaByCanon.set(c, o); } return o; };
+  for (const en of await sak.collection('act_spa_endorsements').find(
+        { status: { $in: SPA_GOOD } },
+        { projection: { learnerEmail: 1, teacherEmail: 1, approvedAt: 1, updatedAt: 1, createdAt: 1 } }).toArray()) {
+    const d = dstr(en.approvedAt) || dstr(en.updatedAt) || dstr(en.createdAt); if (!d) continue;
+    if (en.learnerEmail) touchSpa(canonOf(en.learnerEmail)).learn.push(d);
+    if (en.teacherEmail) touchSpa(canonOf(en.teacherEmail)).teach.push(d);
+  }
+  // Genuine fraud = net teacher_fraud_penalty + fraud_penalty_reversal < 0, with
+  // operator "Testing" rows excluded (they are demote-feature tests, all reversed).
+  for (const f of await sak.collection('act_spa_transactions').aggregate([
+        { $match: { transactionType: { $in: ['teacher_fraud_penalty', 'fraud_penalty_reversal'] }, reason: { $not: /testing/i } } },
+        { $group: { _id: { $toLower: '$email' }, net: { $sum: '$deltaSPA' } } }]).toArray()) {
+    if (f.net < 0) { const c = canonOf(f._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), fraud: true }); }
+  }
+  for (const a of await sak.collection('act_spa_transactions').aggregate([
+        { $match: { transactionType: { $in: ['audit_failure_learner_penalty', 'audit_failure_teacher_penalty'] } } },
+        { $group: { _id: { $toLower: '$email' } } }]).toArray()) {
+    const c = canonOf(a._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), auditFail: true });
+  }
+
+  // 3d. Query answering → per-canon distinct queries answered (dated). Answerer =
+  //     peer.submittedAnswerHistory (userIds); map userId→email via an act_* crosswalk,
+  //     canonicalize, and drop self-answers (answerer == asker). Non-students fall out
+  //     naturally (only canons in `candidates` get rows below).
+  const uidToEmail = new Map();
+  for (const c of ['act_query_reviews', 'act_pull_requests', 'act_cs_faq', 'act_spa_rosters']) {
+    for (const r of await sak.collection(c).find({ userId: { $ne: null }, email: { $ne: null } }, { projection: { userId: 1, email: 1 } }).toArray())
+      uidToEmail.set(String(r.userId), String(r.email).toLowerCase().trim());
+  }
+  const queryByCanon = new Map(); // canon -> [YYYY-MM-DD ...] (one per distinct query answered)
+  for (const q of await sak.collection('act_query_reviews').find(
+        { 'peer.submittedAnswerHistory.0': { $exists: true } },
+        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1 } }).toArray()) {
+    const askerId = String(q.userId);
+    const date = dstr(q.peer?.answer?.submittedAt) || dstr(q.createdAt) || dstr(q.updatedAt); if (!date) continue;
+    const seen = new Set();
+    for (let uid of (q.peer.submittedAnswerHistory || [])) {
+      uid = String(uid); if (uid === askerId || seen.has(uid)) continue; seen.add(uid);
+      const e = uidToEmail.get(uid); if (!e) continue;
+      const c = canonOf(e);
+      let arr = queryByCanon.get(c); if (!arr) { arr = []; queryByCanon.set(c, arr); }
+      arr.push(date);
+    }
+  }
+
+  // 3e. PRESERVED rows (manual/peer_faq) — read BEFORE the wipe and fold into each
+  //     student's ledger so commitment/admin SP survives the rebuild. Re-created with
+  //     the same delta/date/reason (metadata like original createdAt is not retained).
+  const preservedByCanon = new Map(); // canon -> [{ date, order, cat, delta, reason }]
+  for (const t of await sak.collection('sptransactions').find({ category: { $in: PRESERVED_CATS } }).toArray()) {
+    const e = String(t.email || '').toLowerCase().trim(); if (!e) continue;
+    const c = canonOf(e);
+    const date = dstr(t.dateTime) || dstr(t.createdAt) || TODAY;
+    const delta = Number(typeof t.appliedDelta === 'number' ? t.appliedDelta : t.deltaValue) || 0;
+    let arr = preservedByCanon.get(c); if (!arr) { arr = []; preservedByCanon.set(c, arr); }
+    arr.push({ date, order: 5, cat: t.category, delta, reason: t.reason || '' });
+  }
+
   // 4. assemble ledger, ROSTER-DRIVEN union: base 100 to every started intern.
   const ledger = []; const setAside = []; const finalBal = new Map(); const zeroOut = []; const nameByCanon = new Map();
+  const spaSummary = []; // per-canon SPA breakdown for the web-app SPA tab (spaprogresses)
   const candidates = new Map(); // identity email -> { start, emails:[..], name }
   // (a) confirmed candidates interns (incl. those who never attended). Start comes
   //     from the person's OWN record (internStart), not an alias-polluted lookup.
@@ -181,9 +330,42 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     const best = new Map();
     for (const e of info.emails) { const o = students.get(e); if (!o) continue; if (info.name === cand && o.name && !o.name.includes('@')) info.name = o.name; for (const r of o.rows) { if (r.date < info.start) continue; const k = r.date + '|' + r.cat; const cur = best.get(k); if (!cur || r.delta > cur.delta) best.set(k, r); } }
     const rows = [{ date: info.start, order: 0, cat: 'initial', delta: 100, reason: `Base Spurti Points (100) credited on internship start date ${info.start}.` }, ...best.values()];
+    // SPA rows (Pattern A): one consolidated 'spa' row per day, cumulative caps
+    // across days. These bypass the (date|cat) best-dedup by being pushed directly.
+    const spa = spaByCanon.get(cand); const flags = spaFlag.get(cand) || {};
+    let spaLearnUsed = 0, spaTeachUsed = 0;
+    if (spa) {
+      const byDay = new Map(); // date -> { learn, teach }
+      for (const d of spa.learn.slice().sort()) { if (spaLearnUsed >= SPA_LEARN_CAP) break; spaLearnUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.learn++; byDay.set(d, o); }
+      for (const d of spa.teach.slice().sort()) { if (spaTeachUsed >= SPA_TEACH_CAP) break; spaTeachUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.teach++; byDay.set(d, o); }
+      for (const [d, o] of byDay) {
+        const delta = o.learn * SPA_LEARN_UNIT + o.teach * SPA_TEACH_UNIT; if (!delta) continue;
+        const parts = []; if (o.learn) parts.push(`${o.learn} learned`); if (o.teach) parts.push(`${o.teach} taught`);
+        rows.push({ date: d, order: 3, cat: 'spa', delta, reason: `SPA (${ddmon(d)}): ${parts.join(' + ')} (validated) -> +${delta} SP.` });
+      }
+    }
+    // Integrity penalty: one-time -% of current total SP (fraud takes precedence).
+    const penRate = flags.fraud ? SPA_FRAUD_RATE : (flags.auditFail ? SPA_AUDIT_RATE : 0);
+    let spaPenalty = 0;
+    if (penRate > 0) {
+      spaPenalty = Math.round(rows.reduce((a, r) => a + r.delta, 0) * penRate);
+      if (spaPenalty > 0) rows.push({ date: TODAY, order: 9, cat: 'spa', delta: -spaPenalty,
+        reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.` });
+    }
+    // Query-answer rows: +5 per distinct peer query answered, one 'query' row per day.
+    const qDates = queryByCanon.get(cand);
+    if (qDates && qDates.length) {
+      const qByDay = new Map();
+      for (const d of qDates) qByDay.set(d, (qByDay.get(d) || 0) + 1);
+      for (const [d, n] of qByDay) rows.push({ date: d, order: 4, cat: 'query', delta: n * QUERY_UNIT,
+        reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${n * QUERY_UNIT} SP.` });
+    }
+    // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
+    for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
     finalBal.set(cand, bal); nameByCanon.set(cand, info.name);
+    if (spa || penRate > 0) spaSummary.push({ email: cand, learnValidated: spa ? spa.learn.length : 0, teachValidated: spa ? spa.teach.length : 0, learnCredited: spaLearnUsed, teachCredited: spaTeachUsed, auditFail: !!flags.auditFail, fraud: !!flags.fraud, penaltyApplied: spaPenalty });
   }
   for (const [e, o] of students) { if (STAFF.has(e) || matched.has(e) || emailToCanon.has(e)) continue; setAside.push({ email: e, name: o.name, rows: o.rows.length }); }
 
@@ -227,6 +409,12 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   const docs = ledger.map((r) => { const idx = r.reason.indexOf(': '); return { email: r.email, studentId: idMap.get(r.email), category: r.cat, sessionLabel: r.cat === 'initial' ? '' : (idx > 0 ? r.reason.slice(0, idx) : ''), deltaMode: 'absolute', deltaValue: r.delta, appliedDelta: r.delta, balanceAfter: r.balanceAfter, reason: r.reason, dateTime: new Date(r.date + (r.cat === 'initial' ? 'T00:00:00.000Z' : 'T09:00:00.000Z')), createdAt: new Date(), updatedAt: new Date() }; });
   let ins = 0; for (let i = 0; i < docs.length; i += 2000) { await Tx.insertMany(docs.slice(i, i + 2000), { ordered: false }); ins += Math.min(2000, docs.length - i); }
   console.log(`APPLIED -> students upserted ${sBulk.length}, old txns deleted ${del}, new txns inserted ${ins}`);
+  // SPA summary for the web-app SPA tab (display only; SP itself is in the ledger above).
+  const Spa = sak.collection('spaprogresses');
+  const spaOps = spaSummary.map((s) => ({ updateOne: { filter: { email: s.email },
+    update: { $set: { ...s, activity: 'Activity 1: Linear Algebra', updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, upsert: true } }));
+  for (let i = 0; i < spaOps.length; i += 1000) await Spa.bulkWrite(spaOps.slice(i, i + 1000), { ordered: false });
+  console.log(`SPA -> spaprogresses upserted ${spaOps.length}`);
   // RECONCILE: the new ledger is the COMPLETE source of truth — all current SP is
   // rubric-generated (initial/attendance/poll only; no admin/discretionary txns
   // exist). Any student NOT in the new ledger must be cleared so the leaderboard
