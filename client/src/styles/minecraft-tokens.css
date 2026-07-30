@@ -1,0 +1,351 @@
+:root {
+  --mc-redstone: #C4695C;
+  --mc-redstone-dark: #8D4A3E;
+  --mc-redstone-fleck: #D99B8F;
+  --mc-gold: #F5B342;
+  --mc-gold-dark: #C67C00;
+  --mc-gold-fleck: #FFD966;
+  --mc-emerald: #4CAF50;
+  --mc-emerald-dark: #388E3C;
+  --mc-emerald-fleck: #81C784;
+  --mc-diamond: #5B9BD5;
+  --mc-diamond-dark: #3A7BBF;
+  --mc-diamond-fleck: #89C4F4;
+  --mc-cobble: #8A8A8A;
+  --mc-cobble-dark: #5C5C5C;
+  --mc-cobble-fleck: #A8A8A8;
+
+  --mc-bevel-light: rgba(255,255,255,0.30);
+  --mc-bevel-dark: rgba(0,0,0,0.30);
+  --mc-tooltip-bg: #100010ee;
+}
+
+.mc-glow-Excellent { box-shadow: 0 0 12px rgba(91,155,213,0.6), 0 0 24px rgba(91,155,213,0.3); }
+.mc-glow-Active { box-shadow: 0 0 12px rgba(76,175,80,0.6), 0 0 24px rgba(76,175,80,0.3); }
+.mc-glow-Slowing { box-shadow: 0 0 12px rgba(196,105,92,0.5), 0 0 24px rgba(196,105,92,0.25); }
+.mc-glow-Recovery { box-shadow: 0 0 12px rgba(245,179,66,0.6), 0 0 24px rgba(245,179,66,0.3); }
+
+.mc-block {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-top: 3px solid var(--mc-bevel-light);
+  border-left: 3px solid var(--mc-bevel-light);
+  border-bottom: 3px solid var(--mc-bevel-dark);
+  border-right: 3px solid var(--mc-bevel-dark);
+  image-rendering: pixelated;
+  position: relative;
+  overflow: hidden;
+}
+
+.mc-block-sm { width: 32px; height: 32px; }
+.mc-block-md { width: 48px; height: 48px; }
+.mc-block-lg { width: 64px; height: 64px; }
+
+.mc-fleck {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 0;
+  opacity: 0.5;
+}
+
+/* Band-specific block colors */
+.mc-band-Excellent {
+  background: var(--mc-diamond);
+  box-shadow: inset 0 0 0 1px var(--mc-diamond-dark);
+}
+.mc-band-Excellent .mc-fleck { background: var(--mc-diamond-fleck); }
+
+.mc-band-Active {
+  background: var(--mc-emerald);
+  box-shadow: inset 0 0 0 1px var(--mc-emerald-dark);
+}
+.mc-band-Active .mc-fleck { background: var(--mc-emerald-fleck); }
+
+.mc-band-Slowing {
+  background: var(--mc-redstone);
+  box-shadow: inset 0 0 0 1px var(--mc-redstone-dark);
+}
+.mc-band-Slowing .mc-fleck { background: var(--mc-redstone-fleck); }
+
+.mc-band-Recovery {
+  background: var(--mc-gold);
+  box-shadow: inset 0 0 0 1px var(--mc-gold-dark);
+}
+.mc-band-Recovery .mc-fleck { background: var(--mc-gold-fleck); }
+
+.mc-band-Insufficient {
+  background: var(--mc-cobble);
+  box-shadow: inset 0 0 0 1px var(--mc-cobble-dark);
+}
+.mc-band-Insufficient .mc-fleck { background: var(--mc-cobble-fleck); }
+
+/* Tooltip style - Minecraft inventory item tooltip */
+.mc-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--mc-tooltip-bg);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 100;
+  border-top: 2px solid var(--mc-bevel-light);
+  border-left: 2px solid var(--mc-bevel-light);
+  border-bottom: 2px solid var(--mc-bevel-dark);
+  border-right: 2px solid var(--mc-bevel-dark);
+  max-width: 280px;
+  white-space: normal;
+  text-align: center;
+}
+
+.mc-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--mc-tooltip-bg);
+}
+
+/* Pixel font for band labels */
+.mc-label {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.mc-label-lg {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Band card container */
+.mc-card {
+  border: 2px solid var(--line);
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.mc-card-info {
+  display: grid;
+  gap: 4px;
+}
+
+.mc-card-info .mc-label {
+  color: var(--text);
+}
+
+.mc-card-info .mc-reason {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.4;
+  margin: 2px 0 0;
+}
+
+.mc-card-info .mc-stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.mc-card-info .mc-stat {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mc-card-info .mc-stat strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+/* History trail */
+.mc-trail {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.mc-trail-label {
+  font-size: 10px;
+  color: var(--muted);
+  margin-right: 4px;
+}
+
+/* Admin grid */
+.mc-grid-wrap {
+  display: grid;
+  gap: 16px;
+}
+
+.mc-band-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--panel);
+}
+
+.mc-band-row h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mc-band-row h3 span {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.mc-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mc-grid-item {
+  position: relative;
+  cursor: pointer;
+}
+
+.mc-filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.mc-filter-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  letter-spacing: 0.5px;
+  border: 2px solid var(--line);
+  background: var(--panel);
+  padding: 8px 12px;
+  cursor: pointer;
+  text-transform: uppercase;
+  border-top: 3px solid var(--mc-bevel-light);
+  border-left: 3px solid var(--mc-bevel-light);
+  border-bottom: 3px solid var(--mc-bevel-dark);
+  border-right: 3px solid var(--mc-bevel-dark);
+}
+
+.mc-filter-btn.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary-dark);
+}
+
+.mc-loading {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  color: var(--muted);
+  text-align: center;
+  padding: 20px;
+}
+
+.mc-dimmed {
+  filter: saturate(0.2) brightness(0.65);
+  opacity: 0.6;
+}
+
+.mc-active-block {
+  filter: saturate(1.1) brightness(1.05);
+}
+
+.mc-spectrum {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.mc-spectrum-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  position: relative;
+}
+
+.mc-spectrum-item .mc-label {
+  font-size: 7px;
+  color: var(--muted);
+  transition: color 0.2s;
+}
+
+.mc-spectrum-item.active .mc-label {
+  color: var(--text);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.mc-spectrum-item.active .mc-label-lg {
+  font-size: 10px;
+  color: var(--text);
+}
+
+.mc-spectrum-connector {
+  flex: 0 0 auto;
+  height: 4px;
+  width: 20px;
+  background: #d0d7e2;
+  margin: 0 -8px;
+  border-radius: 2px;
+  transition: background 0.3s;
+}
+
+.mc-spectrum-connector.active {
+  background: var(--primary);
+}
+
+.mc-spec-card {
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  margin-bottom: 18px;
+}
+
+.mc-spec-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.mc-spec-header h3 {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.mc-spec-reason {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 8px 0 0;
+  text-align: center;
+  line-height: 1.4;
+}
