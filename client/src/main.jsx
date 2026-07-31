@@ -85,13 +85,6 @@ function App() {
           completedKey="poll2Completed"
           onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll2Completed: true } }))}
         />
-        <SurveyModal
-          survey={config.poll3}
-          student={profile.student}
-          statusPath="/poll3/status"
-          completedKey="poll3Completed"
-          onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll3Completed: true } }))}
-        />
       </>
     );
   }
@@ -273,9 +266,9 @@ function SearchModal({ onClose, onStudent }) {
 
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
-  const [commitPhase, setCommitPhase] = useState('vibe');
   const { student } = profile;
-  const goToCommitment = ph => { setCommitPhase(ph); setTab('vibe'); };
+  const badges = useMemo(() => buildBadges(profile), [profile]);
+  const nextActions = useMemo(() => buildNextActions(profile), [profile]);
   return (
     <main className="page compact">
       <header className="topbar">
@@ -288,96 +281,12 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['vault','Vault']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
-      {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
-      {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
-      {tab === 'spa' && <SpaModule student={student} />}
+      {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
       {tab === 'vault' && <Vault student={student} />}
     </main>
-  );
-}
-
-// SPA → SP (display only). SP is scored + credited by the pipeline rubric
-// (+5 per validated question learned, +8 per validated peer taught, capped 50/30,
-// minus a one-time audit/fraud penalty) and lands in the SP Bank automatically.
-// This tab just reads the rubric's `spaprogresses` summary. Universal across cohorts.
-function SpaModule({ student }) {
-  const email = student.email;
-  const [data, setData] = useState(null);
-
-  useEffect(() => {
-    (async () => {
-      const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
-      setData(await r.json());
-    })();
-  }, [email]);
-
-  if (!data) return <section className="panel">Loading your SPA points…</section>;
-  if (!data.hasActivity) return (
-    <section className="panel empty">
-      <h2>SPA — Peer Teaching Points</h2>
-      <p className="muted">No validated SPA endorsements on record yet for <b>{data.activity}</b>. Learn a question and get endorsed, or endorse a peer — SP lands in your SP Bank automatically as each is validated.</p>
-    </section>
-  );
-
-  const { learn, teach, penalty, creditedSp, maxSp, config } = data;
-
-  return (
-    <div className="jr">
-      <section className="panel jr-intro">
-        <h2>SPA — Peer Teaching Points</h2>
-        <p className="muted">For <b>{data.activity}</b>, SP is credited to your <b>SP Bank automatically</b> as each endorsement is validated — <b>+{config.learnUnit} SP</b> per question you learn, <b>+{config.teachUnit} SP</b> per peer you teach. No claiming needed.</p>
-      </section>
-
-      <div className="jr-grid">
-        {/* Track A — Learning */}
-        <section className="jr-card phase-spa">
-          <div className="jr-head"><span className="jr-n">A</span><h3>Learning</h3><span className="jr-sp">+{learn.sp} SP</span></div>
-          <p className="jr-sub">Questions you were validly endorsed on</p>
-          <div className="jr-stats">
-            <div><strong>{learn.validated}</strong><span>validated</span></div>
-            <div><strong>{learn.credited}</strong><span>credited</span></div>
-            <div><strong>×{learn.unit}</strong><span>SP each</span></div>
-          </div>
-          {learn.validated > learn.cap && <div className="jr-splits"><span className="jr-pill amber">Capped at {learn.cap} — extra {learn.validated - learn.cap} not counted</span></div>}
-        </section>
-
-        {/* Track B — Teaching */}
-        <section className="jr-card phase-vibe">
-          <div className="jr-head"><span className="jr-n">B</span><h3>Teaching</h3><span className="jr-sp">+{teach.sp} SP</span></div>
-          <p className="jr-sub">Peers you validly endorsed</p>
-          <div className="jr-stats">
-            <div><strong>{teach.validated}</strong><span>validated</span></div>
-            <div><strong>{teach.credited}</strong><span>credited</span></div>
-            <div><strong>×{teach.unit}</strong><span>SP each</span></div>
-          </div>
-          {teach.validated > teach.cap && <div className="jr-splits"><span className="jr-pill amber">Capped at {teach.cap} — extra {teach.validated - teach.cap} not counted</span></div>}
-        </section>
-      </div>
-
-      <section className="panel">
-        <div className="panel-head"><h2>SPA SP summary</h2></div>
-        <table className="table">
-          <tbody>
-            <tr><td>Learning (Track A) — {learn.credited} × {config.learnUnit}</td><td style={{ textAlign: 'right' }}>+{learn.sp} SP</td></tr>
-            <tr><td>Teaching (Track B) — {teach.credited} × {config.teachUnit}</td><td style={{ textAlign: 'right' }}>+{teach.sp} SP</td></tr>
-            <tr><td><b>Total credited to SP Bank</b> <span className="muted">(max {maxSp})</span></td><td style={{ textAlign: 'right' }}><b>+{creditedSp} SP</b></td></tr>
-            {penalty.done && penalty.applied > 0 && (
-              <tr className="error">
-                <td>{penalty.fraud ? '⚠️ Fraud penalty' : '⚠️ Audit-failure penalty'} — −{Math.round(penalty.rate * 100)}% of current SP{penalty.at ? ` on ${new Date(penalty.at).toLocaleDateString()}` : ''}</td>
-                <td style={{ textAlign: 'right' }}>−{penalty.applied} SP</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-        <p className="muted" style={{ marginTop: 12 }}>
-          ✅ Auto-credited to your SP Bank — current balance <b>{data.totalSp} SP</b>.
-          {penalty.done && penalty.applied > 0 ? ' An integrity penalty was applied (see the debit row in your SP Bank).' : ''}
-        </p>
-      </section>
-    </div>
   );
 }
 
@@ -441,98 +350,49 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   );
 }
 
-// SP trajectory modal — the student's weekly cumulative SP vs cohort + onboarding-group
-// means (reference lines cached in TrajectorySnapshot; own line built live from the ledger).
-function TrajectoryModal({ student, onClose }) {
-  const [data, setData] = useState(null);
-  useEffect(() => {
-    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`).then(r => r.json()).then(setData);
-  }, [student.email]);
-
-  const series = data ? [
-    { key: 'you', label: 'You', color: 'var(--primary)', points: data.you, width: 3, dots: true },
-    { key: 'cohort', label: 'Cohort average', color: '#94a3b8', points: data.cohort, width: 2, dash: '5 4' },
-    { key: 'group', label: data.groupLabel ? `Your group (${data.groupLabel})` : 'Your group', color: '#8b5cf6', points: data.group, width: 2 }
-  ].filter(s => s.points && s.points.length) : [];
-
-  const weeks = data?.weeks || 10;
-  const yMax = Math.max(10, ...series.flatMap(s => s.points.map(p => p.sp)));
-  const W = 760, H = 400, padL = 52, padR = 18, padT = 18, padB = 42;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const sx = wk => padL + (weeks <= 1 ? 0 : (wk - 1) / (weeks - 1) * plotW);
-  const sy = sp => padT + (1 - sp / yMax) * plotH;
-  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(yMax * f));
-  const xTicks = Array.from({ length: weeks }, (_, i) => i + 1);
-
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal wide traj-modal" onClick={e => e.stopPropagation()}>
-        <div className="modal-head">
-          <div>
-            <p className="eyebrow">Your trajectory</p>
-            <h2>SP over your internship — you vs cohort</h2>
-          </div>
-          <button className="secondary" onClick={onClose}>Close</button>
-        </div>
-        {!data ? <p className="muted">Loading…</p> : series.length === 0 ? (
-          <p className="muted">Not enough data yet — check back after your first week.</p>
-        ) : (
-          <>
-            <div className="traj-legend">
-              {series.map(s => <span key={s.key} className="traj-key"><i style={{ background: s.color }} />{s.label}</span>)}
-            </div>
-            <div className="traj-chart">
-              <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="SP trajectory chart">
-                {yTicks.map(v => (
-                  <g key={v}>
-                    <line x1={padL} y1={sy(v)} x2={W - padR} y2={sy(v)} className="traj-grid" />
-                    <text x={padL - 8} y={sy(v) + 4} textAnchor="end" className="traj-axis">{v}</text>
-                  </g>
-                ))}
-                {xTicks.map(w => <text key={w} x={sx(w)} y={H - padB + 20} textAnchor="middle" className="traj-axis">W{w}</text>)}
-                <text x={padL + plotW / 2} y={H - 5} textAnchor="middle" className="traj-axis-title">Weeks since you joined</text>
-                {series.map(s => (
-                  <g key={s.key}>
-                    <polyline points={s.points.map(p => `${sx(p.week)},${sy(p.sp)}`).join(' ')}
-                      fill="none" stroke={s.color} strokeWidth={s.width} strokeDasharray={s.dash || ''}
-                      strokeLinejoin="round" strokeLinecap="round" />
-                    {s.dots && s.points.map(p => <circle key={p.week} cx={sx(p.week)} cy={sy(p.sp)} r="3.5" fill={s.color} />)}
-                  </g>
-                ))}
-              </svg>
-            </div>
-            <p className="muted traj-foot">Cumulative SP, aligned to each student's own join week so everyone is compared fairly regardless of start date.{data.computedAt ? ` Cohort lines updated ${new Date(data.computedAt).toLocaleDateString()}.` : ''}</p>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function StudentPulse({ profile }) {
-  const { student, cohort, transactions } = profile;
-  const [showTraj, setShowTraj] = useState(false);
+function StudentPulse({ profile, badges, nextActions }) {
+  const { student, cohort, attendance, polls, transactions } = profile;
+  const qualified = attendance.filter(a => a.qualified).length;
+  const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
+  const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
   return (
-    <>
-      <section className="pulse-grid">
-        <div className="pulse-card progress-card">
-          <span>Standing</span>
-          <strong>Rank {student.rank}</strong>
-          <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP to enter Top 50.`}</p>
-          <div className="compare-list">
-            <b>Cohort avg: {cohort.averageSp}</b>
-            <b>Top 50: {cohort.top50Cutoff ?? '—'}</b>
-            <b>Top 10: {cohort.top10Cutoff ?? '—'}</b>
-          </div>
+    <section className="pulse-grid">
+      <div className="pulse-card progress-card">
+        <span>Standing</span>
+        <strong>Rank {student.rank}</strong>
+        <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP needed to enter Top 50.`}</p>
+        <p>{cohort.pointsToNextRank === 0 ? 'You are leading your comparison group.' : `${cohort.pointsToNextRank} SP needed for next rank.`}</p>
+      </div>
+      <div className="pulse-card">
+        <span>Cohort comparison</span>
+        <div className="compare-list">
+          <b>Your SP: {student.totalSp}</b>
+          <b>Cohort avg: {cohort.averageSp}</b>
+          <b>Top 50 cutoff: {cohort.top50Cutoff ?? '-'}</b>
+          <b>Top 10 cutoff: {cohort.top10Cutoff ?? '-'}</b>
         </div>
-        <button className="pulse-card pulse-clickable" onClick={() => setShowTraj(true)} title="Open full trajectory">
-          <span>SP trend <em className="expand-hint">expand ↗</em></span>
-          <Sparkline points={trend} />
-        </button>
-      </section>
-      {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
-    </>
+      </div>
+      <div className="pulse-card">
+        <span>Session health</span>
+        <div className="compare-list">
+          <b>{qualified}/{attendance.length} attendance qualified</b>
+          <b>{pollAttempted}/{pollTotal} polls attempted</b>
+        </div>
+      </div>
+      <div className="pulse-card">
+        <span>Badges</span>
+        <div className="badge-row">{badges.map(badge => <em key={badge}>{badge}</em>)}</div>
+      </div>
+      <div className="pulse-card wide-pulse">
+        <span>SP trend</span>
+        <Sparkline points={trend} />
+      </div>
+      <div className="pulse-card wide-pulse">
+        <span>What to do next</span>
+        <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
+      </div>
+    </section>
   );
 }
 
@@ -550,45 +410,38 @@ function Sparkline({ points }) {
   );
 }
 
+function buildBadges(profile) {
+  const badges = [];
+  const qualifiedPct = profile.attendance.length ? profile.attendance.filter(a => a.qualified).length / profile.attendance.length : 0;
+  const pollAttempted = profile.polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
+  const pollTotal = profile.polls.reduce((sum, p) => sum + p.totalQuestions, 0);
+  if (profile.student.rank <= 50) badges.push('Top 50');
+  if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
+  if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
+  if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
+  return badges.length ? badges : ['Getting Started'];
+}
+
+function buildNextActions(profile) {
+  const actions = [];
+  if (profile.cohort.pointsToTop50 > 0) actions.push(`Earn ${profile.cohort.pointsToTop50} more SP to enter Top 50.`);
+  if (profile.attendance.some(a => !a.qualified)) actions.push('Attend at least 75% of upcoming sessions to avoid attendance debit.');
+  if (profile.polls.some(p => p.missedQuestions > 0)) actions.push('Attempt every poll question to avoid poll debit.');
+  actions.push('Check your SP Bank after each session to understand every credit and debit.');
+  return actions.slice(0, 4);
+}
+
 function Tabs({ tab, setTab, tabs }) {
   return <nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>;
 }
 
 function SpBank({ transactions }) {
-  const [size, setSize] = useState(10);
-  // Server sends oldest→newest (sorted dateTime asc); show newest first.
-  const rows = useMemo(() => [...transactions].reverse(), [transactions]);
-  const shown = rows.slice(0, size);
-  const downloadCsv = () => {
-    const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const lines = [['Date & time', 'Credit', 'Debit', 'Balance', 'Reason'].join(',')].concat(
-      rows.map(tx => [
-        new Date(tx.dateTime).toLocaleString(),
-        tx.appliedDelta > 0 ? tx.appliedDelta : '',
-        tx.appliedDelta < 0 ? tx.appliedDelta : '',
-        tx.balanceAfter, tx.reason
-      ].map(esc).join(',')));
-    const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
-    const a = document.createElement('a');
-    a.href = url; a.download = 'sp-bank-statement.csv'; a.click();
-    URL.revokeObjectURL(url);
-  };
   return (
     <section className="panel">
-      <div className="panel-head">
-        <h2>SP Bank</h2>
-        <div className="bank-controls">
-          <label>Show
-            <select value={size} onChange={e => setSize(Number(e.target.value))}>
-              <option value={10}>10</option><option value={20}>20</option><option value={50}>50</option>
-            </select>
-          </label>
-          <button className="secondary" onClick={downloadCsv}>Download CSV</button>
-        </div>
-      </div>
+      <h2>SP Bank Statement</h2>
       <div className="bank">
         <div className="bank-header"><span>Date & time</span><span>Credit</span><span>Debit</span><span>Balance</span><span>Reason</span></div>
-        {shown.map(tx => (
+        {transactions.map(tx => (
           <div className="bank-row" key={tx._id}>
             <span>{new Date(tx.dateTime).toLocaleString()}</span>
             <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
@@ -598,7 +451,6 @@ function SpBank({ transactions }) {
           </div>
         ))}
       </div>
-      <p className="muted bank-foot">Showing {Math.min(size, rows.length)} of {rows.length} — download CSV for the full statement.</p>
     </section>
   );
 }
@@ -653,6 +505,267 @@ function Leaderboard({ rows }) {
         <tbody>{rows.map(row => <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}><td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.totalSp}</td></tr>)}</tbody>
       </table>
     </section>
+  );
+}
+
+function formatDate(date) {
+  return new Date(date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+const PLAN_DESCRIPTIONS = {
+  safe: 'Recommended for short-term commitment.',
+  growth: 'Balanced reward and commitment.',
+  diamond: 'Highest reward for committed students.'
+};
+
+function Vault({ student }) {
+  const [plans, setPlans] = useState([]);
+  const [investments, setInvestments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [planKey, setPlanKey] = useState('');
+  const [principal, setPrincipal] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [confirming, setConfirming] = useState(false);
+
+  const loadData = async () => {
+    try {
+      const [plansRes, mineRes] = await Promise.all([
+        fetch(`${API}/investments/plans`, { credentials: 'include' }),
+        fetch(`${API}/investments/mine`, { credentials: 'include' })
+      ]);
+      if (plansRes.ok) {
+        const data = await plansRes.json();
+        setPlans(data.plans || []);
+        if (!planKey && data.plans?.length) setPlanKey(data.plans[0].key);
+      }
+      if (mineRes.ok) {
+        const data = await mineRes.json();
+        setInvestments(data.investments || []);
+      }
+    } catch {
+      setError('Failed to load vault data.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadData(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const actuallySubmit = async () => {
+    setError('');
+    setSuccess('');
+    setSubmitting(true);
+    setConfirming(false);
+    try {
+      const res = await fetch(`${API}/investments`, {
+        credentials: 'include',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planKey, principal: Number(principal) })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const message = ({
+          INSUFFICIENT_BALANCE_OR_INACTIVE: 'Insufficient SP balance.',
+          ALREADY_ACTIVE: 'You already have an active investment.',
+          INVALID_PLAN: 'Please select an investment plan.',
+          BELOW_MIN_PRINCIPAL: `Minimum investment is ${minPrincipal} SP.`
+        })[data.error] || data.error || 'Failed to create investment. Please try again.';
+        setError(message);
+        return;
+      }
+      setSuccess(`Investment created successfully. ${data.investment.principal} SP locked in the ${planKey} vault.`);
+      setPrincipal('');
+      await loadData();
+    } catch {
+      setError('Network error — please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onInvestClick = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (submitting) return;
+    if (!principalValid || !selectedPlan) return;
+    setConfirming(true);
+  };
+
+  if (loading) return <section className="panel empty">Loading vault…</section>;
+
+  const active = investments.find(i => i.status === 'active');
+  const history = investments.filter(i => i.status !== 'active');
+  const selectedPlan = plans.find(p => p.key === planKey);
+  const minPrincipal = selectedPlan?.minPrincipal ?? plans[0]?.minPrincipal ?? 10;
+  const principalNum = Number(principal);
+  const principalValid = Number.isFinite(principalNum) && principalNum >= minPrincipal && principalNum <= student.totalSp;
+  const expectedProfit = (selectedPlan && principalValid)
+    ? Math.round(principalNum * selectedPlan.bonusRate)
+    : 0;
+  const expectedReturn = principalValid ? principalNum + expectedProfit : 0;
+
+  return (
+    <section className="panel">
+      <h2>SP Investment Vault</h2>
+      <p className="muted">Lock your Spurti Points to earn a bonus — but only if you attend every session during the lock period. If attendance slips, the invested SP is forfeited.</p>
+
+      {active && (
+        <div className="vault-active">
+          <div>
+            <span className="eyebrow">Active Investment</span>
+            <strong className="vault-active-plan">{active.planKey.charAt(0).toUpperCase() + active.planKey.slice(1)} Plan</strong>
+            <div className="vault-active-details">
+              <span>{active.principal} SP locked</span>
+              <span>Bonus: +{Math.round(active.bonusRate * 100)}%</span>
+              <span>Expected Return: {Math.round(active.principal * active.bonusRate) + active.principal} SP</span>
+              <span>Matures: {formatDate(active.endDate)}</span>
+            </div>
+          </div>
+          <em className="vault-status vault-status-active">active</em>
+        </div>
+      )}
+
+      {!active && (
+        <form className="vault-form" onSubmit={onInvestClick}>
+          <div className="vault-plans">
+            {plans.map(plan => (
+              <label key={plan.key} className={`vault-card ${planKey === plan.key ? 'selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="plan"
+                  value={plan.key}
+                  checked={planKey === plan.key}
+                  onChange={() => setPlanKey(plan.key)}
+                />
+                <strong>{plan.label} Plan</strong>
+                <p className="vault-card-meta">{plan.durationDays} Days · +{Math.round(plan.bonusRate * 100)}% Bonus</p>
+                <p className="vault-card-desc">{PLAN_DESCRIPTIONS[plan.key] || ''}</p>
+                <p className="vault-card-req">100% Attendance Required.</p>
+              </label>
+            ))}
+          </div>
+          <div className="search-row vault-amount-row">
+            <input
+              type="number"
+              min={minPrincipal}
+              max={student.totalSp}
+              value={principal}
+              onChange={e => setPrincipal(e.target.value)}
+              placeholder={`Amount in SP (min ${minPrincipal}, you have ${student.totalSp})`}
+            />
+            <button className="primary" type="submit" disabled={submitting || !principalValid}>
+              {submitting ? 'Investing…' : 'INVEST NOW'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {!active && selectedPlan && principalValid && (
+        <div className="vault-summary card">
+          <h3>SP Investment Calculator</h3>
+          <div className="vault-summary-rows">
+            <div><span>Selected Plan</span><strong>{selectedPlan.label}</strong></div>
+            <div><span>Investment Amount</span><strong>{principalNum} SP</strong></div>
+            <div><span>Duration</span><strong>{selectedPlan.durationDays} Days</strong></div>
+            <div><span>Attendance Requirement</span><strong>{Math.round(selectedPlan.attendanceRequirement * 100)}%</strong></div>
+            <div><span>Bonus Percentage</span><strong>{Math.round(selectedPlan.bonusRate * 100)}%</strong></div>
+            <div><span>Expected Profit</span><strong className="positive">+{expectedProfit} SP</strong></div>
+            <div><span>Expected Return</span><strong>{expectedReturn} SP</strong></div>
+          </div>
+          <p className="muted">
+            If you successfully maintain the required attendance during the investment period, you will receive <strong>{expectedReturn} SP</strong> when your investment matures.
+          </p>
+        </div>
+      )}
+
+      {confirming && selectedPlan && (
+        <VaultConfirmModal
+          plan={selectedPlan}
+          principal={principalNum}
+          expectedProfit={expectedProfit}
+          expectedReturn={expectedReturn}
+          submitting={submitting}
+          onCancel={() => setConfirming(false)}
+          onConfirm={actuallySubmit}
+        />
+      )}
+
+      {error && <p className="error">{error}</p>}
+      {success && <p className="vault-success">{success}</p>}
+
+      {investments.length > 0 && (
+        <div className="cards vault-history">
+          {history.length > 0 && <h3>History</h3>}
+          {history.map(inv => {
+            const planLabel = plans.find(p => p.key === inv.planKey)?.label || inv.planKey;
+            return (
+              <article className="card vault-history-card" key={inv._id}>
+                <div className="vault-history-head">
+                  <strong className="vault-history-plan">{planLabel.toUpperCase()} PLAN</strong>
+                  <span className={`vault-status vault-status-${inv.status}`}>{inv.status.toUpperCase()}</span>
+                </div>
+                <div className="vault-history-details">
+                  <div><span>Invested:</span> <strong>{inv.principal} SP</strong></div>
+                  {inv.status === 'completed' && (
+                    <>
+                      <div><span>Bonus Earned:</span> <strong className="positive">+{inv.bonus} SP</strong></div>
+                      <div><span>Received:</span> <strong>{inv.totalReturn} SP</strong></div>
+                      <div><span>Matured on:</span> <strong>{formatDate(inv.endDate)}</strong></div>
+                    </>
+                  )}
+                  {inv.status === 'failed' && (
+                    <div><span>Reason:</span> <strong className="negative">Attendance requirement not met.</strong></div>
+                  )}
+                  {inv.status === 'cancelled' && (
+                    <div><span>Status:</span> <strong className="neutral">Cancelled</strong></div>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+          {active && history.length === 0 && (
+            <p className="muted">No completed investments yet.</p>
+          )}
+        </div>
+      )}
+      <p className="muted vault-note">Note: Investments are automatically resolved when you visit the Vault after the maturity date. If you meet the attendance requirements, your invested SP and eligible bonus will be credited to your SP balance automatically.</p>
+    </section>
+  );
+}
+
+function VaultConfirmModal({ plan, principal, expectedProfit, expectedReturn, submitting, onCancel, onConfirm }) {
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && !submitting && onCancel()}>
+      <section className="modal vault-confirm-modal">
+        <div className="modal-head">
+          <h2>Confirm Your Investment</h2>
+          <button className="icon" onClick={onCancel} disabled={submitting} aria-label="Close">×</button>
+        </div>
+        <p className="muted" style={{ margin: 0 }}>You are about to invest:</p>
+        <p className="vault-confirm-amount"><strong>{principal} SP</strong></p>
+        <div className="vault-summary-rows">
+          <div><span>Selected Plan</span><strong>{plan.label}</strong></div>
+          <div><span>Duration</span><strong>{plan.durationDays} Days</strong></div>
+          <div><span>Attendance Requirement</span><strong>{Math.round(plan.attendanceRequirement * 100)}%</strong></div>
+          <div><span>Bonus Percentage</span><strong>{Math.round(plan.bonusRate * 100)}%</strong></div>
+          <div><span>Expected Profit</span><strong className="positive">+{expectedProfit} SP</strong></div>
+          <div><span>Expected Return</span><strong>{expectedReturn} SP</strong></div>
+        </div>
+        <div className="vault-confirm-notice">
+          <p>
+            <strong>Important Notice:</strong> Your SP will remain locked until the investment matures. If you fail to maintain the required attendance during the investment period, your investment may fail and you may lose the invested SP.
+          </p>
+        </div>
+        <div className="vault-confirm-actions">
+          <button className="secondary" type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
+          <button className="primary" type="button" onClick={onConfirm} disabled={submitting}>
+            {submitting ? 'Investing…' : 'Confirm Investment'}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
