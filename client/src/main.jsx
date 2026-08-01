@@ -70,7 +70,11 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView
+          profile={profile}
+          onBack={config.allowStudentSearch ? () => setView('landing') : null}
+          onStudentUpdate={(updatedStudent) => setProfile(prev => ({ ...prev, student: updatedStudent }))}
+        />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -264,7 +268,7 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onBack, onStudentUpdate }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
@@ -285,7 +289,7 @@ function StudentView({ profile, onBack }) {
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
-      {tab === 'vault' && <Vault student={student} />}
+      {tab === 'vault' && <Vault student={student} onStudentUpdate={onStudentUpdate} />}
     </main>
   );
 }
@@ -512,13 +516,35 @@ function formatDate(date) {
   return new Date(date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+function formatDateTime(date) {
+  if (!date) return '';
+  const d = new Date(date);
+  const datePart = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const timePart = d.toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true });
+  return `${datePart}, ${timePart}`;
+}
+
+function formatRelativeMaturity(endDate) {
+  if (!endDate) return '';
+  const now = new Date();
+  const end = new Date(endDate);
+  const sameDay = now.toDateString() === end.toDateString();
+  if (sameDay) return 'Matures today';
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  if (tomorrow.toDateString() === end.toDateString()) return 'Matures tomorrow';
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const days = Math.ceil((end.getTime() - now.getTime()) / msPerDay);
+  return `Matures in ${days} day${days === 1 ? '' : 's'}`;
+}
+
 const PLAN_DESCRIPTIONS = {
   safe: 'Recommended for short-term commitment.',
   growth: 'Balanced reward and commitment.',
   diamond: 'Highest reward for committed students.'
 };
 
-function Vault({ student }) {
+function Vault({ student, onStudentUpdate }) {
   const [plans, setPlans] = useState([]);
   const [investments, setInvestments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -543,6 +569,22 @@ function Vault({ student }) {
       if (mineRes.ok) {
         const data = await mineRes.json();
         setInvestments(data.investments || []);
+        // Refresh the header SP balance so a freshly-resolved investment
+        // (credit posted server-side during /investments/mine) reflects in
+        // the score-card without a full page reload. Fail-soft on /me.
+        if (onStudentUpdate) {
+          try {
+            const meRes = await fetch(`${API}/me`, { credentials: 'include' });
+            if (meRes.ok) {
+              const meData = await meRes.json();
+              if (meData.authenticated && meData.profile?.student) {
+                onStudentUpdate(meData.profile.student);
+              }
+            }
+          } catch {
+            // skip — header will keep its existing totalSp
+          }
+        }
       }
     } catch {
       setError('Failed to load vault data.');
@@ -611,21 +653,34 @@ function Vault({ student }) {
       <h2>SP Investment Vault</h2>
       <p className="muted">Lock your Spurti Points to earn a bonus — but only if you attend every session during the lock period. If attendance slips, the invested SP is forfeited.</p>
 
-      {active && (
-        <div className="vault-active">
-          <div>
-            <span className="eyebrow">Active Investment</span>
-            <strong className="vault-active-plan">{active.planKey.charAt(0).toUpperCase() + active.planKey.slice(1)} Plan</strong>
-            <div className="vault-active-details">
-              <span>{active.principal} SP locked</span>
-              <span>Bonus: +{Math.round(active.bonusRate * 100)}%</span>
-              <span>Expected Return: {Math.round(active.principal * active.bonusRate) + active.principal} SP</span>
-              <span>Matures: {formatDate(active.endDate)}</span>
+      {active && (() => {
+        const activeIsMatured = new Date(active.endDate) <= new Date();
+        return (
+          <div className="vault-active">
+            <div>
+              <span className="eyebrow">Active Investment</span>
+              <strong className="vault-active-plan">{active.planKey.charAt(0).toUpperCase() + active.planKey.slice(1)} Plan</strong>
+              <div className="vault-active-details">
+                <span>{active.principal} SP locked</span>
+                <span>Bonus: +{Math.round(active.bonusRate * 100)}%</span>
+                <span>Expected Return: {Math.round(active.principal * active.bonusRate) + active.principal} SP</span>
+                {activeIsMatured ? (
+                  <>
+                    <span>Matured on: {formatDateTime(active.endDate)}</span>
+                    <small className="muted vault-relative">SP will be credited shortly — resolution pending</small>
+                  </>
+                ) : (
+                  <>
+                    <span>Matures on: {formatDateTime(active.endDate)}</span>
+                    <small className="muted vault-relative">{formatRelativeMaturity(active.endDate)}</small>
+                  </>
+                )}
+              </div>
             </div>
+            <em className="vault-status vault-status-active">active</em>
           </div>
-          <em className="vault-status vault-status-active">active</em>
-        </div>
-      )}
+        );
+      })()}
 
       {!active && (
         <form className="vault-form" onSubmit={onInvestClick}>
@@ -700,6 +755,8 @@ function Vault({ student }) {
           {history.length > 0 && <h3>History</h3>}
           {history.map(inv => {
             const planLabel = plans.find(p => p.key === inv.planKey)?.label || inv.planKey;
+            const isResolved = inv.resolvedAt != null;
+            const level = isResolved ? 'RESOLVED' : 'MATURED_AWAITING_CREDIT';
             return (
               <article className="card vault-history-card" key={inv._id}>
                 <div className="vault-history-head">
@@ -708,18 +765,32 @@ function Vault({ student }) {
                 </div>
                 <div className="vault-history-details">
                   <div><span>Invested:</span> <strong>{inv.principal} SP</strong></div>
-                  {inv.status === 'completed' && (
+                  {level === 'MATURED_AWAITING_CREDIT' && (
+                    <>
+                      <div><span>Matured on:</span> <strong>{formatDateTime(inv.endDate)}</strong></div>
+                      <p className="muted">SP will be credited shortly — resolution pending</p>
+                    </>
+                  )}
+                  {level === 'RESOLVED' && inv.status === 'completed' && (
                     <>
                       <div><span>Bonus Earned:</span> <strong className="positive">+{inv.bonus} SP</strong></div>
                       <div><span>Received:</span> <strong>{inv.totalReturn} SP</strong></div>
-                      <div><span>Matured on:</span> <strong>{formatDate(inv.endDate)}</strong></div>
+                      <div><span>Invested on:</span> <strong>{formatDateTime(inv.startDate)}</strong></div>
+                      <div><span>Matured on:</span> <strong>{formatDateTime(inv.endDate)}</strong></div>
+                      <div><span>SP Credit:</span> <strong>{inv.resolvedAt ? `Done — ${formatDateTime(inv.resolvedAt)}` : 'Pending'}</strong></div>
                     </>
                   )}
-                  {inv.status === 'failed' && (
-                    <div><span>Reason:</span> <strong className="negative">Attendance requirement not met.</strong></div>
-                  )}
-                  {inv.status === 'cancelled' && (
-                    <div><span>Status:</span> <strong className="neutral">Cancelled</strong></div>
+                  {level === 'RESOLVED' && inv.status === 'failed' && (
+                    <>
+                      <div><span>Invested on:</span> <strong>{formatDateTime(inv.startDate)}</strong></div>
+                      <div><span>Resolved on:</span> <strong>{formatDateTime(inv.resolvedAt)}</strong></div>
+                      <p className="negative">
+                        {inv.attendedSessions != null && inv.requiredSessions != null
+                          ? `Failed — attendance requirement not met (${inv.attendedSessions}/${inv.requiredSessions} sessions attended)`
+                          : 'Failed — attendance requirement not met'}
+                      </p>
+                      <div><span>SP Credit:</span> <strong>0</strong></div>
+                    </>
                   )}
                 </div>
               </article>

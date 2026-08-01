@@ -772,6 +772,27 @@ if (fs.existsSync(clientDist)) {
 
 mongoose.connect(MONGO_URI).then(() => {
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
+
+  // --- Server-side investment resolver (lazy-resolution fallback) -------
+  // Closes the gap where a matured investment stays un-credited until the
+  // student next opens the Vault. Env-gated so it can be disabled without
+  // code changes. Runs at most once per hour; in-memory overlap guard.
+  if (process.env.INVESTMENT_RESOLVER_ENABLED === 'true') {
+    const RESOLVER_INTERVAL_MS = 60 * 60 * 1000;
+    let isRunning = false;
+    setInterval(async () => {
+      if (isRunning) return;
+      isRunning = true;
+      try {
+        const resolved = await resolveAllDueInvestments();
+        console.log(`investment_resolver: resolved ${resolved.length} due record(s) at ${new Date().toISOString()}`);
+      } catch (err) {
+        console.error('investment_resolver_failed', err?.message);
+      } finally {
+        isRunning = false;
+      }
+    }, RESOLVER_INTERVAL_MS);
+  }
 }).catch((error) => {
   console.error(error);
   process.exit(1);
