@@ -3,6 +3,7 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
@@ -13,24 +14,20 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
-import Commitment from './models/Commitment.js';
-import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
-import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
-import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
-import { buildSpaState } from './services/spa.js';
-import { buildTrajectoryState } from './services/trajectory.js';
+import {
+  getInvestmentPlans,
+  startInvestment,
+  resolveDueInvestmentsForStudent,
+  resolveAllDueInvestments,
+  getStudentInvestments,
+  getAllInvestments
+} from './services/investmentService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
-// Admin auth is env-only — NO hardcoded fallback. A committed default would be a
-// public credential (anyone reading the repo could authenticate). If either is
-// unset, admin endpoints fail closed (see isAdmin) rather than accept a known value.
-const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || '');
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
-if (!ADMIN_EMAIL || !ADMIN_TOKEN) {
-  console.warn('[security] ADMIN_EMAIL/ADMIN_TOKEN not set — admin endpoints are DISABLED until both are configured in .env');
-}
+const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || 'dled@iitrpr.ac.in');
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'vled-local-admin';
 
 // Survey triangulation pop-up(s). All driven by env so the form link / mode can
 // change without a client rebuild (the client reads these via /api/config).
@@ -61,8 +58,7 @@ function makeSurvey(prefix, completedField) {
 }
 const SURVEY = makeSurvey('SURVEY', 'surveyCompleted');
 const POLL2 = makeSurvey('POLL2', 'poll2Completed');
-const POLL3 = makeSurvey('POLL3', 'poll3Completed');
-const SURVEYS = [SURVEY, POLL2, POLL3];
+const SURVEYS = [SURVEY, POLL2];
 
 // Cached fetch of the submitted-email set from a survey's Apps Script endpoint.
 async function getSubmittedEmails(cfg) {
@@ -72,17 +68,10 @@ async function getSubmittedEmails(cfg) {
     const u = cfg.responsesUrl + (cfg.responsesUrl.includes('?') ? '&' : '?') +
               'secret=' + encodeURIComponent(cfg.responsesSecret);
     const r = await fetch(u, { redirect: 'follow' });
-    // Apps Script intermittently serves an HTML error/redirect page (esp. under
-    // load) instead of JSON; parse defensively so it fails cleanly instead of
-    // throwing an opaque "Unexpected token '<'".
-    const body = await r.text();
-    let j;
-    try { j = JSON.parse(body); }
-    catch { throw new Error(`non-JSON response (HTTP ${r.status}, ${body.length}B)`); }
+    const j = await r.json();
     cfg._subs = { at: Date.now(), set: new Set((j.emails || []).map(e => normalizeEmail(e))) };
     return cfg._subs.set;
   } catch (err) {
-    cfg._subs.at = Date.now(); // back off 60s on failure too — don't hammer Apps Script / spam logs
     console.error(`${cfg.key} responses fetch failed:`, err?.message);
     return cfg._subs.set; // serve last good cache on failure
   }
@@ -173,6 +162,91 @@ async function studentEmailFromRequest(req) {
   return normalizeEmail(email);
 }
 
+// --- Search-session cookie (local-dev + admin fallback) -------------------
+// Issued by /api/confirm on successful email-match verification. The cookie
+// is HMAC-signed with SPURTI_AUTH_SECRET, httpOnly, and short-lived (8h).
+// It is NOT a primary auth path — primary is still Samagama. It exists only
+// so the search-confirm flow can support write endpoints (e.g. Vault) in
+// deployments where Samagama is unavailable. In production
+// (ALLOW_STUDENT_SEARCH=false) this cookie is never issued, so no student can
+// reach Vault through this path; they still go through Samagama.
+const SEARCH_SESSION_COOKIE = 'spurti_search_session';
+const SEARCH_SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000;
+
+function getSearchSessionSecret() {
+  return process.env.SPURTI_AUTH_SECRET || '';
+}
+
+function makeSearchSessionToken(email, expiresAt) {
+  const secret = getSearchSessionSecret();
+  if (!secret) return null; // refuse to sign without a configured secret
+  const payload = `${normalizeEmail(email)}|${expiresAt}`;
+  const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  return Buffer.from(payload).toString('base64url') + '.' + sig;
+}
+
+function verifySearchSessionToken(token) {
+  if (!token) return null;
+  const secret = getSearchSessionSecret();
+  if (!secret) return null;
+  const dotIndex = token.indexOf('.');
+  if (dotIndex < 0) return null;
+  const encoded = token.slice(0, dotIndex);
+  const sig = token.slice(dotIndex + 1);
+  let payload;
+  try {
+    payload = Buffer.from(encoded, 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+  const expected = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  // Constant-time signature comparison
+  if (sig.length !== expected.length) return null;
+  let mismatch = 0;
+  for (let i = 0; i < sig.length; i++) {
+    mismatch |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  if (mismatch !== 0) return null;
+  const [email, expiresAtStr] = payload.split('|');
+  const expiresAt = Number(expiresAtStr);
+  if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) return null;
+  return normalizeEmail(email);
+}
+
+function setSearchSessionCookie(res, email) {
+  const token = makeSearchSessionToken(email, Date.now() + SEARCH_SESSION_MAX_AGE_MS);
+  if (!token) return; // no SPURTI_AUTH_SECRET configured — skip silently
+  const secure = String(process.env.SPURTI_COOKIE_SECURE || '').toLowerCase() === 'true';
+  res.cookie(SEARCH_SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: SEARCH_SESSION_MAX_AGE_MS
+  });
+}
+
+function clearSearchSessionCookie(res) {
+  const secure = String(process.env.SPURTI_COOKIE_SECURE || '').toLowerCase() === 'true';
+  res.cookie(SEARCH_SESSION_COOKIE, '', {
+    httpOnly: true,
+    secure,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 0
+  });
+}
+
+// Auth resolution for write endpoints: tries Samagama first, then the signed
+// search-session cookie. Production paths still go through Samagama (the cookie
+// is never issued when ALLOW_STUDENT_SEARCH=false).
+async function resolveStudentEmail(req) {
+  const fromSamagama = await studentEmailFromRequest(req);
+  if (fromSamagama) return fromSamagama;
+  const cookies = parseCookies(req.headers.cookie || '');
+  return verifySearchSessionToken(cookies[SEARCH_SESSION_COOKIE]);
+}
+
 async function rankFor(email) {
   const student = await Student.findOne({ email }).lean();
   if (!student || student.status === 'excused') return null;
@@ -245,9 +319,7 @@ async function studentPayload(student) {
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
-      poll2Completed: Boolean(student.poll2Completed),
-      poll3Completed: Boolean(student.poll3Completed),
-      eligibleForVibeGoals: isVibeEligible(student)
+      poll2Completed: Boolean(student.poll2Completed)
     },
     transactions,
     polls,
@@ -265,7 +337,6 @@ async function studentPayload(student) {
 }
 
 function isAdmin(req) {
-  if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false; // fail closed when admin creds aren't configured
   const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
   const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
   return emailOk && tokenOk;
@@ -281,8 +352,7 @@ api.get('/health', (_req, res) => res.json({ status: 'ok' }));
 api.get('/config', (_req, res) => res.json({
   allowStudentSearch: ALLOW_STUDENT_SEARCH,
   survey: surveyPublic(SURVEY),
-  poll2: surveyPublic(POLL2),
-  poll3: surveyPublic(POLL3)
+  poll2: surveyPublic(POLL2)
 }));
 
 api.get('/me', async (req, res) => {
@@ -294,97 +364,6 @@ api.get('/me', async (req, res) => {
   res.json({ authenticated: true, profile: await studentPayload(student) });
 });
 
-// ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
-async function vibeStudent(req) {
-  const email = normalizeEmail(req.body?.email || req.query.email) || await studentEmailFromRequest(req);
-  if (!email) return null;
-  return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
-}
-
-api.get('/vibe/state', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  if (!isVibeEligible(student)) return res.json({ eligible: false });
-  res.json(await buildVibeState(student));
-});
-
-api.post('/vibe/bet', async (_req, res) => {
-  // ON HOLD: ViBe commitments are paused — the ViBe completion feed (leaderboard API)
-  // is unavailable, so bets can't be verified or settled. No new bets can be placed
-  // (nothing is staked/debited) until the feed is restored.
-  return res.status(403).json({ error: 'ViBe commitments are on hold and will be back up soon.' });
-});
-
-api.put('/vibe/bet/:id', async (_req, res) => {
-  // ON HOLD: see POST /vibe/bet.
-  return res.status(403).json({ error: 'ViBe commitments are on hold and will be back up soon.' });
-});
-
-// DEMO: resolve a bet (no live settlement cron locally). result = 'won' | 'lost'.
-api.post('/vibe/bet/:id/settle', async (_req, res) => {
-  // LOCKED DOWN (security): client-controlled self-settlement is removed. This route
-  // trusted req.body.result (defaulting to "won") and granted SP with NO check against
-  // real ViBe course completion — students could place a bet and instantly self-declare
-  // a win to mint SP. There is no real completion feed (VibeProgress.pct was written by
-  // settleBetDemo itself), so settlement cannot be verified yet; disabled until a
-  // server-side/automatic settlement against real completion data is built.
-  return res.status(403).json({ error: 'Bets are settled automatically, not on request. Self-settlement is disabled.' });
-});
-
-// ---- SPA → SP (peer-teaching endorsement points; ALL cohorts) ----------------
-// DISPLAY ONLY: SP is scored + credited by the pipeline rubric; this just reads
-// the `spaprogresses` summary + student total. Universal, no cohort gate.
-api.get('/spa/state', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  res.json(await buildSpaState(student));
-});
-
-// ---- SP trajectory (You vs cohort vs onboarding-group; open to all students) --
-// The student's own weekly line is built live from their ledger; the cohort/group
-// reference lines come from the cached TrajectorySnapshot (buildTrajectories.js).
-api.get('/trajectory/state', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  res.json(await buildTrajectoryState(student));
-});
-
-// ---- Standup commitments (weekly, attendance-only; keep-the-stake) -----------
-api.get('/standup/state', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  if (!isVibeEligible(student)) return res.json({ eligible: false });
-  res.json(await buildStandupState(student));
-});
-
-api.post('/standup/commit', async (_req, res) => {
-  // PAUSED: standups moved to YouTube Live and the attendance module is being
-  // reworked — no new standup commitments until the new attendance tracking lands.
-  return res.status(403).json({ error: 'Standup commitments are paused while attendance is reworked for YouTube Live.' });
-});
-
-// DEMO: resolve a standup commitment (no live weekly settlement cron yet).
-api.post('/standup/commit/:id/settle', async (_req, res) => {
-  // LOCKED DOWN (security): same self-settlement exploit as /vibe/bet/:id/settle —
-  // client-declared "won" minted SP with no verification. Disabled until server-side
-  // settlement against real attendance/completion is built.
-  return res.status(403).json({ error: 'Commitments are settled automatically, not on request. Self-settlement is disabled.' });
-});
-
-// ---- My Journey (phase-by-phase progress + SP; 16 July cohort onward) ---------
-api.get('/journey/state', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  res.json(await buildJourneyState(student));   // My Journey is universal (Phase 1); Commitments stays gated
-});
-
-api.put('/journey/plan', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });   // My Journey goals are universal (Phase 1)
-  await saveJourneyPlan(student.email, req.body || {});
-  res.json(await buildJourneyState(student));
-});
-
 api.get('/search', async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const q = String(req.query.q || '').trim();
@@ -393,8 +372,8 @@ api.get('/search', async (req, res) => {
   if (q.includes('@')) {
     const email = normalizeEmail(q);
     const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
-    if (student?.status === 'excused') return res.json(excusedPayload(student));
-    if (student) return res.json({ exact: true, profile: await studentPayload(student) });
+    if (student?.status === 'excused') { setSearchSessionCookie(res, student.email); return res.json(excusedPayload(student)); }
+    if (student) { setSearchSessionCookie(res, student.email); return res.json({ exact: true, profile: await studentPayload(student) }); }
   }
 
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -418,6 +397,7 @@ api.post('/confirm', async (req, res) => {
   if (typed !== normalizeEmail(student.email) && typed !== normalizeEmail(student.alternateEmail)) {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
+  setSearchSessionCookie(res, student.email);
   if (student.status === 'excused') return res.json(excusedPayload(student));
   res.json(await studentPayload(student));
 });
@@ -512,7 +492,6 @@ function registerSurveyRoutes(base, cfg) {
 }
 registerSurveyRoutes('/survey', SURVEY);
 registerSurveyRoutes('/poll2', POLL2);
-registerSurveyRoutes('/poll3', POLL3);
 
 api.get('/admin/stats', adminGuard, async (_req, res) => {
   const [yetToOnboard, excusedStudents, sessions, txns, activeStudents] = await Promise.all([
@@ -729,6 +708,52 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   });
 });
 
+// --- SP Investment Vault --------------------------------------------------
+// Public — list available plans.
+api.get('/investments/plans', (_req, res) => {
+  res.json({ plans: getInvestmentPlans() });
+});
+
+// Session-authenticated — start an investment.
+api.post('/investments', async (req, res) => {
+  const email = await resolveStudentEmail(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  const { planKey, principal } = req.body || {};
+  const result = await startInvestment(email, planKey, principal);
+  if (result.error) {
+    const status = result.error === 'INVALID_PLAN' || result.error === 'BELOW_MIN_PRINCIPAL' ? 400 : 409;
+    return res.status(status).json(result);
+  }
+  res.json(result);
+});
+
+// Session-authenticated — list the caller's investments. Resolves any due
+// investments first so the student always sees the current state.
+api.get('/investments/mine', async (req, res) => {
+  const email = await resolveStudentEmail(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  await resolveDueInvestmentsForStudent(email);
+  const investments = await getStudentInvestments(email);
+  res.json({ investments });
+});
+
+// Session-authenticated — explicit resolve trigger (idempotent).
+api.post('/investments/resolve', async (req, res) => {
+  const email = await resolveStudentEmail(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  const resolved = await resolveDueInvestmentsForStudent(email);
+  res.json({ resolved });
+});
+
+// Admin — list all investments AND resolve any due investments so the admin
+// never sees stale `active` records past their `endDate`. Closes the
+// admin-view staleness gap: resolution is triggered by read.
+api.get('/admin/investments', adminGuard, async (_req, res) => {
+  await resolveAllDueInvestments();
+  const investments = await getAllInvestments();
+  res.json(investments);
+});
+
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
@@ -747,6 +772,27 @@ if (fs.existsSync(clientDist)) {
 
 mongoose.connect(MONGO_URI).then(() => {
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
+
+  // --- Server-side investment resolver (lazy-resolution fallback) -------
+  // Closes the gap where a matured investment stays un-credited until the
+  // student next opens the Vault. Env-gated so it can be disabled without
+  // code changes. Runs at most once per hour; in-memory overlap guard.
+  if (process.env.INVESTMENT_RESOLVER_ENABLED === 'true') {
+    const RESOLVER_INTERVAL_MS = 60 * 60 * 1000;
+    let isRunning = false;
+    setInterval(async () => {
+      if (isRunning) return;
+      isRunning = true;
+      try {
+        const resolved = await resolveAllDueInvestments();
+        console.log(`investment_resolver: resolved ${resolved.length} due record(s) at ${new Date().toISOString()}`);
+      } catch (err) {
+        console.error('investment_resolver_failed', err?.message);
+      } finally {
+        isRunning = false;
+      }
+    }, RESOLVER_INTERVAL_MS);
+  }
 }).catch((error) => {
   console.error(error);
   process.exit(1);

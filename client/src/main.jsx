@@ -17,6 +17,7 @@ function App() {
   useEffect(() => {
     if (!profile?.student) return;
     const send = () => fetch(`${API}/ping`, {
+      credentials: 'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -35,13 +36,13 @@ function App() {
     let active = true;
     async function bootstrap() {
       try {
-        const configRes = await fetch(`${API}/config`);
+        const configRes = await fetch(`${API}/config`, { credentials: 'include' });
         const nextConfig = configRes.ok ? await configRes.json() : { allowStudentSearch: true };
         if (!active) return;
         setConfig(nextConfig);
 
         if (view !== 'admin-login') {
-          const meRes = await fetch(`${API}/me`);
+          const meRes = await fetch(`${API}/me`, { credentials: 'include' });
           if (meRes.ok) {
             const data = await meRes.json();
             if (data.authenticated && data.profile && active) {
@@ -69,7 +70,11 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView
+          profile={profile}
+          onBack={config.allowStudentSearch ? () => setView('landing') : null}
+          onStudentUpdate={(updatedStudent) => setProfile(prev => ({ ...prev, student: updatedStudent }))}
+        />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -83,13 +88,6 @@ function App() {
           statusPath="/poll2/status"
           completedKey="poll2Completed"
           onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll2Completed: true } }))}
-        />
-        <SurveyModal
-          survey={config.poll3}
-          student={profile.student}
-          statusPath="/poll3/status"
-          completedKey="poll3Completed"
-          onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll3Completed: true } }))}
         />
       </>
     );
@@ -156,7 +154,7 @@ function AdminLogin({ onAdmin, onBack }) {
     setError('');
     try {
       const auth = { email, token };
-      const res = await fetch(`${API}/admin/stats`, { headers: adminHeaders(auth) });
+      const res = await fetch(`${API}/admin/stats`, { credentials: 'include', headers: adminHeaders(auth) });
       if (!res.ok) throw new Error('Forbidden');
       onAdmin(await res.json(), auth);
     } catch {
@@ -215,7 +213,7 @@ function SearchModal({ onClose, onStudent }) {
 
   const search = async () => {
     if (query.trim().length < 2) return setMessage('Type at least 2 characters.');
-    const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
+    const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`, { credentials: 'include' });
     const data = await res.json();
     if (data.excused) return onStudent(data);
     if (data.exact) return onStudent(data.profile);
@@ -225,6 +223,7 @@ function SearchModal({ onClose, onStudent }) {
 
   const confirm = async () => {
     const res = await fetch(`${API}/confirm`, {
+      credentials: 'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ studentId: selected?._id, email: confirmEmail })
@@ -269,11 +268,11 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, onBack, onStudentUpdate }) {
   const [tab, setTab] = useState('bank');
-  const [commitPhase, setCommitPhase] = useState('vibe');
   const { student } = profile;
-  const goToCommitment = ph => { setCommitPhase(ph); setTab('vibe'); };
+  const badges = useMemo(() => buildBadges(profile), [profile]);
+  const nextActions = useMemo(() => buildNextActions(profile), [profile]);
   return (
     <main className="page compact">
       <header className="topbar">
@@ -285,100 +284,13 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
-        ['journey','My Journey'],
-        ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
-        ['spa','SPA Points'],
-        ['leaderboard','Leaderboard']]} />
+      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'], ['leaderboard','Leaderboard'], ['vault','Vault']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
-      {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
-      {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
-      {tab === 'spa' && <SpaModule student={student} />}
+      {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'vault' && <Vault student={student} onStudentUpdate={onStudentUpdate} />}
     </main>
-  );
-}
-
-// SPA → SP (display only). SP is scored + credited by the pipeline rubric
-// (+5 per validated question learned, +8 per validated peer taught, capped 50/30,
-// minus a one-time audit/fraud penalty) and lands in the SP Bank automatically.
-// This tab just reads the rubric's `spaprogresses` summary. Universal across cohorts.
-function SpaModule({ student }) {
-  const email = student.email;
-  const [data, setData] = useState(null);
-
-  useEffect(() => {
-    (async () => {
-      const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
-      setData(await r.json());
-    })();
-  }, [email]);
-
-  if (!data) return <section className="panel">Loading your SPA points…</section>;
-  if (!data.hasActivity) return (
-    <section className="panel empty">
-      <h2>SPA — Peer Teaching Points</h2>
-      <p className="muted">No validated SPA endorsements on record yet for <b>{data.activity}</b>. Learn a question and get endorsed, or endorse a peer — SP lands in your SP Bank automatically as each is validated.</p>
-    </section>
-  );
-
-  const { learn, teach, penalty, creditedSp, maxSp, config } = data;
-
-  return (
-    <div className="jr">
-      <section className="panel jr-intro">
-        <h2>SPA — Peer Teaching Points</h2>
-        <p className="muted">For <b>{data.activity}</b>, SP is credited to your <b>SP Bank automatically</b> as each endorsement is validated — <b>+{config.learnUnit} SP</b> per question you learn, <b>+{config.teachUnit} SP</b> per peer you teach. No claiming needed.</p>
-      </section>
-
-      <div className="jr-grid">
-        {/* Track A — Learning */}
-        <section className="jr-card phase-spa">
-          <div className="jr-head"><span className="jr-n">A</span><h3>Learning</h3><span className="jr-sp">+{learn.sp} SP</span></div>
-          <p className="jr-sub">Questions you were validly endorsed on</p>
-          <div className="jr-stats">
-            <div><strong>{learn.validated}</strong><span>validated</span></div>
-            <div><strong>{learn.credited}</strong><span>credited</span></div>
-            <div><strong>×{learn.unit}</strong><span>SP each</span></div>
-          </div>
-          {learn.validated > learn.cap && <div className="jr-splits"><span className="jr-pill amber">Capped at {learn.cap} — extra {learn.validated - learn.cap} not counted</span></div>}
-        </section>
-
-        {/* Track B — Teaching */}
-        <section className="jr-card phase-vibe">
-          <div className="jr-head"><span className="jr-n">B</span><h3>Teaching</h3><span className="jr-sp">+{teach.sp} SP</span></div>
-          <p className="jr-sub">Peers you validly endorsed</p>
-          <div className="jr-stats">
-            <div><strong>{teach.validated}</strong><span>validated</span></div>
-            <div><strong>{teach.credited}</strong><span>credited</span></div>
-            <div><strong>×{teach.unit}</strong><span>SP each</span></div>
-          </div>
-          {teach.validated > teach.cap && <div className="jr-splits"><span className="jr-pill amber">Capped at {teach.cap} — extra {teach.validated - teach.cap} not counted</span></div>}
-        </section>
-      </div>
-
-      <section className="panel">
-        <div className="panel-head"><h2>SPA SP summary</h2></div>
-        <table className="table">
-          <tbody>
-            <tr><td>Learning (Track A) — {learn.credited} × {config.learnUnit}</td><td style={{ textAlign: 'right' }}>+{learn.sp} SP</td></tr>
-            <tr><td>Teaching (Track B) — {teach.credited} × {config.teachUnit}</td><td style={{ textAlign: 'right' }}>+{teach.sp} SP</td></tr>
-            <tr><td><b>Total credited to SP Bank</b> <span className="muted">(max {maxSp})</span></td><td style={{ textAlign: 'right' }}><b>+{creditedSp} SP</b></td></tr>
-            {penalty.done && penalty.applied > 0 && (
-              <tr className="error">
-                <td>{penalty.fraud ? '⚠️ Fraud penalty' : '⚠️ Audit-failure penalty'} — −{Math.round(penalty.rate * 100)}% of current SP{penalty.at ? ` on ${new Date(penalty.at).toLocaleDateString()}` : ''}</td>
-                <td style={{ textAlign: 'right' }}>−{penalty.applied} SP</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-        <p className="muted" style={{ marginTop: 12 }}>
-          ✅ Auto-credited to your SP Bank — current balance <b>{data.totalSp} SP</b>.
-          {penalty.done && penalty.applied > 0 ? ' An integrity penalty was applied (see the debit row in your SP Bank).' : ''}
-        </p>
-      </section>
-    </div>
   );
 }
 
@@ -442,98 +354,49 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   );
 }
 
-// SP trajectory modal — the student's weekly cumulative SP vs cohort + onboarding-group
-// means (reference lines cached in TrajectorySnapshot; own line built live from the ledger).
-function TrajectoryModal({ student, onClose }) {
-  const [data, setData] = useState(null);
-  useEffect(() => {
-    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`).then(r => r.json()).then(setData);
-  }, [student.email]);
-
-  const series = data ? [
-    { key: 'you', label: 'You', color: 'var(--primary)', points: data.you, width: 3, dots: true },
-    { key: 'cohort', label: 'Cohort average', color: '#94a3b8', points: data.cohort, width: 2, dash: '5 4' },
-    { key: 'group', label: data.groupLabel ? `Your group (${data.groupLabel})` : 'Your group', color: '#8b5cf6', points: data.group, width: 2 }
-  ].filter(s => s.points && s.points.length) : [];
-
-  const weeks = data?.weeks || 10;
-  const yMax = Math.max(10, ...series.flatMap(s => s.points.map(p => p.sp)));
-  const W = 760, H = 400, padL = 52, padR = 18, padT = 18, padB = 42;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const sx = wk => padL + (weeks <= 1 ? 0 : (wk - 1) / (weeks - 1) * plotW);
-  const sy = sp => padT + (1 - sp / yMax) * plotH;
-  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(yMax * f));
-  const xTicks = Array.from({ length: weeks }, (_, i) => i + 1);
-
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal wide traj-modal" onClick={e => e.stopPropagation()}>
-        <div className="modal-head">
-          <div>
-            <p className="eyebrow">Your trajectory</p>
-            <h2>SP over your internship — you vs cohort</h2>
-          </div>
-          <button className="secondary" onClick={onClose}>Close</button>
-        </div>
-        {!data ? <p className="muted">Loading…</p> : series.length === 0 ? (
-          <p className="muted">Not enough data yet — check back after your first week.</p>
-        ) : (
-          <>
-            <div className="traj-legend">
-              {series.map(s => <span key={s.key} className="traj-key"><i style={{ background: s.color }} />{s.label}</span>)}
-            </div>
-            <div className="traj-chart">
-              <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="SP trajectory chart">
-                {yTicks.map(v => (
-                  <g key={v}>
-                    <line x1={padL} y1={sy(v)} x2={W - padR} y2={sy(v)} className="traj-grid" />
-                    <text x={padL - 8} y={sy(v) + 4} textAnchor="end" className="traj-axis">{v}</text>
-                  </g>
-                ))}
-                {xTicks.map(w => <text key={w} x={sx(w)} y={H - padB + 20} textAnchor="middle" className="traj-axis">W{w}</text>)}
-                <text x={padL + plotW / 2} y={H - 5} textAnchor="middle" className="traj-axis-title">Weeks since you joined</text>
-                {series.map(s => (
-                  <g key={s.key}>
-                    <polyline points={s.points.map(p => `${sx(p.week)},${sy(p.sp)}`).join(' ')}
-                      fill="none" stroke={s.color} strokeWidth={s.width} strokeDasharray={s.dash || ''}
-                      strokeLinejoin="round" strokeLinecap="round" />
-                    {s.dots && s.points.map(p => <circle key={p.week} cx={sx(p.week)} cy={sy(p.sp)} r="3.5" fill={s.color} />)}
-                  </g>
-                ))}
-              </svg>
-            </div>
-            <p className="muted traj-foot">Cumulative SP, aligned to each student's own join week so everyone is compared fairly regardless of start date.{data.computedAt ? ` Cohort lines updated ${new Date(data.computedAt).toLocaleDateString()}.` : ''}</p>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function StudentPulse({ profile }) {
-  const { student, cohort, transactions } = profile;
-  const [showTraj, setShowTraj] = useState(false);
+function StudentPulse({ profile, badges, nextActions }) {
+  const { student, cohort, attendance, polls, transactions } = profile;
+  const qualified = attendance.filter(a => a.qualified).length;
+  const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
+  const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
   return (
-    <>
-      <section className="pulse-grid">
-        <div className="pulse-card progress-card">
-          <span>Standing</span>
-          <strong>Rank {student.rank}</strong>
-          <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP to enter Top 50.`}</p>
-          <div className="compare-list">
-            <b>Cohort avg: {cohort.averageSp}</b>
-            <b>Top 50: {cohort.top50Cutoff ?? '—'}</b>
-            <b>Top 10: {cohort.top10Cutoff ?? '—'}</b>
-          </div>
+    <section className="pulse-grid">
+      <div className="pulse-card progress-card">
+        <span>Standing</span>
+        <strong>Rank {student.rank}</strong>
+        <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP needed to enter Top 50.`}</p>
+        <p>{cohort.pointsToNextRank === 0 ? 'You are leading your comparison group.' : `${cohort.pointsToNextRank} SP needed for next rank.`}</p>
+      </div>
+      <div className="pulse-card">
+        <span>Cohort comparison</span>
+        <div className="compare-list">
+          <b>Your SP: {student.totalSp}</b>
+          <b>Cohort avg: {cohort.averageSp}</b>
+          <b>Top 50 cutoff: {cohort.top50Cutoff ?? '-'}</b>
+          <b>Top 10 cutoff: {cohort.top10Cutoff ?? '-'}</b>
         </div>
-        <button className="pulse-card pulse-clickable" onClick={() => setShowTraj(true)} title="Open full trajectory">
-          <span>SP trend <em className="expand-hint">expand ↗</em></span>
-          <Sparkline points={trend} />
-        </button>
-      </section>
-      {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
-    </>
+      </div>
+      <div className="pulse-card">
+        <span>Session health</span>
+        <div className="compare-list">
+          <b>{qualified}/{attendance.length} attendance qualified</b>
+          <b>{pollAttempted}/{pollTotal} polls attempted</b>
+        </div>
+      </div>
+      <div className="pulse-card">
+        <span>Badges</span>
+        <div className="badge-row">{badges.map(badge => <em key={badge}>{badge}</em>)}</div>
+      </div>
+      <div className="pulse-card wide-pulse">
+        <span>SP trend</span>
+        <Sparkline points={trend} />
+      </div>
+      <div className="pulse-card wide-pulse">
+        <span>What to do next</span>
+        <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
+      </div>
+    </section>
   );
 }
 
@@ -551,45 +414,38 @@ function Sparkline({ points }) {
   );
 }
 
+function buildBadges(profile) {
+  const badges = [];
+  const qualifiedPct = profile.attendance.length ? profile.attendance.filter(a => a.qualified).length / profile.attendance.length : 0;
+  const pollAttempted = profile.polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
+  const pollTotal = profile.polls.reduce((sum, p) => sum + p.totalQuestions, 0);
+  if (profile.student.rank <= 50) badges.push('Top 50');
+  if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
+  if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
+  if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
+  return badges.length ? badges : ['Getting Started'];
+}
+
+function buildNextActions(profile) {
+  const actions = [];
+  if (profile.cohort.pointsToTop50 > 0) actions.push(`Earn ${profile.cohort.pointsToTop50} more SP to enter Top 50.`);
+  if (profile.attendance.some(a => !a.qualified)) actions.push('Attend at least 75% of upcoming sessions to avoid attendance debit.');
+  if (profile.polls.some(p => p.missedQuestions > 0)) actions.push('Attempt every poll question to avoid poll debit.');
+  actions.push('Check your SP Bank after each session to understand every credit and debit.');
+  return actions.slice(0, 4);
+}
+
 function Tabs({ tab, setTab, tabs }) {
   return <nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>;
 }
 
 function SpBank({ transactions }) {
-  const [size, setSize] = useState(10);
-  // Server sends oldest→newest (sorted dateTime asc); show newest first.
-  const rows = useMemo(() => [...transactions].reverse(), [transactions]);
-  const shown = rows.slice(0, size);
-  const downloadCsv = () => {
-    const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const lines = [['Date & time', 'Credit', 'Debit', 'Balance', 'Reason'].join(',')].concat(
-      rows.map(tx => [
-        new Date(tx.dateTime).toLocaleString(),
-        tx.appliedDelta > 0 ? tx.appliedDelta : '',
-        tx.appliedDelta < 0 ? tx.appliedDelta : '',
-        tx.balanceAfter, tx.reason
-      ].map(esc).join(',')));
-    const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
-    const a = document.createElement('a');
-    a.href = url; a.download = 'sp-bank-statement.csv'; a.click();
-    URL.revokeObjectURL(url);
-  };
   return (
     <section className="panel">
-      <div className="panel-head">
-        <h2>SP Bank</h2>
-        <div className="bank-controls">
-          <label>Show
-            <select value={size} onChange={e => setSize(Number(e.target.value))}>
-              <option value={10}>10</option><option value={20}>20</option><option value={50}>50</option>
-            </select>
-          </label>
-          <button className="secondary" onClick={downloadCsv}>Download CSV</button>
-        </div>
-      </div>
+      <h2>SP Bank Statement</h2>
       <div className="bank">
         <div className="bank-header"><span>Date & time</span><span>Credit</span><span>Debit</span><span>Balance</span><span>Reason</span></div>
-        {shown.map(tx => (
+        {transactions.map(tx => (
           <div className="bank-row" key={tx._id}>
             <span>{new Date(tx.dateTime).toLocaleString()}</span>
             <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
@@ -599,7 +455,6 @@ function SpBank({ transactions }) {
           </div>
         ))}
       </div>
-      <p className="muted bank-foot">Showing {Math.min(size, rows.length)} of {rows.length} — download CSV for the full statement.</p>
     </section>
   );
 }
@@ -657,459 +512,329 @@ function Leaderboard({ rows }) {
   );
 }
 
-const fmtDate = d => d ? new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '—';
-const toInput = d => d ? new Date(d).toISOString().slice(0, 10) : '';
-
-// The unified phase-by-phase progress + SP tab. Four phases: Standups, ViBe, SPA,
-// Projects. Standups & ViBe show real SP; SPA & Projects are placeholders until the
-// Samagama data (and their SP rule) land. Goal *staking* lives in the Commitments tab.
-const NEXT_NUDGE = { standup: 'Next up: push your ViBe courses.', vibe: 'Next up: keep your SPA pace.', spa: 'Next up: ship your first project PR.', project: 'On track across the board — keep it up!' };
-
-// Goal block that lives ON a phase card: set a target date (none/missed) → pace bar
-// once active → "reached" when done. Unit-aware (min for standups, % for ViBe). A GOAL
-// is a self-set target (no SP) — distinct from a COMMITMENT (staking SP, the Stake link).
-function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave }) {
-  const isPct = goal.unit === '%';
-  const metric = isPct ? `${goal.progressPct}% done` : `${goal.current}/${goal.target} ${goal.unit} (${goal.progressPct}%)`;
-  const paceLeft = isPct
-    ? `${goal.remainingPct}% to go · ~${goal.perDay ?? '—'}%/day to stay on track`
-    : `${goal.remaining} ${goal.unit} to go · ~${goal.perDay ?? '—'} ${goal.unit}/${goal.perDayUnit || 'day'} to stay on track`;
-
-  if (goal.status === 'achieved') {
-    return <div className="jr-goal"><span className="jr-goal-label done">🎯 Goal reached 🎉</span><span className="jr-goal-foot">{NEXT_NUDGE[phaseKey]}</span></div>;
-  }
-  if (goal.status === 'active') {
-    return (
-      <div className="jr-goal">
-        {goal.pending ? (
-          <span className="jr-goal-meta">🎯 Goal: by {fmtDate(goal.targetDate)} · {goal.daysLeft}d left · progress soon</span>
-        ) : (
-          <>
-            <span className="jr-goal-meta">🎯 Goal: {metric} · by {fmtDate(goal.targetDate)} · {goal.daysLeft}d left</span>
-            <div className="jr-progress"><i style={{ width: `${goal.progressPct}%` }} /></div>
-            <span className="jr-goal-foot">{paceLeft}</span>
-          </>
-        )}
-      </div>
-    );
-  }
-  return (
-    <div className="jr-goal">
-      <span className={`jr-goal-label ${goal.status === 'missed' ? 'miss' : ''}`}>
-        🎯 {goal.status === 'missed' ? `Goal missed — set a new date to ${targetText}` : `Set a target date to ${targetText}`}
-      </span>
-      <div className="jr-goal-row">
-        <input type="date" min={goal.minDate || undefined} max={goal.maxDate || undefined} value={form[field] ?? ''} onChange={e => setForm({ ...form, [field]: e.target.value })} />
-        <button className="secondary" disabled={!form[field]} onClick={() => onSave(field, form[field])}>Set goal</button>
-      </div>
-      {goal.minDate && <span className="jr-goal-hint">Earliest realistic: {fmtDate(goal.minDate)}{goal.paceHint ? ` · ${goal.paceHint}` : ''}</span>}
-    </div>
-  );
+function formatDate(date) {
+  return new Date(date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-function MyJourney({ student, goToCommitment, canCommit = false }) {
-  const email = student.email;
-  const [data, setData] = useState(null);
-  const [form, setForm] = useState({});
-  const [showTraj, setShowTraj] = useState(false);
-  const [err, setErr] = useState(null);
+function formatDateTime(date) {
+  if (!date) return '';
+  const d = new Date(date);
+  const datePart = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const timePart = d.toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true });
+  return `${datePart}, ${timePart}`;
+}
 
-  const load = async () => {
-    const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`);
-    setData(await r.json());
+function formatRelativeMaturity(endDate) {
+  if (!endDate) return '';
+  const now = new Date();
+  const end = new Date(endDate);
+  const sameDay = now.toDateString() === end.toDateString();
+  if (sameDay) return 'Matures today';
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  if (tomorrow.toDateString() === end.toDateString()) return 'Matures tomorrow';
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const days = Math.ceil((end.getTime() - now.getTime()) / msPerDay);
+  return `Matures in ${days} day${days === 1 ? '' : 's'}`;
+}
+
+const PLAN_DESCRIPTIONS = {
+  safe: 'Recommended for short-term commitment.',
+  growth: 'Balanced reward and commitment.',
+  diamond: 'Highest reward for committed students.'
+};
+
+function Vault({ student, onStudentUpdate }) {
+  const [plans, setPlans] = useState([]);
+  const [investments, setInvestments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [planKey, setPlanKey] = useState('');
+  const [principal, setPrincipal] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [confirming, setConfirming] = useState(false);
+
+  const loadData = async () => {
+    try {
+      const [plansRes, mineRes] = await Promise.all([
+        fetch(`${API}/investments/plans`, { credentials: 'include' }),
+        fetch(`${API}/investments/mine`, { credentials: 'include' })
+      ]);
+      if (plansRes.ok) {
+        const data = await plansRes.json();
+        setPlans(data.plans || []);
+        if (!planKey && data.plans?.length) setPlanKey(data.plans[0].key);
+      }
+      if (mineRes.ok) {
+        const data = await mineRes.json();
+        setInvestments(data.investments || []);
+        // Refresh the header SP balance so a freshly-resolved investment
+        // (credit posted server-side during /investments/mine) reflects in
+        // the score-card without a full page reload. Fail-soft on /me.
+        if (onStudentUpdate) {
+          try {
+            const meRes = await fetch(`${API}/me`, { credentials: 'include' });
+            if (meRes.ok) {
+              const meData = await meRes.json();
+              if (meData.authenticated && meData.profile?.student) {
+                onStudentUpdate(meData.profile.student);
+              }
+            }
+          } catch {
+            // skip — header will keep its existing totalSp
+          }
+        }
+      }
+    } catch {
+      setError('Failed to load vault data.');
+    } finally {
+      setLoading(false);
+    }
   };
-  useEffect(() => { load(); }, [email]);
 
-  if (!data) return <section className="panel">Loading your journey…</section>;
-  if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
+  useEffect(() => { loadData(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { standups, vibe, goals } = data;
-
-  const saveTarget = async (field, value) => {
-    const r = await fetch(`${API}/journey/plan`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, [field]: value })
-    });
-    const j = await r.json();
-    if (!r.ok) { setErr(j.error); return; }
-    setErr(null); setData(j);
+  const actuallySubmit = async () => {
+    setError('');
+    setSuccess('');
+    setSubmitting(true);
+    setConfirming(false);
+    try {
+      const res = await fetch(`${API}/investments`, {
+        credentials: 'include',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planKey, principal: Number(principal) })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const message = ({
+          INSUFFICIENT_BALANCE_OR_INACTIVE: 'Insufficient SP balance.',
+          ALREADY_ACTIVE: 'You already have an active investment.',
+          INVALID_PLAN: 'Please select an investment plan.',
+          BELOW_MIN_PRINCIPAL: `Minimum investment is ${minPrincipal} SP.`
+        })[data.error] || data.error || 'Failed to create investment. Please try again.';
+        setError(message);
+        return;
+      }
+      setSuccess(`Investment created successfully. ${data.investment.principal} SP locked in the ${planKey} vault.`);
+      setPrincipal('');
+      await loadData();
+    } catch {
+      setError('Network error — please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
-  const gp = { form, setForm, onSave: saveTarget };
+
+  const onInvestClick = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (submitting) return;
+    if (!principalValid || !selectedPlan) return;
+    setConfirming(true);
+  };
+
+  if (loading) return <section className="panel empty">Loading vault…</section>;
+
+  const active = investments.find(i => i.status === 'active');
+  const history = investments.filter(i => i.status !== 'active');
+  const selectedPlan = plans.find(p => p.key === planKey);
+  const minPrincipal = selectedPlan?.minPrincipal ?? plans[0]?.minPrincipal ?? 10;
+  const principalNum = Number(principal);
+  const principalValid = Number.isFinite(principalNum) && principalNum >= minPrincipal && principalNum <= student.totalSp;
+  const expectedProfit = (selectedPlan && principalValid)
+    ? Math.round(principalNum * selectedPlan.bonusRate)
+    : 0;
+  const expectedReturn = principalValid ? principalNum + expectedProfit : 0;
 
   return (
-    <div className="jr">
-      <section className="panel jr-intro">
-        <h2>My Journey</h2>
-        <p className="muted"><b>🎯 Goal</b> = your own finish-date target; it tracks your pace, no SP.{canCommit && <> &nbsp;<b>🎲 Commitment</b> = stake SP on a bet — the <b>Stake SP</b> link.</>}</p>
-        {err && <p className="error">{err}</p>}
-      </section>
+    <section className="panel">
+      <h2>SP Investment Vault</h2>
+      <p className="muted">Lock your Spurti Points to earn a bonus — but only if you attend every session during the lock period. If attendance slips, the invested SP is forfeited.</p>
 
-      <div className="jr-grid">
-        {/* Standups — continuous, no completion goal; commitment only */}
-        <section className="jr-card phase-standups">
-          <div className="jr-head"><span className="jr-n">1</span><h3>Standups</h3><span className="jr-sp">+{standups.sp} SP</span></div>
-          <p className="jr-sub">Zoom attendance + Spandan polls</p>
-          <div className="jr-stats">
-            <div><strong>{standups.zoomMinutes}</strong><span>Zoom minutes</span></div>
-            <div><strong>{standups.sessionsAttended}</strong><span>sessions attended</span></div>
-            <div><strong>{standups.pollsAttempted}/{standups.pollsTotal}</strong><span>polls attempted</span></div>
-          </div>
-          <div className="jr-splits">
-            <span className="jr-pill">Attendance +{standups.spAttendance}</span>
-            <span className="jr-pill">Polls +{standups.spPolls}</span>
-          </div>
-          <PhaseGoal phaseKey="standup" field="standupBy" goal={goals.standup} targetText="reach 3,600 Zoom minutes" {...gp} />
-          {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('standup')}>🎲 Stake SP →</button></div>}
-        </section>
-
-        {/* ViBe — goal + commitment */}
-        <section className="jr-card phase-vibe">
-          <div className="jr-head"><span className="jr-n">2</span><h3>ViBe courses</h3><span className={`jr-sp ${vibe.sp < 0 ? 'neg' : ''}`}>{vibe.sp >= 0 ? '+' : ''}{vibe.sp} SP</span></div>
-          <p className="jr-sub">{vibe.clearedCount}/{vibe.totalCourses} courses complete</p>
-          <div className="jr-dots">
-            {vibe.ladder.map(l => (
-              <div key={l.key} className={`jr-dot ${l.cleared ? 'done' : (vibe.current && vibe.current.key === l.key ? 'current' : '')}`} title={l.name}>
-                <b>{l.cleared ? '✓' : `${l.pct}%`}</b><span>{l.name}</span>
+      {active && (() => {
+        const activeIsMatured = new Date(active.endDate) <= new Date();
+        return (
+          <div className="vault-active">
+            <div>
+              <span className="eyebrow">Active Investment</span>
+              <strong className="vault-active-plan">{active.planKey.charAt(0).toUpperCase() + active.planKey.slice(1)} Plan</strong>
+              <div className="vault-active-details">
+                <span>{active.principal} SP locked</span>
+                <span>Bonus: +{Math.round(active.bonusRate * 100)}%</span>
+                <span>Expected Return: {Math.round(active.principal * active.bonusRate) + active.principal} SP</span>
+                {activeIsMatured ? (
+                  <>
+                    <span>Matured on: {formatDateTime(active.endDate)}</span>
+                    <small className="muted vault-relative">SP will be credited shortly — resolution pending</small>
+                  </>
+                ) : (
+                  <>
+                    <span>Matures on: {formatDateTime(active.endDate)}</span>
+                    <small className="muted vault-relative">{formatRelativeMaturity(active.endDate)}</small>
+                  </>
+                )}
               </div>
+            </div>
+            <em className="vault-status vault-status-active">active</em>
+          </div>
+        );
+      })()}
+
+      {!active && (
+        <form className="vault-form" onSubmit={onInvestClick}>
+          <div className="vault-plans">
+            {plans.map(plan => (
+              <label key={plan.key} className={`vault-card ${planKey === plan.key ? 'selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="plan"
+                  value={plan.key}
+                  checked={planKey === plan.key}
+                  onChange={() => setPlanKey(plan.key)}
+                />
+                <strong>{plan.label} Plan</strong>
+                <p className="vault-card-meta">{plan.durationDays} Days · +{Math.round(plan.bonusRate * 100)}% Bonus</p>
+                <p className="vault-card-desc">{PLAN_DESCRIPTIONS[plan.key] || ''}</p>
+                <p className="vault-card-req">100% Attendance Required.</p>
+              </label>
             ))}
           </div>
-          {vibe.activeCommitment && <div className="jr-splits"><span className="jr-pill amber">🎲 Active commitment: +{vibe.activeCommitment.goalPct}%</span></div>}
-          <PhaseGoal phaseKey="vibe" field="vibeBy" goal={goals.vibe} targetText="finish all your ViBe courses" {...gp} />
-          {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('vibe')}>🎲 Stake SP →</button></div>}
-        </section>
-
-        {/* SPA — goal (date) works now; progress data + commitment coming soon */}
-        <section className="jr-card phase-spa">
-          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-soon">Data soon</span></div>
-          <p className="jr-sub">53-problem set · progress data coming soon</p>
-          <PhaseGoal phaseKey="spa" field="spaBy" goal={goals.spa} targetText="solve all 53 problems" {...gp} />
-        </section>
-
-        {/* Projects — goal (date) works now; progress data coming soon */}
-        <section className="jr-card phase-project">
-          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">Data soon</span></div>
-          <p className="jr-sub">Pull requests · progress data coming soon</p>
-          <PhaseGoal phaseKey="project" field="projectBy" goal={goals.project} targetText="raise your first PR" {...gp} />
-        </section>
-      </div>
-
-      <section className="panel jr-trajlink">
-        <div>
-          <h2>Your SP trajectory</h2>
-          <p className="muted">Your Spurti Points over time vs the cohort and your group.</p>
-        </div>
-        <button className="secondary" onClick={() => setShowTraj(true)}>View trajectory ↗</button>
-      </section>
-
-      {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
-    </div>
-  );
-}
-
-function courseName(ladder, key) { const c = ladder.find(l => l.key === key); return c ? c.name : key; }
-// net SP over the whole commitment: won -> win minus the debited stake; lost -> stake + penalty
-function netFor(b) { return b.status === 'won' ? b.potentialWin - b.stake : -(b.stake + b.potentialLoss); }
-
-// The Commitments hub: one accordion card per phase. Every phase shares the same SP
-// engine (stake debited → HIT wins it back multiplied / MISS loses a penalty); only
-// the target metric differs. ViBe is live; the other three land one by one.
-const COMMITMENT_TYPES = [
-  { key: 'vibe',    name: 'ViBe courses',        blurb: 'ViBe commitments are temporarily on hold — we’re reconnecting the ViBe course-completion feed. They’ll be back up soon.', ready: false },
-  { key: 'standup', name: 'Standups',            blurb: 'Standup commitments are paused — standups have moved to YouTube Live and the attendance module is being reworked. They’ll return once the new attendance tracking is ready.', ready: false },
-  { key: 'spa',     name: 'SPA — Matrix Mystics', blurb: 'Pledge to solve N of the 53 problems by a date.',                          ready: false },
-  { key: 'project', name: 'Projects',            blurb: 'Pledge to raise / merge N pull requests by a date.',                        ready: false }
-];
-
-function Commitments({ student, initialPhase }) {
-  const [phase, setPhase] = useState(initialPhase || 'vibe');
-  const active = COMMITMENT_TYPES.find(t => t.key === phase) || COMMITMENT_TYPES[0];
-  return (
-    <div className="cm">
-      <section className="panel">
-        <h2>Commitments</h2>
-        <p className="muted">Stake SP on a goal — hit it by the deadline to win it back multiplied; miss and lose a penalty. <b>One active per phase.</b></p>
-        <div className="cm-subtabs">
-          {COMMITMENT_TYPES.map(t => (
-            <button key={t.key} className={`cm-subtab phase-${t.key} ${phase === t.key ? 'active' : ''}`} onClick={() => setPhase(t.key)}>
-              {t.name}{!t.ready && <span className="cm-tag">soon</span>}
+          <div className="search-row vault-amount-row">
+            <input
+              type="number"
+              min={minPrincipal}
+              max={student.totalSp}
+              value={principal}
+              onChange={e => setPrincipal(e.target.value)}
+              placeholder={`Amount in SP (min ${minPrincipal}, you have ${student.totalSp})`}
+            />
+            <button className="primary" type="submit" disabled={submitting || !principalValid}>
+              {submitting ? 'Investing…' : 'INVEST NOW'}
             </button>
-          ))}
-        </div>
-      </section>
-      {active.ready
-        ? (active.key === 'vibe' ? <VibeGoals student={student} /> : <StandupGoals student={student} />)
-        : <section className="panel"><p className="cm-soon">{active.blurb}{!['standup', 'vibe'].includes(active.key) && <><br /><b>Coming soon</b> — same stake-and-win mechanic, tuned to this phase.</>}</p></section>}
-    </div>
-  );
-}
-
-function VibeGoals({ student }) {
-  const email = student.email;
-  const [data, setData] = useState(null);
-  const [form, setForm] = useState({ goalPct: 20, stake: 100, multiplier: 4, deadline: '' });
-  const [editing, setEditing] = useState(false);
-  const [err, setErr] = useState(null);
-
-  const load = async () => {
-    const r = await fetch(`${API}/vibe/state?email=${encodeURIComponent(email)}`);
-    setData(await r.json());
-  };
-  useEffect(() => {
-    load();
-    const d = new Date(); d.setDate(d.getDate() + 2);
-    setForm(f => ({ ...f, deadline: d.toISOString().slice(0, 10) }));
-  }, [email]);
-
-  if (!data) return <section className="panel">Loading ViBe Goals…</section>;
-  if (!data.eligible) return <section className="panel empty">ViBe Goals isn’t available for your cohort yet.</section>;
-
-  const cur = data.current, cfg = data.config;
-  const s = +form.stake, m = +form.multiplier, g = +form.goalPct;
-  const loss = cfg.penaltyFactor * s * m, win = s * m, need = s + loss;   // stake debited + worst-case penalty
-  const daysOut = form.deadline
-    ? Math.round((new Date(form.deadline).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000) : 0;
-  const availForBet = data.available + (editing && data.active ? data.active.reserved + data.active.stake : 0);
-
-  let problem = null;
-  if (!cur) problem = 'All courses complete — nothing to commit to.';
-  else if (g <= cur.floorPct) problem = `Goal must beat the weekly floor (${cur.floorPct}%).`;
-  else if (daysOut < 1 || daysOut > cfg.maxBetDays) problem = `Deadline must be 1–${cfg.maxBetDays} days out.`;
-  else if (g > cur.remaining) problem = `Goal exceeds your remaining ${cur.remaining}%.`;
-  else if (need > availForBet) problem = `You need ${need} SP (stake ${s} + up to ${loss} loss); you have ${availForBet}.`;
-
-  const post = async (url, body, method = 'POST') => {
-    const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const j = await r.json(); if (!r.ok) { setErr(j.error); return null; } setErr(null); return j;
-  };
-  const place = async () => { const j = await post(`${API}/vibe/bet`,
-    { email, course: cur.key, goalPct: g, stake: s, multiplier: m, deadline: form.deadline }); if (j) setData(j); };
-  const saveEdit = async () => { const j = await post(`${API}/vibe/bet/${data.active._id}`,
-    { email, goalPct: g, stake: s, multiplier: m }, 'PUT'); if (j) { setEditing(false); setData(j); } };
-  const settle = async (result) => { const j = await post(`${API}/vibe/bet/${data.active._id}/settle`,
-    { email, result }); if (j) { setEditing(false); setData(j); } };
-
-  const showForm = cur && (!data.active || editing);
-
-  return (
-    <div className="vg">
-      <section className="panel">
-        <h2>Your course path</h2>
-        <p className="muted">Courses unlock in order — you work on and set commitments for your current course only. Prior completions are credited automatically.</p>
-        <div className="vg-ladder">
-          {data.ladder.map((l, i) => (
-            <React.Fragment key={l.key}>
-              {i > 0 && <div className="vg-arrow">→</div>}
-              <div className={`vg-step ${l.cleared ? 'done' : (cur && cur.key === l.key ? 'current' : 'locked')}`}>
-                <span className="n">{i + 1}</span><b>{l.name}</b>
-                <em>{l.prior ? 'credited ✓' : l.cleared ? '100% ✓' : (cur && cur.key === l.key ? `${l.pct}% · in progress` : '🔒 locked')}</em>
-              </div>
-            </React.Fragment>
-          ))}
-        </div>
-      </section>
-
-      {cur && (
-        <section className="panel">
-          <h2>Current course — {cur.name}</h2>
-          <div className="vg-tiles">
-            <div className={`vg-tile ${data.weeklyFloor.met ? 'done' : ''}`}>
-              <span>This week (floor)</span>
-              <strong>{data.weeklyFloor.doneHours} h</strong>
-              <em>{cfg.floorHours} h required · {data.weeklyFloor.met
-                ? <span className="vg-pill green">+{cfg.floorSp} SP earned</span>
-                : <span className="vg-pill amber">not yet</span>}</em>
-            </div>
-            <div className="vg-tile">
-              <span>{cur.name} — completion</span>
-              <strong>{cur.pct}%</strong>
-              <em>{cur.remaining}% left · ≈ {(cur.pct / 100 * cur.hours).toFixed(1)} / {cur.hours} h*</em>
-              <div className="vg-progress"><i style={{ width: `${cur.pct}%` }} /></div>
-            </div>
           </div>
-        </section>
+        </form>
       )}
 
-      {cur && (
-        <section className="panel">
-          <h2>{editing ? 'Edit your commitment' : 'Set a goal & commit extra SP'}</h2>
-          <p className="muted">Your stake is <b>debited now</b>. Hit your goal by the deadline → win it back multiplied; miss → lose an extra penalty on top. One commitment per course, deadline up to {cfg.maxBetDays} days away.</p>
-          {!showForm && data.active &&
-            <div className="vg-lock">You have an active commitment on {cur.name}. Edit it below, or resolve it with the demo buttons.</div>}
-          {showForm && (
-            <div className="vg-form">
-              <div className="vg-field"><label>Course</label><input value={`${cur.name} (current)`} disabled /></div>
-              <div className="vg-field"><label>Raise completion by</label>
-                <div className="vg-row"><input type="number" min="1" max={cur.remaining} value={form.goalPct}
-                  onChange={e => setForm({ ...form, goalPct: e.target.value })} /><b>%</b></div>
-                <span className="hint">Allowed {cur.floorPct}%–{cur.remaining}% (floor → remaining) · ≈ {(g / 100 * cur.hours).toFixed(1)} h</span>
-              </div>
-              <div className="vg-field"><label>Deadline</label>
-                <input type="date" value={form.deadline} disabled={editing}
-                  onChange={e => setForm({ ...form, deadline: e.target.value })} />
-                <span className="hint">{editing ? 'Fixed — can’t be changed after placing.' : `Up to ${cfg.maxBetDays} days away.`}</span>
-              </div>
-              <div className="vg-field"><label>Stake — <b>{s}</b> SP</label>
-                <input type="range" min={cfg.stakeMin} max={cfg.stakeMax} step="10" value={form.stake}
-                  onChange={e => setForm({ ...form, stake: e.target.value })} />
-                <span className="hint">{cfg.stakeMin}–{cfg.stakeMax} SP.</span>
-              </div>
-              <div className="vg-field vg-wide"><label>Confidence multiplier</label>
-                <div className="vg-mult">{cfg.multipliers.map(x =>
-                  <button key={x} className={m === x ? 'active' : ''} onClick={() => setForm({ ...form, multiplier: x })}>{x}×</button>)}</div>
-              </div>
-              <div className="vg-readout">
-                <div className="r lose"><span>Staked now</span><strong>−{s}</strong></div>
-                <div className="r win"><span>If you HIT</span><strong>+{win}</strong><span className="net">net +{win - s}</span></div>
-                <div className="r lose"><span>If you MISS</span><strong>−{loss}</strong><span className="net">net −{s + loss}</span></div>
-                <div className="r"><span>Left after placing</span><strong>{availForBet - s - loss}</strong></div>
-              </div>
-              <div className="vg-actions">
-                {editing
-                  ? <><button className="primary" disabled={!!problem} onClick={saveEdit}>Save changes</button>
-                      <button className="secondary" onClick={() => { setEditing(false); setErr(null); }}>Cancel</button></>
-                  : <button className="primary" disabled={!!problem} onClick={place}>Place commitment</button>}
-                <span className={problem ? 'vg-warn' : 'vg-ok'}>{problem || `✓ Covered — ${loss} SP reserved until it settles.`}</span>
-              </div>
-              {err && <p className="error">{err}</p>}
-            </div>
+      {!active && selectedPlan && principalValid && (
+        <div className="vault-summary card">
+          <h3>SP Investment Calculator</h3>
+          <div className="vault-summary-rows">
+            <div><span>Selected Plan</span><strong>{selectedPlan.label}</strong></div>
+            <div><span>Investment Amount</span><strong>{principalNum} SP</strong></div>
+            <div><span>Duration</span><strong>{selectedPlan.durationDays} Days</strong></div>
+            <div><span>Attendance Requirement</span><strong>{Math.round(selectedPlan.attendanceRequirement * 100)}%</strong></div>
+            <div><span>Bonus Percentage</span><strong>{Math.round(selectedPlan.bonusRate * 100)}%</strong></div>
+            <div><span>Expected Profit</span><strong className="positive">+{expectedProfit} SP</strong></div>
+            <div><span>Expected Return</span><strong>{expectedReturn} SP</strong></div>
+          </div>
+          <p className="muted">
+            If you successfully maintain the required attendance during the investment period, you will receive <strong>{expectedReturn} SP</strong> when your investment matures.
+          </p>
+        </div>
+      )}
+
+      {confirming && selectedPlan && (
+        <VaultConfirmModal
+          plan={selectedPlan}
+          principal={principalNum}
+          expectedProfit={expectedProfit}
+          expectedReturn={expectedReturn}
+          submitting={submitting}
+          onCancel={() => setConfirming(false)}
+          onConfirm={actuallySubmit}
+        />
+      )}
+
+      {error && <p className="error">{error}</p>}
+      {success && <p className="vault-success">{success}</p>}
+
+      {investments.length > 0 && (
+        <div className="cards vault-history">
+          {history.length > 0 && <h3>History</h3>}
+          {history.map(inv => {
+            const planLabel = plans.find(p => p.key === inv.planKey)?.label || inv.planKey;
+            const isResolved = inv.resolvedAt != null;
+            const level = isResolved ? 'RESOLVED' : 'MATURED_AWAITING_CREDIT';
+            return (
+              <article className="card vault-history-card" key={inv._id}>
+                <div className="vault-history-head">
+                  <strong className="vault-history-plan">{planLabel.toUpperCase()} PLAN</strong>
+                  <span className={`vault-status vault-status-${inv.status}`}>{inv.status.toUpperCase()}</span>
+                </div>
+                <div className="vault-history-details">
+                  <div><span>Invested:</span> <strong>{inv.principal} SP</strong></div>
+                  {level === 'MATURED_AWAITING_CREDIT' && (
+                    <>
+                      <div><span>Matured on:</span> <strong>{formatDateTime(inv.endDate)}</strong></div>
+                      <p className="muted">SP will be credited shortly — resolution pending</p>
+                    </>
+                  )}
+                  {level === 'RESOLVED' && inv.status === 'completed' && (
+                    <>
+                      <div><span>Bonus Earned:</span> <strong className="positive">+{inv.bonus} SP</strong></div>
+                      <div><span>Received:</span> <strong>{inv.totalReturn} SP</strong></div>
+                      <div><span>Invested on:</span> <strong>{formatDateTime(inv.startDate)}</strong></div>
+                      <div><span>Matured on:</span> <strong>{formatDateTime(inv.endDate)}</strong></div>
+                      <div><span>SP Credit:</span> <strong>{inv.resolvedAt ? `Done — ${formatDateTime(inv.resolvedAt)}` : 'Pending'}</strong></div>
+                    </>
+                  )}
+                  {level === 'RESOLVED' && inv.status === 'failed' && (
+                    <>
+                      <div><span>Invested on:</span> <strong>{formatDateTime(inv.startDate)}</strong></div>
+                      <div><span>Resolved on:</span> <strong>{formatDateTime(inv.resolvedAt)}</strong></div>
+                      <p className="negative">
+                        {inv.attendedSessions != null && inv.requiredSessions != null
+                          ? `Failed — attendance requirement not met (${inv.attendedSessions}/${inv.requiredSessions} sessions attended)`
+                          : 'Failed — attendance requirement not met'}
+                      </p>
+                      <div><span>SP Credit:</span> <strong>0</strong></div>
+                    </>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+          {active && history.length === 0 && (
+            <p className="muted">No completed investments yet.</p>
           )}
-        </section>
+        </div>
       )}
-
-      <section className="panel">
-        <h2>Your active commitment</h2>
-        {data.active ? (
-          <div className="vg-bet">
-            <div>
-              <h4>{courseName(data.ladder, data.active.course)} — raise completion by {data.active.goalPct}%</h4>
-              <div className="meta">staked {data.active.stake} (debited) @ {data.active.multiplier}× · by {new Date(data.active.deadline).toLocaleDateString()} · risk −{data.active.potentialLoss} more on miss</div>
-            </div>
-            <div className="side">
-              <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
-              <div className="vg-betbtns">
-                {!editing && <button className="secondary" onClick={() => { setForm({ goalPct: data.active.goalPct, stake: data.active.stake, multiplier: data.active.multiplier, deadline: form.deadline }); setEditing(true); }}>Edit commitment</button>}
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
-              </div>
-            </div>
-          </div>
-        ) : <p className="muted">No active commitment right now — set one above.</p>}
-      </section>
-
-      <section className="panel">
-        <h2>Past commitments</h2>
-        {data.history.length ? (
-          <table className="table"><thead><tr><th>Course</th><th>Goal</th><th>Stake</th><th>Result</th><th>Net SP</th></tr></thead>
-            <tbody>{data.history.map(b => (
-              <tr key={b._id}><td>{courseName(data.ladder, b.course)}</td><td>+{b.goalPct}%</td><td>{b.stake} @ {b.multiplier}×</td>
-                <td className={b.status === 'won' ? 'vg-hit' : 'vg-miss'}>{b.status === 'won' ? 'HIT' : 'MISS'}</td>
-                <td className={b.status === 'won' ? 'vg-hit' : 'vg-miss'}>{netFor(b) >= 0 ? '+' : ''}{netFor(b)}</td></tr>))}
-            </tbody></table>
-        ) : <p className="muted">No settled commitments yet.</p>}
-      </section>
-    </div>
+      <p className="muted vault-note">Note: Investments are automatically resolved when you visit the Vault after the maturity date. If you meet the attendance requirements, your invested SP and eligible bonus will be credited to your SP balance automatically.</p>
+    </section>
   );
 }
 
-// Standup commitment — weekly, attendance-only, keep-the-stake. Student picks a tier
-// (81–90 → stake 20 / 91–100 → stake 50, fixed) and a confidence (2×/3×/4×). HIT pays
-// +stake×conf on top of earned attendance; MISS charges −0.5×stake×conf off the balance.
-function StandupGoals({ student }) {
-  const email = student.email;
-  const [data, setData] = useState(null);
-  const [tierKey, setTierKey] = useState('91-100');
-  const [multiplier, setMultiplier] = useState(4);
-  const [err, setErr] = useState(null);
-
-  const load = async () => {
-    const r = await fetch(`${API}/standup/state?email=${encodeURIComponent(email)}`);
-    setData(await r.json());
-  };
-  useEffect(() => { load(); }, [email]);
-
-  if (!data) return <section className="panel">Loading standups…</section>;
-  if (!data.eligible) return <section className="panel empty">Standup commitments aren’t available for your cohort yet.</section>;
-
-  const tier = data.tiers.find(t => t.key === tierKey) || data.tiers[0];
-  const stake = tier.stake, win = stake * multiplier, loss = data.penaltyFactor * stake * multiplier;
-  const problem = data.active
-    ? 'You already have an active standup commitment this week.'
-    : loss > data.available ? `You need ${loss} SP free to cover a possible miss; you have ${data.available}.` : null;
-
-  const post = async (url, body) => {
-    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const j = await r.json(); if (!r.ok) { setErr(j.error); return null; } setErr(null); return j;
-  };
-  const place = async () => { const j = await post(`${API}/standup/commit`, { email, tierKey, multiplier }); if (j) setData(j); };
-  const settle = async (result) => { const j = await post(`${API}/standup/commit/${data.active._id}/settle`, { email, result }); if (j) setData(j); };
-
+function VaultConfirmModal({ plan, principal, expectedProfit, expectedReturn, submitting, onCancel, onConfirm }) {
   return (
-    <div className="vg">
-      <section className="panel">
-        <h2>This week’s standups — {data.weekLabel}</h2>
-        <p className="muted">Pledge to attend <b>all {data.sessionsThisWeek}</b> standups this week at a chosen attendance tier. Attendance only — polls stay as poll-points. Your stake <b>isn’t deducted</b>: hit your pledge for a bonus on top of the attendance points you earn, miss and a penalty applies.</p>
-        <div className="vg-tiles">
-          <div className="vg-tile"><span>Attended so far</span><strong>{data.attendedThisWeek}/{data.sessionsThisWeek}</strong><em>this week</em></div>
-          <div className="vg-tile"><span>Avg attendance</span><strong>{data.avgPctThisWeek != null ? data.avgPctThisWeek + '%' : '—'}</strong><em>so far</em></div>
+    <div className="overlay" onClick={e => e.target === e.currentTarget && !submitting && onCancel()}>
+      <section className="modal vault-confirm-modal">
+        <div className="modal-head">
+          <h2>Confirm Your Investment</h2>
+          <button className="icon" onClick={onCancel} disabled={submitting} aria-label="Close">×</button>
         </div>
-      </section>
-
-      {!data.active && (
-        <section className="panel">
-          <h2>Set a standup commitment</h2>
-          <div className="vg-form">
-            <div className="vg-field vg-wide"><label>Attendance tier (fixed stake)</label>
-              <div className="vg-mult">{data.tiers.map(t =>
-                <button key={t.key} className={tierKey === t.key ? 'active' : ''} onClick={() => setTierKey(t.key)}>{t.label} · stake {t.stake}</button>)}</div>
-              <span className="hint">Higher tier = higher bar and bigger reward. Beating your tier still counts as a hit.</span>
-            </div>
-            <div className="vg-field vg-wide"><label>Confidence multiplier</label>
-              <div className="vg-mult">{data.multipliers.map(x =>
-                <button key={x} className={multiplier === x ? 'active' : ''} onClick={() => setMultiplier(x)}>{x}×</button>)}</div>
-            </div>
-            <div className="vg-readout">
-              <div className="r"><span>Stake (fixed by tier)</span><strong>{stake}</strong></div>
-              <div className="r win"><span>If you HIT</span><strong>+{win}</strong><span className="net">bonus, on top of attendance</span></div>
-              <div className="r lose"><span>If you MISS</span><strong>−{loss}</strong><span className="net">penalty off your balance</span></div>
-            </div>
-            <div className="vg-actions">
-              <button className="primary" disabled={!!problem} onClick={place}>Place commitment</button>
-              <span className={problem ? 'vg-warn' : 'vg-ok'}>{problem || `✓ Covered · settles ${new Date(data.deadline).toLocaleDateString()}`}</span>
-            </div>
-            {err && <p className="error">{err}</p>}
-          </div>
-        </section>
-      )}
-
-      <section className="panel">
-        <h2>Your active commitment</h2>
-        {data.active ? (
-          <div className="vg-bet">
-            <div>
-              <h4>{data.active.label}</h4>
-              <div className="meta">stake {data.active.stake} (kept) · by {new Date(data.active.deadline).toLocaleDateString()} · risk −{data.active.potentialLoss} on miss</div>
-            </div>
-            <div className="side">
-              <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
-              <div className="vg-betbtns">
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
-              </div>
-            </div>
-          </div>
-        ) : <p className="muted">No active standup commitment — set one above.</p>}
-      </section>
-
-      <section className="panel">
-        <h2>Past standup commitments</h2>
-        {data.history.length ? (
-          <table className="table"><thead><tr><th>Week pledge</th><th>Tier</th><th>Result</th><th>SP</th></tr></thead>
-            <tbody>{data.history.map(c => (
-              <tr key={c._id}><td>{c.label}</td><td>{c.tier}</td>
-                <td className={c.status === 'won' ? 'vg-hit' : 'vg-miss'}>{c.status === 'won' ? 'HIT' : 'MISS'}</td>
-                <td className={c.status === 'won' ? 'vg-hit' : 'vg-miss'}>{c.resultDelta >= 0 ? '+' : ''}{c.resultDelta}</td></tr>))}
-            </tbody></table>
-        ) : <p className="muted">No settled standup commitments yet.</p>}
+        <p className="muted" style={{ margin: 0 }}>You are about to invest:</p>
+        <p className="vault-confirm-amount"><strong>{principal} SP</strong></p>
+        <div className="vault-summary-rows">
+          <div><span>Selected Plan</span><strong>{plan.label}</strong></div>
+          <div><span>Duration</span><strong>{plan.durationDays} Days</strong></div>
+          <div><span>Attendance Requirement</span><strong>{Math.round(plan.attendanceRequirement * 100)}%</strong></div>
+          <div><span>Bonus Percentage</span><strong>{Math.round(plan.bonusRate * 100)}%</strong></div>
+          <div><span>Expected Profit</span><strong className="positive">+{expectedProfit} SP</strong></div>
+          <div><span>Expected Return</span><strong>{expectedReturn} SP</strong></div>
+        </div>
+        <div className="vault-confirm-notice">
+          <p>
+            <strong>Important Notice:</strong> Your SP will remain locked until the investment matures. If you fail to maintain the required attendance during the investment period, your investment may fail and you may lose the invested SP.
+          </p>
+        </div>
+        <div className="vault-confirm-actions">
+          <button className="secondary" type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
+          <button className="primary" type="button" onClick={onConfirm} disabled={submitting}>
+            {submitting ? 'Investing…' : 'Confirm Investment'}
+          </button>
+        </div>
       </section>
     </div>
   );
@@ -1131,6 +856,7 @@ function AdminView({ admin, auth, onBack }) {
   useEffect(() => {
     if (!auth?.email) return;
     const doPing = (page) => fetch(`${API}/ping`, {
+      credentials: 'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: auth.email, name: auth.email, page })
@@ -1140,29 +866,29 @@ function AdminView({ admin, auth, onBack }) {
     return () => clearInterval(id);
   }, [admin]);
   const loadLeaderboard = async (limit = leaderLimit) => {
-    const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers });
+    const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { credentials: 'include', headers });
     setLeaderboard(await res.json());
   };
   const loadAttendance = async () => {
-    const res = await fetch(`${API}/admin/attendance`, { headers });
+    const res = await fetch(`${API}/admin/attendance`, { credentials: 'include', headers });
     setAttendance(await res.json());
   };
   const loadStudent = async (id) => {
-    const res = await fetch(`${API}/admin/student/${id}`, { headers });
+    const res = await fetch(`${API}/admin/student/${id}`, { credentials: 'include', headers });
     setStudentProfile(await res.json());
   };
   const loadActive = async () => {
-    const res = await fetch(`${API}/admin/active`, { headers });
+    const res = await fetch(`${API}/admin/active`, { credentials: 'include', headers });
     setActive(await res.json());
   };
   const loadAnalytics = async () => {
-    const res = await fetch(`${API}/admin/analytics`, { headers });
+    const res = await fetch(`${API}/admin/analytics`, { credentials: 'include', headers });
     setAnalytics(await res.json());
   };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
   const fetchStats = async () => {
-    const r = await fetch(`${API}/admin/stats`, headers);
+    const r = await fetch(`${API}/admin/stats`, { ...headers, credentials: 'include' });
     if (r.ok) setStats(await r.json());
   };
   useEffect(() => {
@@ -1354,7 +1080,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   const loadList = async (status) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/admin/students-by-status?status=${status}&limit=200`, headers);
+      const res = await fetch(`${API}/admin/students-by-status?status=${status}&limit=200`, { ...headers, credentials: 'include' });
       if (res.ok) setList(await res.json());
     } finally {
       setLoading(false);
@@ -1399,7 +1125,7 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
     if (done.current) return;
     if (showNote) { setChecking(true); setNote(''); }
     try {
-      const r = await fetch(`${API}${statusPath}`);
+      const r = await fetch(`${API}${statusPath}`, { credentials: 'include' });
       if (r.ok && (await r.json()).completed) { done.current = true; onDone(); return; }
       if (showNote) setNote("We haven't received your response yet. Please make sure you pressed Submit in the form above — this window closes on its own once your response is recorded (it can take a few seconds).");
     } catch {
