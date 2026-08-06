@@ -1,7 +1,7 @@
 # Spurti Project Context
 
 ## Overview
-Spurti is a student engagement tracking app for the VLED Summership program at IIT Ropar. It tracks student attendance, polls, chat participation, and awards SP (Spurti Points).
+Spurti is a student engagement tracking app for the VLED Summership program at IIT Ropar. It awards SP (Spurti Points) for attendance, poll correctness, peer teaching/learning (SPA), answering peer queries, and ViBe course commitments. (Chat-based SP is a legacy, now-dormant source.)
 
 ## Running
 - **Production:** `https://samagama.in/spurti/`
@@ -100,20 +100,78 @@ Samagama's only remaining job is feeding two mirrors (Zoom data + expanded
 the ledger, clearing anyone not in it). Rules are identical to the band/tier
 rubric below; only the data sources changed.
 
-## SP Calculation — band/tier rubric (current, 2026-06)
+## SP Calculation — band/tier rubric (current, 2026-08)
 
-Implemented in `pipeline/sp-rubric-build.js` (NOT in this repo's `server/scripts/`,
-which hold the retired CSV/±5 logic). See `pipeline/README.md` for detail.
+Implemented in **`pipeline/sp-rubric-build-mirror.cjs`** (the mirror rubric). The
+old live-API `pipeline/sp-rubric-build.js` and this repo's `server/scripts/`
+CSV/±5 logic are **retired**. All categories are recomputed from scratch on every
+run (wipe-and-rebuild) except `manual`/`peer_faq`, which are preserved. Live
+categories in `sptransactions`: **`initial`, `attendance`, `poll`, `spa`,
+`query`** (plus preserved `manual`). See `pipeline/README.md` for detail.
+
+Common tier ladder used by attendance & poll:
+`pct ≥ 90 → +10, 75–89 → +5, 50–74 → +3, < 50 → 0` (positive-only; never negative).
 
 - **Initial:** +100 to every *started intern* on their official start date.
   Future-start interns are zeroed; non-intern roster entries are set aside.
-- **Attendance (A):** presence clipped to the official window
-  `[09:05 IST, min(first-instance-end, 11:00 IST)]`; `pct = clipped / window`,
-  then banded: **≥90% → +10, 75–89% → +5, 50–74% → +3, <50% → 0**.
-- **Poll (B):** `pct = answered / totalQuestions`, same band ladder (10/5/3/0).
+- **Attendance (A):** banded via the tier ladder. Source depends on the date:
+  - **Before 2026-07-16 (morning standup):** Zoom presence clipped to
+    `[09:05 IST, min(first-instance-end, 11:00 IST)]`.
+  - **2026-07-16 … Day 63 (evening on Zoom):** Zoom presence clipped to
+    `[20:05 IST, min(picked-mtg-end, 21:00 IST)]`; the scored meeting is the
+    mandatory meeting with the **largest overlap** of that window (constants
+    `EVENING_CUTOVER`/`EVENING_WSTART_IST`/`EVENING_WEND_IST`).
+  - **From Day 64 / 2026-07-29 (evening on Spandan — HYBRID):** no Zoom room, so
+    attendance is derived from **Spandan poll correctness**:
+    `attendedMinutes = min(60, round(correct / pollsLaunched × 100))` (≈60% correct
+    = a full 60-min session), then the tier ladder on `minutes/60`. Special
+    no-poll nights (V-Talks, celebrations) fall back to Zoom presence in an
+    official `SPECIAL_WINDOW_IST` window. Constant: `ATT_HYBRID_CUTOVER`.
+    Minutes feed `attendancerecords` (the My-Journey 3,600-min goal) via
+    `sync-attendance-records.cjs` parsing the `present X of Y min (Z%)` reason.
+- **Poll (B):**
+  - **From 2026-07-16 (Spandan):** correctness **percentiled to the day's top
+    scorer** — `pct = pointsEarned / dayTopPoints × 100`, then the tier ladder.
+    Source: `spandan_polls` (mirrored from the Spandan Research API by
+    `spandan-poll-fetch.cjs`).
+  - **Before 2026-07-16:** `pct = answered / totalQuestions` from the frozen
+    `zoom_polls` mirror (participation), unchanged as history has it.
+- **SPA (peer teaching/learning):** from **validated** `act_spa_endorsements`
+  (status `approved`/`audit_passed`): **+5/learned question (cap 50)** and
+  **+8/peer taught (cap 30)**. A confirmed-fraud or failed-audit flag applies a
+  penalty (−50% / −20% of current SP). `category:'spa'`.
+- **Query answering:** **+5 per DISTINCT peer query answered** (from
+  `act_query_reviews.peer.submittedAnswerHistory`), self-answers excluded,
+  **capped at 200 SP/student**; answers with `peer.review.action` of
+  `rejected`/`marked_unworthy` earn nothing. `category:'query'`.
 - **Grace day 2026-06-06:** 1-min join = full attendance + full poll.
-- **Chat / discretionary:** admin-reviewed via ChatSPReview in the web app
-  (absolute or %-of-balance award). Currently dormant (`chatrecords` empty).
+- **Chat / discretionary:** legacy ChatSPReview flow; **dormant** (`chatrecords`
+  empty, no chat SP awarded).
+
+**Beyond the ledger (web app, not `sptransactions` categories):** ViBe **stake
+commitments** (bet SP on a course %-by-deadline; win/lose the stake), **My
+Journey** goals incl. the **3,600-min standup goal**, **Levels / Trophy Leagues /
+Legend** (derived by `sync-levels.cjs`), and the **SP trajectory** snapshot.
+
+## Leaderboards — cached boards
+
+Replaces the old single all-time list. Curated boards are **precomputed** into
+`leaderboardsnapshots` (one doc per board, holding the FULL sorted list so the API
+can return the top 50 AND the caller's own rank even outside it):
+- **Windows:** `week` (fixed **Mon 00:00 IST reset**) and `all` (all-time).
+- **Categories:** `total` + per-category `attendance` / `poll` / `spa` (combined
+  learn+teach) / `query`. Weekly boards rank by SP *earned in the window*;
+  category boards by SP *from that category*; all-time-total by `students.totalSp`.
+- **Scope:** global, plus **cohort** (onboarding `leaderboardGroup`) for the total
+  board.
+- **No email** on student-facing boards (name + level + SP only).
+
+Built by `server/services/leaderboards.js` (`computeAndStoreLeaderboards`) via
+`server/scripts/buildLeaderboards.js`, wired into `sp-refresh.sh` (step 3b) — so
+boards are never staler than the SP data. Served by
+`GET /api/leaderboard/board?window&category&scope` → `{ rows: top50, me: {rank,sp} }`.
+Client: `LeaderboardPanel` (a preset dropdown). Population = `activeFilter`
+(`status ≠ excused`), identical to the rest of the app.
 
 > NOTE: session labels are now `Day N (DD Mon)` / `Orientation (15 May)`
 > (produced by the pipeline), NOT the old `"15 May Morning"` form still listed
@@ -168,10 +226,33 @@ Code: `getSamagamaUser` / `studentEmailFromRequest` in `server/server.js`.
 - **To verify new ingestion:** After running `ingestSession`, check that: (a) new session appears in `sessions` collection, (b) transaction count increases, (c) for a sample student, balance in `sptransactions` matches their `totalSp` in `students` table, (d) leaderboard API reflects updated SP
 
 ## Known Bugs / Notes
+- **2026-07-16 standup moved morning → evening (attendance window fix).** Students
+  flagged that the 16 Jul evening standup (~60 min) credited "115 min". Cause was
+  NOT double-counting: the scorer clipped presence to the fixed **09:05–11:00 IST
+  (=115 min) morning window**, which no longer matched the standup. The persistent
+  Zoom room `95674128668` ("Evening Standup") stays open all day, so it satisfied
+  the old morning window. Fix: added an evening-window cutover (see SP Calculation
+  section) → from 16 Jul the window is **20:05–21:00 IST (55 min)** and the scorer
+  picks the max-overlap meeting. Re-scored + APPLIED 2026-07-17 09:17Z
+  (backup `sp-runs/sp_backup_mirror_2026-07-17T0917Z`; script backup
+  `pipeline/sp-rubric-build-mirror.cjs.bak.20260717T091026Z`). Impact on 16 Jul:
+  493 students ↑ (mostly 0→+10, real evening attendees who'd been under-credited),
+  35 ↓ (incl. ~20 who only idled in the morning room, 10→0), 204 unchanged.
+  Dates before the cutover use the identical old code path (no historical change).
 - `deltaMode` validator error: schema expects `'absolute' | 'percentage'`. Using `'percent'` (singular) causes validation failure. Fixed in code — only affects legacy transactions created before the fix (May 26 restart).
 - **Percentage SP support:** When a chat SP review is accepted with `% SP` (e.g. +10% SP), `deltaMode` is set to `'percentage'`, `deltaValue` holds the percent (e.g. 10), and `appliedDelta` is computed at accept time as `round(currentBalance * deltaValue / 100)`. This works correctly.
 
-## Current DB State (2026-06-28, after mirror-rubric APPLY)
+## Current DB State (2026-08-04)
+Scored by `pipeline/sp-rubric-build-mirror.cjs` (`APPLY=1`), refreshed on the
+6-hourly `sp-refresh.sh` cron. Ballpark live figures:
+- students with `totalSp` > 0: **~3,843**
+- `sptransactions`: **~92,060** (categories: `initial`, `attendance`, `poll`,
+  `spa`, `query`)
+- sum of all `totalSp`: **~1,173,000**
+- Leaderboard #1: **Aman Jaiswal — 1,859 SP**
+- Integrity invariant still holds: per-student `sum(appliedDelta) == totalSp`.
+
+### (historical) 2026-06-28, after mirror-rubric APPLY
 Scored by `pipeline/sp-rubric-build-mirror.cjs` (`APPLY=1`), covering Day-by-day
 mandatory sessions 15 May → 27 Jun (36 qualifying sessions; 26 Jun was a holiday).
 - students with totalSp > 0: **3,062**
