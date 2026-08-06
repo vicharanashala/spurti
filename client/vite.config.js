@@ -5,6 +5,7 @@ export default defineConfig({
   base: './',
   plugins: [react()],
   server: {
+    allowedHosts: true,
     proxy: {
       '/spurti': {
         target: 'http://localhost:5290',
