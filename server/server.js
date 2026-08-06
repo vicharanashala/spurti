@@ -19,6 +19,7 @@ import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelt
 import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 import { buildSpaState } from './services/spa.js';
+import { simulateSp } from './services/spSimulator.js';
 import { buildTrajectoryState } from './services/trajectory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -278,6 +279,17 @@ function adminGuard(req, res, next) {
 }
 
 api.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+api.post('/sp/simulate', async (req, res) => {
+  try {
+    const result = await simulateSp(req.body || {});
+    res.json(result);
+  } catch (error) {
+    const status = Number(error?.status) || 500;
+    const message = error?.message || 'Internal Server Error';
+    res.status(status).json({ error: message });
+  }
+});
 
 api.get('/config', (_req, res) => res.json({
   allowStudentSearch: ALLOW_STUDENT_SEARCH,

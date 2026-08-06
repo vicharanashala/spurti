@@ -290,12 +290,14 @@ function StudentView({ profile, onBack }) {
         ['journey','My Journey'],
         ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
         ['spa','SPA Points'],
+        ['simulator','SP Simulator'],
         ['leaderboard','Leaderboard'],
         ['faq','FAQ']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
+      {tab === 'simulator' && <SpSimulator student={student} />}
       {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
       {tab === 'faq' && <FaqTab />}
     </main>
@@ -743,6 +745,136 @@ function Leaderboard({ rows }) {
   );
 }
 
+
+const SIMULATOR_OPTIONS = [
+  ['attendance', 'Attendance'],
+  ['reflection', 'Reflection'],
+  ['poll', 'Poll'],
+  ['commitment', 'Commitment']
+];
+
+function SpSimulator({ student }) {
+  const exampleRows = useMemo(() => ([
+    { type: 'attendance', count: 5 },
+    { type: 'reflection', count: 2 },
+    { type: 'poll', count: 4 },
+    { type: 'commitment', count: 3 }
+  ]), []);
+  const [rows, setRows] = useState(exampleRows);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const runSimulation = async (nextRows = rows) => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${API}/sp/simulate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentId: student._id,
+          activities: nextRows.map(row => ({ type: row.type, count: Number(row.count) }))
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Simulation failed');
+      setResult(data);
+    } catch (err) {
+      setResult(null);
+      setError(err?.message || 'Simulation failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    runSimulation(exampleRows);
+  }, []);
+
+  const updateRow = (index, patch) => {
+    setRows(prev => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  };
+
+  const addRow = () => setRows(prev => [...prev, { type: 'attendance', count: 1 }]);
+  const removeRow = (index) => setRows(prev => prev.filter((_, i) => i !== index));
+  const resetExample = () => {
+    setRows(exampleRows);
+    runSimulation(exampleRows);
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>SP Simulator</h2>
+          <p className="muted">Try future activities to preview your SP, level, and breakdown. This does not write anything to the database.</p>
+        </div>
+        <div className="bank-controls simulator-actions">
+          <button className="secondary" onClick={resetExample}>Reset example</button>
+          <button className="primary" onClick={() => runSimulation()}>Simulate</button>
+        </div>
+      </div>
+
+      <div className="simulator-shell">
+        <div className="simulator-grid">
+          {rows.map((row, index) => (
+            <div key={`${row.type}-${index}`} className="simulator-row">
+              <label>
+                Activity
+                <select value={row.type} onChange={e => updateRow(index, { type: e.target.value })}>
+                  {SIMULATOR_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </label>
+              <label>
+                Count
+                <input type="number" min="0" step="1" value={row.count} onChange={e => updateRow(index, { count: e.target.value })} />
+              </label>
+              <button className="secondary" onClick={() => removeRow(index)} disabled={rows.length === 1}>Remove</button>
+            </div>
+          ))}
+        </div>
+
+        <button className="secondary" onClick={addRow}>Add activity</button>
+
+        {error && <p className="error" style={{ marginTop: 12 }}>{error}</p>}
+        {loading && <p className="muted" style={{ marginTop: 12 }}>Calculating prediction…</p>}
+
+        {result && (
+          <div className="simulator-results">
+            <div className="metric-grid small">
+              <div className="metric"><span>Current SP</span><strong>{result.currentSP}</strong></div>
+              <div className="metric"><span>Predicted SP</span><strong>{result.predictedSP}</strong></div>
+              <div className="metric"><span>Gain</span><strong>{result.gain}</strong></div>
+              <div className="metric"><span>Predicted Level</span><strong>L{result.predictedLevel}</strong></div>
+            </div>
+
+            <div className="badge-row">
+              <em>Current level L{result.currentLevel}</em>
+              <em>Current league {result.currentTrophyLeague}</em>
+              <em>Predicted league {result.predictedTrophyLeague}</em>
+              <em>{result.predictedLegendBadgeUnlocked ? 'Legend badge unlocked' : 'Legend badge locked'}</em>
+            </div>
+
+            <h3>Breakdown</h3>
+            <table className="table">
+              <thead><tr><th>Activity</th><th>Count</th><th>SP</th></tr></thead>
+              <tbody>
+                {result.breakdown.map(item => (
+                  <tr key={`${item.activity}-${item.count}`}>
+                    <td>{item.activity}</td>
+                    <td>{item.count}</td>
+                    <td>+{item.sp}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
 const fmtDate = d => d ? new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '—';
 const toInput = d => d ? new Date(d).toISOString().slice(0, 10) : '';
 
