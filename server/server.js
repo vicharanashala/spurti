@@ -6,6 +6,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
+import { connectToDatabase } from './db.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
@@ -14,6 +15,8 @@ import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import LeaderboardSnapshot from './models/LeaderboardSnapshot.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { DEFAULT_SUNDAY_BONUS_CONFIG, calculateSundayBonus } from './services/sundayBonus.js';
+import { loadSundayBonusConfig, saveSundayBonusConfig } from './services/sundayBonusConfig.js';
 import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
 import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
@@ -64,6 +67,8 @@ const SURVEY = makeSurvey('SURVEY', 'surveyCompleted');
 const POLL2 = makeSurvey('POLL2', 'poll2Completed');
 const POLL3 = makeSurvey('POLL3', 'poll3Completed');
 const SURVEYS = [SURVEY, POLL2, POLL3];
+const SUNDAY_BONUS_CONFIG = loadSundayBonusConfig();
+globalThis.__SUNDAY_BONUS_CONFIG__ = SUNDAY_BONUS_CONFIG;
 
 // Cached fetch of the submitted-email set from a survey's Apps Script endpoint.
 async function getSubmittedEmails(cfg) {
@@ -283,8 +288,20 @@ api.get('/config', (_req, res) => res.json({
   allowStudentSearch: ALLOW_STUDENT_SEARCH,
   survey: surveyPublic(SURVEY),
   poll2: surveyPublic(POLL2),
-  poll3: surveyPublic(POLL3)
+  poll3: surveyPublic(POLL3),
+  sundayBonus: SUNDAY_BONUS_CONFIG
 }));
+
+api.get('/admin/sunday-bonus', adminGuard, (_req, res) => {
+  res.json(SUNDAY_BONUS_CONFIG);
+});
+
+api.post('/admin/sunday-bonus', adminGuard, (req, res) => {
+  const nextConfig = saveSundayBonusConfig(req.body || {});
+  Object.assign(SUNDAY_BONUS_CONFIG, nextConfig);
+  globalThis.__SUNDAY_BONUS_CONFIG__ = SUNDAY_BONUS_CONFIG;
+  res.json(SUNDAY_BONUS_CONFIG);
+});
 
 api.get('/me', async (req, res) => {
   const email = await studentEmailFromRequest(req);
@@ -768,11 +785,27 @@ if (fs.existsSync(clientDist)) {
   app.get('*', (_req, res) => res.status(404).send('Build the client first with npm run build.'));
 }
 
-mongoose.connect(MONGO_URI).then(() => {
-  app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
+function startServer(port, databaseLabel) {
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Spurti app running at http://localhost:${port}/ (${databaseLabel})`);
+  }).on('error', (error) => {
+    if (error?.code === 'EADDRINUSE') {
+      const fallbackPort = port + 1;
+      console.warn(`Port ${port} is busy, retrying on ${fallbackPort}`);
+      startServer(fallbackPort, databaseLabel);
+      return;
+    }
+    console.error('Failed to start server:', error?.message || error);
+    process.exit(1);
+  });
+}
+
+connectToDatabase(MONGO_URI).then(({ memoryServer }) => {
+  const databaseLabel = memoryServer ? 'in-memory MongoDB' : 'MongoDB';
+  startServer(PORT, databaseLabel);
 }).catch((error) => {
-  console.error(error);
-  process.exit(1);
+  console.error('MongoDB unavailable, starting server without database:', error?.message || error);
+  startServer(PORT, 'database unavailable');
 });
 
 
