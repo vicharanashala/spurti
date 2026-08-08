@@ -704,3 +704,135 @@ input {
 .lb-week { font-size: 12.5px; margin: 0 0 10px; }
 .lb-me { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); font-size: 13.5px; font-weight: 700; }
 .lb-me .muted { font-weight: 500; }
+
+/* ---- Achievement Badges -------------------------------------------------- */
+.jr-badges-btn {
+  margin-top: 10px;
+}
+
+.badge-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(15, 23, 42, 0.52);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.badge-modal {
+  background: var(--panel, #fff);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  width: min(560px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.badge-modal .panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.badge-modal .panel-head h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.badge-modal-close {
+  background: none;
+  border: none;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.badge-modal-close:hover {
+  color: var(--text);
+  background: #f1f5f9;
+}
+
+.badge-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.badge-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.badge-image {
+  width: 5rem;
+  height: 5rem;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.badge-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.badge-status {
+  display: inline-block;
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e9f7ee;
+  color: var(--green);
+}
+
+.badge-name {
+  margin: 4px 0 2px;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.badge-description {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.badge-context {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--amber);
+  font-weight: 600;
+  background: #fef3e2;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+.badge-empty {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: center;
+  padding: 24px 12px;
+  margin: 0;
+}
+
