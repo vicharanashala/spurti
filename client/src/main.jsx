@@ -799,11 +799,58 @@ function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave })
   );
 }
 
+const ACHIEVEMENT_BADGES = [
+  {
+    id: 'data-science-foundation',
+    title: 'Data Science Foundation',
+    description: 'Completed SPA — Matrix Mystics and reached 100% progress.',
+    context: 'This is a motivational milestone badge and NOT the official certification.',
+    image: '/badges/data-science-foundation.png',
+    isUnlocked: (journey) =>
+      journey?.spa?.total > 0 &&
+      journey?.spa?.solved >= journey?.spa?.total
+  }
+];
+
+function BadgeGalleryModal({ badges, onClose }) {
+  return (
+    <div className="badge-modal-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Achieved Badges">
+      <div className="badge-modal" onClick={e => e.stopPropagation()}>
+        <div className="panel-head">
+          <h2>Achieved Badges</h2>
+          <button type="button" className="badge-modal-close" onClick={onClose} aria-label="Close modal">×</button>
+        </div>
+
+        <div className="badge-gallery">
+          {badges.length === 0 ? (
+            <p className="badge-empty">
+              No badges achieved yet. Complete milestones in your learning journey to unlock badges.
+            </p>
+          ) : (
+            badges.map(badge => (
+              <div key={badge.id} className="badge-card">
+                <img src={badge.image} alt={badge.title} className="badge-image" />
+                <div className="badge-details">
+                  <span className="badge-status">Achieved</span>
+                  <h3 className="badge-name">{badge.title}</h3>
+                  <p className="badge-description">{badge.description}</p>
+                  {badge.context && <p className="badge-context">{badge.context}</p>}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MyJourney({ student, goToCommitment, canCommit = false }) {
   const email = student.email;
   const [data, setData] = useState(null);
   const [form, setForm] = useState({});
   const [showTraj, setShowTraj] = useState(false);
+  const [showBadges, setShowBadges] = useState(false);
   const [err, setErr] = useState(null);
 
   const load = async () => {
@@ -816,6 +863,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
   if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
 
   const { standups, vibe, goals } = data;
+  const unlockedBadges = ACHIEVEMENT_BADGES.filter(b => b.isUnlocked(data));
 
   const saveTarget = async (field, value) => {
     const r = await fetch(`${API}/journey/plan`, {
@@ -833,6 +881,9 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
       <section className="panel jr-intro">
         <h2>My Journey</h2>
         <p className="muted"><b>🎯 Goal</b> = your own finish-date target; it tracks your pace, no SP.{canCommit && <> &nbsp;<b>🎲 Commitment</b> = stake SP on a bet — the <b>Stake SP</b> link.</>}</p>
+        <button type="button" className="secondary jr-badges-btn" onClick={() => setShowBadges(true)}>
+          View Achieved Badges
+        </button>
         {err && <p className="error">{err}</p>}
       </section>
 
@@ -894,6 +945,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
       </section>
 
       {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
+      {showBadges && <BadgeGalleryModal badges={unlockedBadges} onClose={() => setShowBadges(false)} />}
     </div>
   );
 }
