@@ -321,7 +321,7 @@ function StudentView({ profile, setProfile, onBack }) {
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'goals' && <GoalsTab profile={profile} setProfile={setProfile} />}
       {tab === 'shop' && <ShopTab profile={profile} setProfile={setProfile} />}
-      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
       {tab === 'faq' && <FaqTab />}
     </main>
   );
@@ -590,10 +590,22 @@ function TrajectoryModal({ student, onClose }) {
   );
 }
 
-function StudentPulse({ profile }) {
-  const { student, cohort, transactions } = profile;
+function StudentPulse({ profile, badges = [], nextActions = [] }) {
+  const { student, cohort, transactions = [], attendance = [], polls = [] } = profile;
   const [showTraj, setShowTraj] = useState(false);
   const mission = student.recoveryMission;
+
+  const qualified = useMemo(() => attendance.filter(a => a.qualified).length, [attendance]);
+  const pollAttempted = useMemo(() => polls.reduce((sum, p) => sum + p.attemptedQuestions, 0), [polls]);
+  const pollTotal = useMemo(() => polls.reduce((sum, p) => sum + p.totalQuestions, 0), [polls]);
+
+  const trend = useMemo(() => {
+    return transactions.map(tx => ({
+      value: tx.balanceAfter,
+      label: tx.sessionLabel || tx.reason || new Date(tx.dateTime).toLocaleDateString()
+    }));
+  }, [transactions]);
+
   return (
     <>
       <section className="pulse-grid">
@@ -689,6 +701,41 @@ function buildBadges(profile) {
   if ((profile.student.shieldsCount || 0) > 0 || (profile.transactions || []).some(tx => tx.category === 'shield_purchase' || tx.category === 'shield_consume')) badges.push('Shielded');
   if ((profile.reflections || []).some(r => r.submitted)) badges.push('Reflective Thinker');
   return badges.length ? badges : ['Getting Started'];
+}
+
+function buildNextActions(profile) {
+  const actions = [];
+  const student = profile?.student || {};
+  const attendance = profile?.attendance || [];
+  const polls = profile?.polls || [];
+  const reflections = profile?.reflections || [];
+
+  const qualifiedPct = attendance.length ? attendance.filter(a => a.qualified).length / attendance.length : 0;
+  const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
+  const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
+  const hasReflections = reflections.some(r => r.submitted);
+  const shieldsCount = student.shieldsCount || 0;
+
+  if (qualifiedPct < 0.75) {
+    actions.push('Attend daily standups consistently to raise your attendance qualification rate above 75%.');
+  }
+  if (!pollTotal || (pollAttempted / pollTotal < 0.75)) {
+    actions.push('Participate actively in classroom polls to improve your Poll accuracy and score.');
+  }
+  if (!hasReflections) {
+    actions.push('Submit your weekly reflection in the Reflections tab.');
+  }
+  if (shieldsCount === 0) {
+    actions.push('Purchase an SP Shield from the Shop to safeguard your session streak.');
+  }
+  if (student.totalSp < (profile?.cohort?.averageSp || 0)) {
+    actions.push('Engage in peer teaching (SPA) or answer peer queries to earn additional SP.');
+  }
+
+  if (actions.length === 0) {
+    actions.push('You are on track! Keep showing up, answering polls, and supporting peers to maintain your standing.');
+  }
+  return actions;
 }
 
 // Student-facing FAQ — reflects the CURRENT SP rules (banded attendance/poll,
