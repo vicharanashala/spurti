@@ -209,7 +209,8 @@ export async function createTransactionOnce(student, category, sessionLabel, del
   const exists = await SPTransaction.exists({ email: student.email, category, sessionLabel });
   if (exists) { stats.skippedExistingTransactions = (stats.skippedExistingTransactions || 0) + 1; return null; }
   const last = await SPTransaction.findOne({ email: student.email }).sort({ dateTime: -1, createdAt: -1 }).lean();
-  const balanceAfter = Number(last?.balanceAfter ?? student.totalSp ?? 0) + delta;
+  const prevBalance = Number(last?.balanceAfter ?? student.totalSp ?? 0);
+  const balanceAfter = Math.max(0, prevBalance + delta);
   const transaction = await SPTransaction.create({
     email: student.email,
     studentId: student._id,
@@ -230,7 +231,7 @@ export async function recalculateStudentSp(studentOrEmail) {
   const txns = await SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 });
   let balance = 0;
   for (const txn of txns) {
-    balance += Number(txn.appliedDelta || 0);
+    balance = Math.max(0, balance + Number(txn.appliedDelta || 0));
     if (txn.balanceAfter !== balance) {
       txn.balanceAfter = balance;
       await txn.save();

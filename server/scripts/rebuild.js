@@ -174,7 +174,8 @@ function sessionApplies(student, sessionEnd) {
 
 async function addTransaction(student, category, sessionLabel, delta, reason, dateTime, balances) {
   const email = student.email;
-  const balanceAfter = (balances.get(email) || 0) + delta;
+  const prevBalance = balances.get(email) || 0;
+  const balanceAfter = Math.max(0, prevBalance + delta);
   balances.set(email, balanceAfter);
   const transaction = await SPTransaction.create({
     email,
