@@ -69,7 +69,7 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} setProfile={setProfile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} config={config} setProfile={setProfile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -215,23 +215,33 @@ function SearchModal({ onClose, onStudent }) {
 
   const search = async () => {
     if (query.trim().length < 2) return setMessage('Type at least 2 characters.');
-    const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
-    const data = await res.json();
-    if (data.excused) return onStudent(data);
-    if (data.exact) return onStudent(data.profile);
-    setMatches(data.matches || []);
-    setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
+    try {
+      const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
+      const data = await res.json();
+      if (data.excused) return onStudent(data);
+      if (data.exact) return onStudent(data.profile);
+      setMatches(data.matches || []);
+      setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
+    } catch (err) {
+      setMessage('Search failed. Please try again.');
+    }
   };
 
   const confirm = async () => {
-    const res = await fetch(`${API}/confirm`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ studentId: selected?._id, email: confirmEmail })
-    });
-    const data = await res.json();
-    if (!res.ok) return setMessage(data.error || 'Email did not match.');
-    onStudent(data);
+    if (!selected) return setMessage('Please select your record first.');
+    if (!confirmEmail.trim()) return setMessage('Please enter your full email.');
+    try {
+      const res = await fetch(`${API}/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: selected._id, email: confirmEmail.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) return setMessage(data.error || 'Email did not match.');
+      onStudent(data);
+    } catch (err) {
+      setMessage('Confirmation failed. Please try again.');
+    }
   };
 
   return (
@@ -272,7 +282,8 @@ function SearchModal({ onClose, onStudent }) {
 function StudentView({ profile, setProfile, onBack }) {
   const [tab, setTab] = useState('bank');
   const [commitPhase, setCommitPhase] = useState('vibe');
-  const { student } = profile;
+  const [showCalendarModal, setShowCalendarModal] = useState(false);
+  const { student, cohort } = profile;
   const badges = useMemo(() => buildBadges(profile), [profile]);
   const nextActions = useMemo(() => buildNextActions(profile), [profile]);
 
@@ -290,17 +301,48 @@ function StudentView({ profile, setProfile, onBack }) {
   };
 
   const goToCommitment = ph => { setCommitPhase(ph); setTab('vibe'); };
+  useEffect(() => {
+    const onOpen = () => setShowCalendarModal(true);
+    window.addEventListener('openCalendarModal', onOpen);
+    return () => window.removeEventListener('openCalendarModal', onOpen);
+  }, []);
   return (
     <main className="page compact">
       <NudgesBanner nudges={student.nudges || []} onDismiss={dismissNudges} />
       <header className="topbar">
-        {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
-        <div>
-          <p className="eyebrow">Student Spurti Bank</p>
-          <h1>{student.name}</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
+          <div>
+            <p className="eyebrow">Student Spurti Bank</p>
+            <h1>{student.name}</h1>
+          </div>
         </div>
-        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong>={student.rank && student.cohortSize ? <em>Rank {student.rank} of {student.cohortSize}</em> : null}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button className="secondary" onClick={() => setShowCalendarModal(true)}>Sync Calendar</button>
+          <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong>={student.rank && student.cohortSize ? <em>Rank {student.rank} of {student.cohortSize}</em> : null}</div>
+        </div>
       </header>
+      {cohort?.cohortWeekly ? (
+        <section className="weekly-target-banner">
+          <div>
+            <p className="eyebrow">Weekly cohort target</p>
+            <strong>{cohort.cohortWeekly.progress.toLocaleString()} / {cohort.cohortWeekly.target.toLocaleString()} SP</strong>
+            <p className="muted">Last week: {cohort.cohortWeekly.lastWeek.toLocaleString()} SP — this week’s target is 10% higher.</p>
+          </div>
+          <div className="progress-track banner-track">
+            <div className="progress-fill" style={{ width: `${cohort.cohortWeekly.pct ?? 0}%` }} />
+          </div>
+          <p className="muted" style={{ marginTop: '8px' }}>{cohort.cohortWeekly.pct ?? 0}% of target reached</p>
+        </section>
+      ) : (
+        <section className="weekly-target-banner" style={{ opacity: 0.6 }}>
+          <div>
+            <p className="eyebrow">Weekly cohort target</p>
+            <strong>Not available yet</strong>
+            <p className="muted">This metric appears once cohort activity is recorded for the week.</p>
+          </div>
+        </section>
+      )}
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[
@@ -323,6 +365,7 @@ function StudentView({ profile, setProfile, onBack }) {
       {tab === 'shop' && <ShopTab profile={profile} setProfile={setProfile} />}
       {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
       {tab === 'faq' && <FaqTab />}
+      {showCalendarModal && <CalendarModal profile={profile} config={config} onClose={() => setShowCalendarModal(false)} />}
     </main>
   );
 }
@@ -638,6 +681,20 @@ function StudentPulse({ profile, badges = [], nextActions = [] }) {
             <b>{pollAttempted}/{pollTotal} polls attempted</b>
           </div>
         </div>
+        <div className="pulse-card progress-card weekly-target-card" style={{ border: '2px solid #176b87', padding: '16px' }}>
+          <span>Weekly cohort target</span>
+          <strong>{(cohort?.cohortWeekly?.progress ?? 0).toLocaleString()} / {(cohort?.cohortWeekly?.target ?? 150).toLocaleString()} SP</strong>
+          <p className="muted">
+            {cohort?.cohortWeekly ? `${cohort.cohortWeekly.lastWeek.toLocaleString()} SP last week; target is 10% higher.` : 'Projected cohort goal based on recent activity; real numbers will appear once the week begins.'}
+          </p>
+          <div className="progress-track">
+            <div className="progress-fill" style={{ width: `${cohort?.cohortWeekly?.pct ?? 0}%` }} />
+          </div>
+          <p className="muted" style={{ marginTop: '8px' }}>
+            {(cohort?.cohortWeekly?.pct ?? 0).toLocaleString()}% of projected target reached
+          </p>
+          <p className="muted" style={{ marginTop: '10px', fontWeight: 700 }}>This card is intentionally placed below Session health and above Badges.</p>
+        </div>
         <div className="pulse-card wide-pulse">
           <span>Badge Gallery</span>
           <div className="badge-gallery-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '10px', marginTop: '8px' }}>
@@ -667,10 +724,93 @@ function StudentPulse({ profile, badges = [], nextActions = [] }) {
         <div className="pulse-card wide-pulse">
           <span>What to do next</span>
           <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
+          <div style={{ marginTop: '10px' }}>
+            <button className="secondary" onClick={() => window.dispatchEvent(new CustomEvent('openCalendarModal'))}>Sync Calendar</button>
+          </div>
         </div>
       </section>
       {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
     </>
+  );
+}
+
+function CalendarModal({ profile, config, onClose }) {
+  const [msg, setMsg] = useState('');
+  const student = profile.student;
+  const linked = Boolean(profile.calendarLinked);
+  const googleEnabled = Boolean(config?.calendarGoogleEnabled);
+  const downloadICS = async () => {
+    setMsg('Preparing .ics...');
+    try {
+      const r = await fetch(`${API}/calendar/ics`);
+      if (!r.ok) throw new Error('failed');
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'spurti-sessions.ics';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMsg('Downloaded .ics file');
+    } catch (err) {
+      setMsg('Failed to download .ics');
+    }
+  };
+
+  const linkGoogle = () => {
+    const w = window.open(`${API}/calendar/oauth/google?email=${encodeURIComponent(student.email)}`, '_blank');
+    if (!w) setMsg('Popup blocked — allow popups and try again');
+    else setMsg('Consent screen opened in new tab');
+  };
+
+  const syncGoogle = async () => {
+    setMsg('Syncing events to Google...');
+    try {
+      const r = await fetch(`${API}/calendar/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: student.email }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'sync failed');
+      setMsg(`Created ${j.created || 0} events`);
+    } catch (err) {
+      setMsg(`Sync failed: ${err.message}`);
+    }
+  };
+
+  const disconnect = async () => {
+    setMsg('Disconnecting...');
+    try {
+      const r = await fetch(`${API}/calendar/disconnect`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: student.email }) });
+      if (!r.ok) throw new Error('disconnect failed');
+      setMsg('Disconnected. Refresh the page to update status.');
+    } catch (err) {
+      setMsg('Disconnect failed');
+    }
+  };
+
+  return (
+    <div className="overlay">
+      <section className="modal calendar-modal">
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">Calendar</p>
+            <h1>Sync your sessions</h1>
+          </div>
+          <button className="secondary" onClick={onClose}>Close</button>
+        </div>
+        <div style={{ padding: '12px' }}>
+          <p className="muted">You can download an .ics file or link your Google Calendar for live syncing.</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '8px' }}>
+            <button className="primary" onClick={downloadICS}>Download .ics</button>
+            <button className="secondary" onClick={linkGoogle} disabled={!googleEnabled} title={googleEnabled ? '' : 'Google OAuth is not configured on the server.'}>Link Google Calendar</button>
+            <button className="primary" onClick={syncGoogle} disabled={!googleEnabled} title={googleEnabled ? '' : 'Google OAuth is not configured on the server.'}>Sync to Google</button>
+            {linked && <button className="secondary" onClick={disconnect}>Disconnect</button>}
+          </div>
+          {!googleEnabled && <p className="muted" style={{ marginTop: '10px' }}>Google Calendar sync is currently unavailable because the server is not configured with Google OAuth credentials.</p>}
+          {msg && <p style={{ marginTop: '10px' }}>{msg}</p>}
+        </div>
+      </section>
+    </div>
   );
 }
 

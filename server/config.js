@@ -63,3 +63,8 @@ export const SESSION_THRESHOLDS_MINUTES = {
 };
 
 export const SESSION_THRESHOLDS_PCT = 0.75; // default % of session duration to qualify
+export const GOOGLE_CALENDAR_ENABLED = Boolean(
+  process.env.GOOGLE_CLIENT_ID &&
+  process.env.GOOGLE_CLIENT_SECRET &&
+  process.env.CALENDAR_ENCRYPTION_KEY
+);

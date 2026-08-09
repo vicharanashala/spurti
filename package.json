@@ -12,6 +12,7 @@
     "setup": "npm install && npm --prefix client install && npm run rebuild && npm run build",
     "build": "npm --prefix client run build",
     "start": "node server/server.js",
+    "test": "node scripts/test-calendar-utils.js",
     "dev": "node server/server.js"
   },
   "dependencies": {

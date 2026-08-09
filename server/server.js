@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
-import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
+import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL, GOOGLE_CALENDAR_ENABLED } from './config.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
@@ -14,6 +14,7 @@ import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import Reflection from './models/Reflection.js';
 import LeaderboardSnapshot from './models/LeaderboardSnapshot.js';
+import calendarRouter from './routes/calendar.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
@@ -113,6 +114,7 @@ function surveyPublic(cfg) {
 
 const app = express();
 const api = express.Router();
+api.use('/calendar', calendarRouter);
 const liveViewers = new Map();
 
 app.use(cors());
@@ -212,6 +214,17 @@ function getWeekLabel(startDate) {
   return `Week ${weekNum}`;
 }
 
+function weekRangeFor(date, offsetWeeks = 0) {
+  const dt = new Date(date);
+  const utcDay = dt.getUTCDay() || 7; // treat Sunday as 7
+  const monday = new Date(dt);
+  monday.setUTCDate(dt.getUTCDate() - utcDay + 1 + offsetWeeks * 7);
+  monday.setUTCHours(0, 0, 0, 0);
+  const nextMonday = new Date(monday);
+  nextMonday.setUTCDate(monday.getUTCDate() + 7);
+  return { start: monday, end: nextMonday };
+}
+
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
@@ -224,6 +237,21 @@ async function studentPayload(student) {
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean(),
     Reflection.find({ email }).sort({ createdAt: -1 }).lean()
   ]);
+  const now = new Date();
+  const thisWeek = weekRangeFor(now, 0);
+  const lastWeek = weekRangeFor(now, -1);
+  const cohortWeeklyTotal = await SPTransaction.aggregate([
+    { $match: { dateTime: { $gte: thisWeek.start, $lt: thisWeek.end }, appliedDelta: { $gt: 0 } } },
+    { $group: { _id: null, total: { $sum: '$appliedDelta' } } }
+  ]);
+  const lastWeekTotal = await SPTransaction.aggregate([
+    { $match: { dateTime: { $gte: lastWeek.start, $lt: lastWeek.end }, appliedDelta: { $gt: 0 } } },
+    { $group: { _id: null, total: { $sum: '$appliedDelta' } } }
+  ]);
+  const cohortThisWeek = Number(cohortWeeklyTotal[0]?.total || 0);
+  const cohortLastWeek = Number(lastWeekTotal[0]?.total || 0);
+  const weeklyTarget = Math.max(1, Math.round(cohortLastWeek * 1.1));
+  const weeklyProgressPct = Math.min(100, Math.round((cohortThisWeek / weeklyTarget) * 100));
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
@@ -273,6 +301,13 @@ async function studentPayload(student) {
       poll3Completed: Boolean(student.poll3Completed),
       eligibleForVibeGoals: isVibeEligible(student)
     },
+    calendarLinked: Boolean(student.jscalendar?.google?.refreshToken),
+    cohortWeekly: {
+      target: weeklyTarget,
+      progress: cohortThisWeek,
+      lastWeek: cohortLastWeek,
+      pct: weeklyProgressPct
+    },
     transactions,
     polls,
     attendance,
@@ -308,7 +343,8 @@ api.get('/config', (_req, res) => res.json({
   allowStudentSearch: ALLOW_STUDENT_SEARCH,
   survey: surveyPublic(SURVEY),
   poll2: surveyPublic(POLL2),
-  poll3: surveyPublic(POLL3)
+  poll3: surveyPublic(POLL3),
+  calendarGoogleEnabled: GOOGLE_CALENDAR_ENABLED
 }));
 
 api.get('/me', async (req, res) => {

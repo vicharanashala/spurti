@@ -220,6 +220,23 @@ input {
 .level-tile.league.tier-diamond  { background: linear-gradient(135deg, #3b82c4, #5fc8f0); }
 .level-tile.league.tier-legend   { background: linear-gradient(135deg, #6d28d9, #c026d3); }
 .level-note { color: var(--muted); font-size: 13px; margin-top: 12px; line-height: 1.5; }
+.weekly-target-banner {
+  background: linear-gradient(135deg, #eff8ff, #f3f9fb);
+  border: 1px solid #cbeaf8;
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 18px;
+  box-shadow: 0 14px 34px rgba(23, 32, 51, 0.08);
+}
+.weekly-target-banner strong {
+  display: block;
+  font-size: 26px;
+  color: var(--primary);
+  margin: 6px 0;
+}
+.banner-track {
+  margin-top: 10px;
+}
 @media (max-width: 720px) { .level-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .pulse-grid {
   display: grid;
@@ -233,6 +250,27 @@ input {
   border-radius: 8px;
   box-shadow: var(--shadow);
   padding: 14px;
+}
+.pulse-card.progress-card {
+  background: #f7fcff;
+  border-color: rgba(23, 32, 51, 0.08);
+}
+.pulse-card.weekly-target-card {
+  background: #f8fafc;
+  grid-column: 1 / -1;
+  width: 100%;
+}
+.progress-track {
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+  margin-top: 10px;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #176b87, #2fa7c4);
 }
 .pulse-card > span {
   display: block;
