@@ -69,7 +69,7 @@ function App() {
   if (view === 'student' && profile) {
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} config={config} setProfile={setProfile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -215,23 +215,33 @@ function SearchModal({ onClose, onStudent }) {
 
   const search = async () => {
     if (query.trim().length < 2) return setMessage('Type at least 2 characters.');
-    const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
-    const data = await res.json();
-    if (data.excused) return onStudent(data);
-    if (data.exact) return onStudent(data.profile);
-    setMatches(data.matches || []);
-    setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
+    try {
+      const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
+      const data = await res.json();
+      if (data.excused) return onStudent(data);
+      if (data.exact) return onStudent(data.profile);
+      setMatches(data.matches || []);
+      setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
+    } catch (err) {
+      setMessage('Search failed. Please try again.');
+    }
   };
 
   const confirm = async () => {
-    const res = await fetch(`${API}/confirm`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ studentId: selected?._id, email: confirmEmail })
-    });
-    const data = await res.json();
-    if (!res.ok) return setMessage(data.error || 'Email did not match.');
-    onStudent(data);
+    if (!selected) return setMessage('Please select your record first.');
+    if (!confirmEmail.trim()) return setMessage('Please enter your full email.');
+    try {
+      const res = await fetch(`${API}/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: selected._id, email: confirmEmail.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) return setMessage(data.error || 'Email did not match.');
+      onStudent(data);
+    } catch (err) {
+      setMessage('Confirmation failed. Please try again.');
+    }
   };
 
   return (
@@ -269,35 +279,93 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+function StudentView({ profile, setProfile, onBack }) {
   const [tab, setTab] = useState('bank');
   const [commitPhase, setCommitPhase] = useState('vibe');
-  const { student } = profile;
+  const [showCalendarModal, setShowCalendarModal] = useState(false);
+  const { student, cohort } = profile;
+  const badges = useMemo(() => buildBadges(profile), [profile]);
+  const nextActions = useMemo(() => buildNextActions(profile), [profile]);
+
+  const dismissNudges = async () => {
+    try {
+      const res = await fetch(`${API}/nudges/read`, {
+        method: 'POST',
+        headers: { 'X-Student-Email': student.email }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setProfile(data.profile);
+      }
+    } catch {}
+  };
+
   const goToCommitment = ph => { setCommitPhase(ph); setTab('vibe'); };
+  useEffect(() => {
+    const onOpen = () => setShowCalendarModal(true);
+    window.addEventListener('openCalendarModal', onOpen);
+    return () => window.removeEventListener('openCalendarModal', onOpen);
+  }, []);
   return (
     <main className="page compact">
+      <NudgesBanner nudges={student.nudges || []} onDismiss={dismissNudges} />
       <header className="topbar">
-        {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
-        <div>
-          <p className="eyebrow">Student Spurti Bank</p>
-          <h1>{student.name}</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
+          <div>
+            <p className="eyebrow">Student Spurti Bank</p>
+            <h1>{student.name}</h1>
+          </div>
         </div>
-        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button className="secondary" onClick={() => setShowCalendarModal(true)}>Sync Calendar</button>
+          <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong>={student.rank && student.cohortSize ? <em>Rank {student.rank} of {student.cohortSize}</em> : null}</div>
+        </div>
       </header>
+      {cohort?.cohortWeekly ? (
+        <section className="weekly-target-banner">
+          <div>
+            <p className="eyebrow">Weekly cohort target</p>
+            <strong>{cohort.cohortWeekly.progress.toLocaleString()} / {cohort.cohortWeekly.target.toLocaleString()} SP</strong>
+            <p className="muted">Last week: {cohort.cohortWeekly.lastWeek.toLocaleString()} SP — this week’s target is 10% higher.</p>
+          </div>
+          <div className="progress-track banner-track">
+            <div className="progress-fill" style={{ width: `${cohort.cohortWeekly.pct ?? 0}%` }} />
+          </div>
+          <p className="muted" style={{ marginTop: '8px' }}>{cohort.cohortWeekly.pct ?? 0}% of target reached</p>
+        </section>
+      ) : (
+        <section className="weekly-target-banner" style={{ opacity: 0.6 }}>
+          <div>
+            <p className="eyebrow">Weekly cohort target</p>
+            <strong>Not available yet</strong>
+            <p className="muted">This metric appears once cohort activity is recorded for the week.</p>
+          </div>
+        </section>
+      )}
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
-        ['journey','My Journey'],
-        ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
-        ['spa','SPA Points'],
-        ['leaderboard','Leaderboard'],
-        ['faq','FAQ']]} />
+      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
+      <Tabs tab={tab} setTab={setTab} tabs={[
+        ['bank', 'SP Bank'],
+        ['journey', 'My Journey'],
+        ...(student.eligibleForVibeGoals ? [['vibe', 'Commitments']] : []),
+        ['spa', 'SPA Points'],
+        ['polls', 'Polls'],
+        ['goals', 'Goals & Reflections'],
+        ['shop', 'SP Shield Shop'],
+        ['leaderboard', 'Leaderboard'],
+        ['faq', 'FAQ']
+      ]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
+      {tab === 'polls' && <Polls polls={profile.polls} />}
+      {tab === 'goals' && <GoalsTab profile={profile} setProfile={setProfile} />}
+      {tab === 'shop' && <ShopTab profile={profile} setProfile={setProfile} />}
       {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
       {tab === 'faq' && <FaqTab />}
+      {showCalendarModal && <CalendarModal profile={profile} config={config} onClose={() => setShowCalendarModal(false)} />}
     </main>
   );
 }
@@ -400,9 +468,14 @@ function LevelStatus({ student }) {
           <em>current performance</em>
         </div>
         <div className="level-tile">
-          <span>Legend Badge</span>
-          <strong>{student.legendBadgeUnlocked ? '🏅 Unlocked' : '🔒 Locked'}</strong>
-          <em>reach 1500 SP once</em>
+          <span>Streak</span>
+          <strong>🔥 {student.currentStreak || 0} sessions</strong>
+          <em>longest: {student.longestStreak || 0}</em>
+        </div>
+        <div className="level-tile">
+          <span>SP Shield</span>
+          <strong>🛡️ {student.shieldsCount || 0} / 3</strong>
+          <em>streak insurance</em>
         </div>
         <div className="level-tile">
           <span>Onboarding Group</span>
@@ -411,8 +484,7 @@ function LevelStatus({ student }) {
         </div>
       </div>
       <p className="level-note">
-        Level shows your highest achievement and never decreases. Trophy League shows your current performance and can move up or down with your current Spurti Points.
-        {student.legendBadgeUnlocked ? ' You have unlocked the Legend Badge by reaching 1500 Spurti Points at least once.' : ''}
+        Level shows your highest achievement and never decreases. Trophy League shows your current performance and can move up or down with your SP. Streaks track consecutive sessions qualified. Shields protect your streak during a missed session.
       </p>
     </section>
   );
@@ -482,6 +554,17 @@ function LeaderboardPanel({ student }) {
   );
 }
 
+const ALL_BADGES = [
+  { name: 'Getting Started', emoji: '🚀', desc: 'Welcome to Spurti! You are onboarded.' },
+  { name: 'Top 50', emoji: '🏆', desc: 'Rank in the top 50 cohort leaderboard.' },
+  { name: 'Consistent Attendee', emoji: '📅', desc: 'Maintain at least 75% qualified attendance.' },
+  { name: 'Poll Champion', emoji: '🗳️', desc: 'Answered at least 75% of launched polls.' },
+  { name: 'Above Average', emoji: '⚡', desc: 'Exceeded the average SP of your cohort.' },
+  { name: 'Streak Master', emoji: '🔥', desc: 'Achieved a streak of 10 or more sessions.' },
+  { name: 'Shielded', emoji: '🛡️', desc: 'Acquired or consumed an SP Shield.' },
+  { name: 'Reflective Thinker', emoji: '✍️', desc: 'Submitted a weekly self-reflection.' }
+];
+
 // SP trajectory modal — the student's weekly cumulative SP vs cohort + onboarding-group
 // means (reference lines cached in TrajectorySnapshot; own line built live from the ledger).
 function TrajectoryModal({ student, onClose }) {
@@ -550,30 +633,184 @@ function TrajectoryModal({ student, onClose }) {
   );
 }
 
-function StudentPulse({ profile }) {
-  const { student, cohort, transactions } = profile;
+function StudentPulse({ profile, badges = [], nextActions = [] }) {
+  const { student, cohort, transactions = [], attendance = [], polls = [] } = profile;
   const [showTraj, setShowTraj] = useState(false);
-  const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
+  const mission = student.recoveryMission;
+
+  const qualified = useMemo(() => attendance.filter(a => a.qualified).length, [attendance]);
+  const pollAttempted = useMemo(() => polls.reduce((sum, p) => sum + p.attemptedQuestions, 0), [polls]);
+  const pollTotal = useMemo(() => polls.reduce((sum, p) => sum + p.totalQuestions, 0), [polls]);
+
+  const trend = useMemo(() => {
+    return transactions.map(tx => ({
+      value: tx.balanceAfter,
+      label: tx.sessionLabel || tx.reason || new Date(tx.dateTime).toLocaleDateString()
+    }));
+  }, [transactions]);
+
   return (
     <>
       <section className="pulse-grid">
+        {mission && mission.active && (
+          <div className="pulse-card progress-card recovery-mission-card">
+            <span>Active Recovery Mission</span>
+            <strong>{mission.sessionCountCurrent} / {mission.sessionCountTarget} sessions</strong>
+            <p>Complete {mission.sessionCountTarget} consecutive qualified sessions to recover +{mission.pointsToRecover} SP.</p>
+          </div>
+        )}
         <div className="pulse-card progress-card">
           <span>Standing</span>
           <strong>Rank {student.rank}</strong>
-          <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP to enter Top 50.`}</p>
+          <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP needed to enter Top 50.`}</p>
+          <p>{cohort.pointsToNextRank === 0 ? 'You are leading your comparison group.' : `${cohort.pointsToNextRank} SP needed for next rank.`}</p>
+        </div>
+        <div className="pulse-card">
+          <span>Cohort comparison</span>
           <div className="compare-list">
+            <b>Your SP: {student.totalSp}</b>
             <b>Cohort avg: {cohort.averageSp}</b>
-            <b>Top 50: {cohort.top50Cutoff ?? '—'}</b>
-            <b>Top 10: {cohort.top10Cutoff ?? '—'}</b>
+            <b>Top 50 cutoff: {cohort.top50Cutoff ?? '-'}</b>
+            <b>Top 10 cutoff: {cohort.top10Cutoff ?? '-'}</b>
           </div>
         </div>
-        <button className="pulse-card pulse-clickable" onClick={() => setShowTraj(true)} title="Open full trajectory">
+        <div className="pulse-card">
+          <span>Session health</span>
+          <div className="compare-list">
+            <b>{qualified}/{attendance.length} attendance qualified</b>
+            <b>{pollAttempted}/{pollTotal} polls attempted</b>
+          </div>
+        </div>
+        <div className="pulse-card progress-card weekly-target-card" style={{ border: '2px solid #176b87', padding: '16px' }}>
+          <span>Weekly cohort target</span>
+          <strong>{(cohort?.cohortWeekly?.progress ?? 0).toLocaleString()} / {(cohort?.cohortWeekly?.target ?? 150).toLocaleString()} SP</strong>
+          <p className="muted">
+            {cohort?.cohortWeekly ? `${cohort.cohortWeekly.lastWeek.toLocaleString()} SP last week; target is 10% higher.` : 'Projected cohort goal based on recent activity; real numbers will appear once the week begins.'}
+          </p>
+          <div className="progress-track">
+            <div className="progress-fill" style={{ width: `${cohort?.cohortWeekly?.pct ?? 0}%` }} />
+          </div>
+          <p className="muted" style={{ marginTop: '8px' }}>
+            {(cohort?.cohortWeekly?.pct ?? 0).toLocaleString()}% of projected target reached
+          </p>
+          <p className="muted" style={{ marginTop: '10px', fontWeight: 700 }}>This card is intentionally placed below Session health and above Badges.</p>
+        </div>
+        <div className="pulse-card wide-pulse">
+          <span>Badge Gallery</span>
+          <div className="badge-gallery-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '10px', marginTop: '8px' }}>
+            {ALL_BADGES.map(b => {
+              const unlocked = badges.includes(b.name) || (b.name === 'Getting Started');
+              return (
+                <div key={b.name} className={`badge-item ${unlocked ? 'unlocked' : 'locked'}`} title={b.desc} style={{
+                  background: unlocked ? '#f0fdf4' : '#f8fafc',
+                  border: `1px solid ${unlocked ? '#bbf7d0' : '#e2e8f0'}`,
+                  borderRadius: '8px',
+                  padding: '10px',
+                  textAlign: 'center',
+                  opacity: unlocked ? 1 : 0.6
+                }}>
+                  <div style={{ fontSize: '24px' }}>{unlocked ? b.emoji : '🔒'}</div>
+                  <strong style={{ display: 'block', fontSize: '13px', margin: '4px 0', color: unlocked ? '#166534' : '#64748b' }}>{b.name}</strong>
+                  <span style={{ fontSize: '11px', color: '#64748b' }}>{b.desc}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <button className="pulse-card wide-pulse pulse-clickable" onClick={() => setShowTraj(true)} title="Open full trajectory" style={{ textAlign: 'left', border: 'none', background: 'none', padding: 0 }}>
           <span>SP trend <em className="expand-hint">expand ↗</em></span>
           <Sparkline points={trend} />
         </button>
+        <div className="pulse-card wide-pulse">
+          <span>What to do next</span>
+          <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
+          <div style={{ marginTop: '10px' }}>
+            <button className="secondary" onClick={() => window.dispatchEvent(new CustomEvent('openCalendarModal'))}>Sync Calendar</button>
+          </div>
+        </div>
       </section>
       {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
     </>
+  );
+}
+
+function CalendarModal({ profile, config, onClose }) {
+  const [msg, setMsg] = useState('');
+  const student = profile.student;
+  const linked = Boolean(profile.calendarLinked);
+  const googleEnabled = Boolean(config?.calendarGoogleEnabled);
+  const downloadICS = async () => {
+    setMsg('Preparing .ics...');
+    try {
+      const r = await fetch(`${API}/calendar/ics`);
+      if (!r.ok) throw new Error('failed');
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'spurti-sessions.ics';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMsg('Downloaded .ics file');
+    } catch (err) {
+      setMsg('Failed to download .ics');
+    }
+  };
+
+  const linkGoogle = () => {
+    const w = window.open(`${API}/calendar/oauth/google?email=${encodeURIComponent(student.email)}`, '_blank');
+    if (!w) setMsg('Popup blocked — allow popups and try again');
+    else setMsg('Consent screen opened in new tab');
+  };
+
+  const syncGoogle = async () => {
+    setMsg('Syncing events to Google...');
+    try {
+      const r = await fetch(`${API}/calendar/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: student.email }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'sync failed');
+      setMsg(`Created ${j.created || 0} events`);
+    } catch (err) {
+      setMsg(`Sync failed: ${err.message}`);
+    }
+  };
+
+  const disconnect = async () => {
+    setMsg('Disconnecting...');
+    try {
+      const r = await fetch(`${API}/calendar/disconnect`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: student.email }) });
+      if (!r.ok) throw new Error('disconnect failed');
+      setMsg('Disconnected. Refresh the page to update status.');
+    } catch (err) {
+      setMsg('Disconnect failed');
+    }
+  };
+
+  return (
+    <div className="overlay">
+      <section className="modal calendar-modal">
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">Calendar</p>
+            <h1>Sync your sessions</h1>
+          </div>
+          <button className="secondary" onClick={onClose}>Close</button>
+        </div>
+        <div style={{ padding: '12px' }}>
+          <p className="muted">You can download an .ics file or link your Google Calendar for live syncing.</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '8px' }}>
+            <button className="primary" onClick={downloadICS}>Download .ics</button>
+            <button className="secondary" onClick={linkGoogle} disabled={!googleEnabled} title={googleEnabled ? '' : 'Google OAuth is not configured on the server.'}>Link Google Calendar</button>
+            <button className="primary" onClick={syncGoogle} disabled={!googleEnabled} title={googleEnabled ? '' : 'Google OAuth is not configured on the server.'}>Sync to Google</button>
+            {linked && <button className="secondary" onClick={disconnect}>Disconnect</button>}
+          </div>
+          {!googleEnabled && <p className="muted" style={{ marginTop: '10px' }}>Google Calendar sync is currently unavailable because the server is not configured with Google OAuth credentials.</p>}
+          {msg && <p style={{ marginTop: '10px' }}>{msg}</p>}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -589,6 +826,56 @@ function Sparkline({ points }) {
       })}
     </div>
   );
+}
+
+function buildBadges(profile) {
+  const badges = [];
+  const qualifiedPct = profile.attendance.length ? profile.attendance.filter(a => a.qualified).length / profile.attendance.length : 0;
+  const pollAttempted = profile.polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
+  const pollTotal = profile.polls.reduce((sum, p) => sum + p.totalQuestions, 0);
+  if (profile.student.rank <= 50) badges.push('Top 50');
+  if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
+  if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
+  if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
+  if ((profile.student.longestStreak || 0) >= 10) badges.push('Streak Master');
+  if ((profile.student.shieldsCount || 0) > 0 || (profile.transactions || []).some(tx => tx.category === 'shield_purchase' || tx.category === 'shield_consume')) badges.push('Shielded');
+  if ((profile.reflections || []).some(r => r.submitted)) badges.push('Reflective Thinker');
+  return badges.length ? badges : ['Getting Started'];
+}
+
+function buildNextActions(profile) {
+  const actions = [];
+  const student = profile?.student || {};
+  const attendance = profile?.attendance || [];
+  const polls = profile?.polls || [];
+  const reflections = profile?.reflections || [];
+
+  const qualifiedPct = attendance.length ? attendance.filter(a => a.qualified).length / attendance.length : 0;
+  const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
+  const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
+  const hasReflections = reflections.some(r => r.submitted);
+  const shieldsCount = student.shieldsCount || 0;
+
+  if (qualifiedPct < 0.75) {
+    actions.push('Attend daily standups consistently to raise your attendance qualification rate above 75%.');
+  }
+  if (!pollTotal || (pollAttempted / pollTotal < 0.75)) {
+    actions.push('Participate actively in classroom polls to improve your Poll accuracy and score.');
+  }
+  if (!hasReflections) {
+    actions.push('Submit your weekly reflection in the Reflections tab.');
+  }
+  if (shieldsCount === 0) {
+    actions.push('Purchase an SP Shield from the Shop to safeguard your session streak.');
+  }
+  if (student.totalSp < (profile?.cohort?.averageSp || 0)) {
+    actions.push('Engage in peer teaching (SPA) or answer peer queries to earn additional SP.');
+  }
+
+  if (actions.length === 0) {
+    actions.push('You are on track! Keep showing up, answering polls, and supporting peers to maintain your standing.');
+  }
+  return actions;
 }
 
 // Student-facing FAQ — reflects the CURRENT SP rules (banded attendance/poll,
@@ -1295,7 +1582,47 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
-      {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
+      {studentProfile && (
+        <div className="overlay">
+          <section className="modal wide">
+            <div className="modal-head">
+              <h2>{studentProfile.student.name}</h2>
+              <button className="icon" onClick={() => setStudentProfile(null)}>x</button>
+            </div>
+            <div className="admin-nudge-box" style={{ padding: '0 20px 20px 20px', borderBottom: '1px solid var(--line)' }}>
+              <h3>Send Nudge to Student</h3>
+              <div className="search-row">
+                <input id="admin-nudge-input" placeholder="Enter nudge message (e.g. Please join tomorrow's session early!)..." style={{ flex: 1 }} />
+                <button className="primary" onClick={async () => {
+                  const input = document.getElementById('admin-nudge-input');
+                  const message = input?.value?.trim();
+                  if (!message) return alert('Message cannot be empty.');
+                  try {
+                    const res = await fetch(`${API}/admin/nudge`, {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Email': auth.email,
+                        'X-Admin-Token': auth.token
+                      },
+                      body: JSON.stringify({ studentId: studentProfile.student._id, message })
+                    });
+                    if (res.ok) {
+                      alert('Nudge sent successfully!');
+                      input.value = '';
+                    } else {
+                      alert('Failed to send nudge.');
+                    }
+                  } catch {
+                    alert('Error sending nudge.');
+                  }
+                }}>Send Nudge</button>
+              </div>
+            </div>
+            <SpBank transactions={studentProfile.transactions} />
+          </section>
+        </div>
+      )}
     </main>
   );
 }
@@ -1545,6 +1872,265 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
         {note && <p className="survey-note">{note}</p>}
       </div>
     </div>
+  );
+}
+
+function NudgesBanner({ nudges, onDismiss }) {
+  const unread = nudges.filter(n => !n.read);
+  if (unread.length === 0) return null;
+  return (
+    <div className="nudges-banner">
+      <div className="nudge-title">📢 Message from Admin:</div>
+      {unread.map((n, i) => (
+        <p key={i} className="nudge-message">"{n.message}" <span className="nudge-time">({new Date(n.sentAt).toLocaleDateString()})</span></p>
+      ))}
+      <button className="primary compact" style={{ marginTop: '8px', padding: '6px 12px' }} onClick={onDismiss}>Dismiss Message</button>
+    </div>
+  );
+}
+
+function GoalsTab({ profile, setProfile }) {
+  const { student, reflections = [], currentWeekLabel } = profile;
+  const [goalInput, setGoalInput] = useState('');
+  const [reflectionInput, setReflectionInput] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const currentRef = reflections.find(r => r.weekLabel === currentWeekLabel);
+
+  const getWeekRange = (startDate, weekLabel) => {
+    const match = String(weekLabel).match(/Week (\d+)/);
+    if (!match) return { start: new Date(0), end: new Date() };
+    const weekNum = parseInt(match[1], 10);
+    const start = new Date(startDate);
+    start.setDate(start.getDate() + (weekNum - 1) * 7);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    return { start, end };
+  };
+
+  const { start, end } = getWeekRange(student.internshipStartDate, currentWeekLabel);
+  const earnedThisWeek = (profile.transactions || [])
+    .filter(tx => {
+      const txDate = new Date(tx.dateTime);
+      return txDate >= start && txDate < end && tx.appliedDelta > 0;
+    })
+    .reduce((sum, tx) => sum + tx.appliedDelta, 0);
+
+  const targetGoal = currentRef ? currentRef.weeklySpGoal : 0;
+  const remaining = Math.max(0, targetGoal - earnedThisWeek);
+  const pct = targetGoal ? Math.min(100, Math.round((earnedThisWeek / targetGoal) * 100)) : 0;
+
+  const handleSetGoal = async () => {
+    setError('');
+    const goal = Number(goalInput);
+    if (isNaN(goal) || goal <= 0) return setError('Please enter a valid goal (positive number).');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/reflections/goal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Student-Email': student.email },
+        body: JSON.stringify({ goal })
+      });
+      if (!res.ok) throw new Error('Failed to set goal');
+      const data = await res.json();
+      setProfile(data.profile);
+    } catch (err) {
+      setError('Failed to set goal. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReflectionSubmit = async () => {
+    setError('');
+    if (!reflectionInput.trim()) return setError('Reflection text cannot be empty.');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/reflections/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Student-Email': student.email },
+        body: JSON.stringify({ reflectionText: reflectionInput })
+      });
+      if (!res.ok) throw new Error('Failed to submit reflection');
+      const data = await res.json();
+      setProfile(data.profile);
+      setReflectionInput('');
+    } catch (err) {
+      setError('Failed to submit reflection. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Goals & Reflections ({currentWeekLabel})</h2>
+      </div>
+      {error && <p className="error">{error}</p>}
+      
+      <div className="goals-section">
+        {!currentRef ? (
+          <div className="goal-setup">
+            <p className="muted" style={{ marginBottom: '12px' }}>Set your target SP goal for {currentWeekLabel} to help track your weekly learning consistency!</p>
+            <div className="search-row">
+              <input type="number" value={goalInput} onChange={e => setGoalInput(e.target.value)} placeholder="e.g. 150 SP" style={{ flex: 1 }} />
+              <button className="primary" disabled={loading} onClick={handleSetGoal}>Set Goal</button>
+            </div>
+          </div>
+        ) : (
+          <div className="goal-active">
+            <div className="goal-banner" style={{ marginBottom: '16px' }}>
+              <span>🎯 Target Goal: <strong>{currentRef.weeklySpGoal} SP</strong></span>
+              <span>Your Current Points: <strong>{student.totalSp} SP</strong></span>
+            </div>
+
+            <div className="goal-progress-section" style={{
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '12px',
+              padding: '16px',
+              marginBottom: '20px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px', fontWeight: 'bold' }}>
+                <span style={{ color: '#1e293b' }}>Weekly Progress</span>
+                <span style={{ color: '#2563eb' }}>{pct}% Completed</span>
+              </div>
+              <div className="progress-bar-container" style={{
+                background: '#e2e8f0',
+                borderRadius: '8px',
+                height: '16px',
+                width: '100%',
+                overflow: 'hidden',
+                marginBottom: '12px'
+              }}>
+                <div className="progress-bar-fill" style={{
+                  background: 'linear-gradient(90deg, #3b82f6 0%, #10b981 100%)',
+                  height: '100%',
+                  width: `${pct}%`,
+                  transition: 'width 0.4s ease'
+                }} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '13px' }}>
+                <div style={{ background: '#f0fdf4', padding: '8px 12px', borderRadius: '8px', border: '1px solid #dcfce7' }}>
+                  <span style={{ color: '#166534', display: 'block', fontSize: '11px', textTransform: 'uppercase', fontWeight: 'bold' }}>Earned This Week</span>
+                  <strong style={{ color: '#14532d', fontSize: '16px' }}>+{earnedThisWeek} SP</strong>
+                </div>
+                <div style={{ background: remaining > 0 ? '#eff6ff' : '#f0fdf4', padding: '8px 12px', borderRadius: '8px', border: remaining > 0 ? '1px solid #dbeafe' : '1px solid #dcfce7' }}>
+                  <span style={{ color: remaining > 0 ? '#1e40af' : '#166534', display: 'block', fontSize: '11px', textTransform: 'uppercase', fontWeight: 'bold' }}>Remaining</span>
+                  <strong style={{ color: remaining > 0 ? '#1e3a8a' : '#14532d', fontSize: '16px' }}>
+                    {remaining > 0 ? `${remaining} SP` : 'Goal Met! 🎉'}
+                  </strong>
+                </div>
+              </div>
+            </div>
+            
+            {!currentRef.submitted ? (
+              <div className="reflection-form">
+                <h3>Weekly Reflection</h3>
+                <p className="muted" style={{ marginBottom: '8px' }}>Submit a short self-reflection on your consistency and learning effort this week to claim a <strong>+5 SP</strong> reward!</p>
+                <textarea 
+                  value={reflectionInput} 
+                  onChange={e => setReflectionInput(e.target.value)} 
+                  placeholder="How did this week go? What did you find easy or challenging?"
+                  rows="4"
+                  className="reflection-textarea"
+                  style={{ width: '100%', marginBottom: '12px' }}
+                />
+                <button className="primary" disabled={loading} onClick={handleReflectionSubmit}>Submit Reflection (+5 SP)</button>
+              </div>
+            ) : (
+              <div className="reflection-completed">
+                <p className="success-note">✅ Reflection submitted! +5 SP has been added to your bank statement.</p>
+                <blockquote className="reflection-quote">"{currentRef.reflectionText}"</blockquote>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {reflections.length > 0 && (
+        <div className="reflections-history" style={{ marginTop: '24px' }}>
+          <h3>Goal History</h3>
+          <table className="table">
+            <thead><tr><th>Week</th><th>Target Goal</th><th>Reflection</th><th>Submitted</th></tr></thead>
+            <tbody>
+              {reflections.map(ref => (
+                <tr key={ref._id}>
+                  <td>{ref.weekLabel}</td>
+                  <td>{ref.weeklySpGoal} SP</td>
+                  <td><em className="text-preview">{ref.reflectionText || '—'}</em></td>
+                  <td>{ref.submitted ? '✅ Yes' : '❌ No'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ShopTab({ profile, setProfile }) {
+  const { student } = profile;
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const buyShield = async () => {
+    setError('');
+    setSuccess('');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/shield/purchase`, {
+        method: 'POST',
+        headers: { 'X-Student-Email': student.email }
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to purchase shield');
+      }
+      const data = await res.json();
+      setProfile(data.profile);
+      setSuccess('Successfully purchased 1 SP Shield! Streak protected.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>SP Shield Shop</h2>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {success && <p className="success-note" style={{ marginBottom: '16px' }}>{success}</p>}
+
+      <div className="shop-grid">
+        <div className="shop-card">
+          <div className="shield-icon">🛡️</div>
+          <h3>SP Shield</h3>
+          <p className="price">30 SP</p>
+          <p className="muted desc">
+            Acquire an SP Shield to protect your streak! If you miss a session or fail to qualify due to connectivity issues, a shield is automatically consumed. Your current streak will be preserved, and you will be awarded baseline attendance points (+5 SP).
+          </p>
+          <div className="status-indicators">
+            <div>Current Balance: <strong>{student.totalSp} SP</strong></div>
+            <div>Shield Inventory: <strong>{student.shieldsCount} / 3</strong></div>
+          </div>
+          <button 
+            className="primary" 
+            disabled={loading || student.totalSp < 30 || student.shieldsCount >= 3} 
+            onClick={buyShield}
+          >
+            {student.shieldsCount >= 3 ? 'Shield Inventory Full' : 'Buy 1 Shield (30 SP)'}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 

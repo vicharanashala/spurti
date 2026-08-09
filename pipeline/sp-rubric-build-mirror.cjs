@@ -144,6 +144,30 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   const conn = await MongoClient.connect(MONGO_URI, { socketTimeoutMS: 600000 });
   const sak = conn.db(); // db comes from the MONGO_URI path (sakshi_spurti)
 
+  // Query preserved transactions: manual adjustments, shield purchases/grants, and reflections
+  const preservedTxns = await sak.collection('sptransactions').find({
+    category: { $in: ['shield_purchase', 'shield_grant', 'manual', 'reflection_submit'] }
+  }).toArray();
+  const txnsByEmail = {};
+  for (const t of preservedTxns) {
+    const e = String(t.email || '').toLowerCase().trim();
+    if (!txnsByEmail[e]) txnsByEmail[e] = [];
+    txnsByEmail[e].push(t);
+  }
+
+  // Query student settings (shield auto apply, recovery missions)
+  const studentsSettings = await sak.collection('students').find({}, { projection: { email: 1, alternateEmail: 1, shieldAutoApply: 1, recoveryMission: 1 } }).toArray();
+  const settingsByEmail = {};
+  for (const s of studentsSettings) {
+    const emails = [s.email, s.alternateEmail].filter(Boolean);
+    for (const e of emails) {
+      settingsByEmail[String(e).toLowerCase().trim()] = {
+        shieldAutoApply: s.shieldAutoApply !== false,
+        recoveryMission: s.recoveryMission || { active: false, sessionCountTarget: 3, sessionCountCurrent: 0, pointsToRecover: 15, createdAt: null }
+      };
+    }
+  }
+
   // 1. roster + interns. A "started intern" (gets base 100) is anyone who EITHER
   //    (a) has confirmed dates in candidates (vinsStartDate set, not rejected/
   //    deleted), OR (b) attended a mandatory session while id-confirmed in the
@@ -274,11 +298,13 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     // poll (B): Spandan evening performance on/after the cutoff; Zoom participation before it.
     if (s.date >= SPANDAN_CUTOFF) {
       const sp = spandanByDate.get(s.date);
+      s.hasPoll = !!sp;
       if (sp) { scoreSpandanPoll(sp, s.label); spandanByDate.delete(s.date); } // consumed: covered by an evening session
     } else {
       // poll participation via zoom_polls for the same instance
       const polls = await sak.collection('zoom_polls').find({ meetingUuid: s.uuid }).toArray();
       const totalQ = new Set(polls.map((p) => p.question)).size;
+      s.hasPoll = totalQ > 0;
       if (totalQ > 0) {
         const ans = new Map(); for (const p of polls) { const e = String(p.email || '').toLowerCase().trim(); if (!e) continue; if (!ans.has(e)) ans.set(e, new Set()); if (p.answer && String(p.answer).trim()) ans.get(e).add(p.question); }
         const present = new Set([...segByEmail.keys(), ...ans.keys()]);
@@ -286,6 +312,8 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
           const a = (s.date === GRACE_DATE && segByEmail.has(e)) ? totalQ : (ans.get(e) || new Set()).size; const pct = Math.round(a / totalQ * 1000) / 10; const d = tier(pct);
           touch(e).rows.push({ date: s.date, order: 2, cat: 'poll', delta: d, reason: `${s.label} (${ddmon(s.date)}): answered ${a} of ${totalQ} poll questions (${pct}%) -> ${d > 0 ? '+' : ''}${d} SP.` });
         }
+      }
+    }
       }
     }
   }
@@ -384,53 +412,277 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     for (const e of info.emails) matched.add(e);
     if (info.start > TODAY) { zeroOut.push(cand); continue; } // start not yet arrived -> 0
     const best = new Map();
-    for (const e of info.emails) { const o = students.get(e); if (!o) continue; if (info.name === cand && o.name && !o.name.includes('@')) info.name = o.name; for (const r of o.rows) { if (r.date < info.start) continue; const k = r.date + '|' + r.cat; const cur = best.get(k); if (!cur || r.delta > cur.delta) best.set(k, r); } }
-    const rows = [{ date: info.start, order: 0, cat: 'initial', delta: 100, reason: `Base Spurti Points (100) credited on internship start date ${info.start}.` }, ...best.values()];
+    const attendedDates = new Set();
+    for (const e of info.emails) {
+      const o = students.get(e);
+      if (!o) continue;
+      if (info.name === cand && o.name && !o.name.includes('@')) info.name = o.name;
+      for (const r of o.rows) {
+        if (r.date < info.start) continue;
+        const k = r.date + '|' + r.cat;
+        const cur = best.get(k);
+        if (!cur || r.delta > cur.delta) best.set(k, r);
+        if (r.cat === 'attendance') attendedDates.add(r.date);
+      }
+    }
+
+    // Merge in virtual "absent" events for missed sessions
+    const mySessions = sessions.filter(s => s.date >= info.start);
+    const sessionDates = new Set(mySessions.map(s => s.date));
+    const virtualRows = [];
+    for (const d of sessionDates) {
+      if (!attendedDates.has(d)) {
+        virtualRows.push({
+          date: d,
+          order: 1.5,
+          cat: 'attendance_absent',
+          delta: 0,
+          reason: `Absent from session.`
+        });
+      }
+    }
+
+    // Merge in preserved transactions
+    const myPreserved = [];
+    for (const e of info.emails) {
+      const txs = txnsByEmail[e] || [];
+      for (const tx of txs) {
+        const txDate = new Date(tx.dateTime).toISOString().slice(0, 10);
+        if (txDate < info.start) continue;
+        
+        let order = 3;
+        if (tx.category === 'shield_purchase') order = 0.4;
+        else if (tx.category === 'shield_grant') order = 0.5;
+        else if (tx.category === 'peer_faq' || tx.category === 'manual') order = 5;
+
+        myPreserved.push({
+          date: txDate,
+          order,
+          cat: tx.category,
+          delta: tx.appliedDelta || tx.deltaValue || 0,
+          reason: tx.reason,
+          shieldDelta: tx.shieldDelta || 0
+        });
+      }
+    }
+
     // SPA rows (Pattern A): one consolidated 'spa' row per day, cumulative caps
     // across days. These bypass the (date|cat) best-dedup by being pushed directly.
     const spa = spaByCanon.get(cand); const flags = spaFlag.get(cand) || {};
+    const spaRows = [];
     let spaLearnUsed = 0, spaTeachUsed = 0;
     if (spa) {
       const byDay = new Map(); // date -> { learn, teach }
       for (const d of spa.learn.slice().sort()) { if (spaLearnUsed >= SPA_LEARN_CAP) break; spaLearnUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.learn++; byDay.set(d, o); }
       for (const d of spa.teach.slice().sort()) { if (spaTeachUsed >= SPA_TEACH_CAP) break; spaTeachUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.teach++; byDay.set(d, o); }
       for (const [d, o] of byDay) {
+        if (d < info.start) continue;
         const delta = o.learn * SPA_LEARN_UNIT + o.teach * SPA_TEACH_UNIT; if (!delta) continue;
         const parts = []; if (o.learn) parts.push(`${o.learn} learned`); if (o.teach) parts.push(`${o.teach} taught`);
-        rows.push({ date: d, order: 3, cat: 'spa', delta, reason: `SPA (${ddmon(d)}): ${parts.join(' + ')} (validated) -> +${delta} SP.` });
+        spaRows.push({ date: d, order: 3, cat: 'spa', delta, reason: `SPA (${ddmon(d)}): ${parts.join(' + ')} (validated) -> +${delta} SP.` });
       }
     }
+
+    const baseRows = [
+      { date: info.start, order: 0, cat: 'initial', delta: 100, reason: `Base Spurti Points (100) credited on internship start date ${info.start}.` },
+      ...best.values(),
+      ...virtualRows,
+      ...spaRows
+    ];
+
     // Integrity penalty: one-time -% of current total SP (fraud takes precedence).
     const penRate = flags.fraud ? SPA_FRAUD_RATE : (flags.auditFail ? SPA_AUDIT_RATE : 0);
     let spaPenalty = 0;
+    const penaltyRows = [];
     if (penRate > 0) {
-      spaPenalty = Math.round(rows.reduce((a, r) => a + r.delta, 0) * penRate);
-      if (spaPenalty > 0) rows.push({ date: TODAY, order: 9, cat: 'spa', delta: -spaPenalty,
-        reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.` });
+      spaPenalty = Math.round(baseRows.reduce((a, r) => a + r.delta, 0) * penRate);
+      if (spaPenalty > 0) {
+        penaltyRows.push({
+          date: TODAY,
+          order: 9,
+          cat: 'spa',
+          delta: -spaPenalty,
+          reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.`
+        });
+      }
     }
+
     // Query-answer rows: +5 per distinct peer query answered, one 'query' row per
     // day, oldest-first, capped at QUERY_CAP SP per student (excess days truncated).
+    const queryRows = [];
     const qDates = queryByCanon.get(cand);
     if (qDates && qDates.length) {
       const qByDay = new Map();
       for (const d of qDates) qByDay.set(d, (qByDay.get(d) || 0) + 1);
       let qUsed = 0;
       for (const d of [...qByDay.keys()].sort()) {
+        if (d < info.start) continue;
         if (qUsed >= QUERY_CAP) break;
         const n = qByDay.get(d);
         let delta = n * QUERY_UNIT;
         if (qUsed + delta > QUERY_CAP) delta = QUERY_CAP - qUsed;
         qUsed += delta;
         const capNote = qUsed >= QUERY_CAP ? ` (query SP capped at ${QUERY_CAP})` : '';
-        rows.push({ date: d, order: 4, cat: 'query', delta,
+        queryRows.push({ date: d, order: 4, cat: 'query', delta,
           reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${delta} SP${capNote}.` });
       }
     }
-    // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
-    for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
+
+    const rows = [
+      ...baseRows,
+      ...penaltyRows,
+      ...queryRows,
+      ...myPreserved
+    ];
+
+    // Sort chronologically
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
-    let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
-    finalBal.set(cand, bal); nameByCanon.set(cand, info.name);
+
+    // Streaks and shields calculation
+    let bal = 0;
+    let currentStreak = 0;
+    let longestStreak = 0;
+    const settings = settingsByEmail[cand] || {
+      shieldAutoApply: true,
+      recoveryMission: { active: false, sessionCountTarget: 3, sessionCountCurrent: 0, pointsToRecover: 15, createdAt: null }
+    };
+    let activeMission = settings.recoveryMission || { active: false, sessionCountTarget: 3, sessionCountCurrent: 0, pointsToRecover: 15, createdAt: null };
+    let shieldsCount = 0;
+
+    // Track Zoom session deltas for current date to evaluate qualification
+    let currentSessionDate = null;
+    let currentAttendanceDelta = 0;
+    let currentPollDelta = 0;
+    let sessionHadPoll = false;
+
+    // Helper to evaluate session qualification
+    const evaluateSession = (date) => {
+      const qualified = currentAttendanceDelta >= 5 && (!sessionHadPoll || currentPollDelta >= 5);
+      if (qualified) {
+        currentStreak += 1;
+        longestStreak = Math.max(longestStreak, currentStreak);
+        
+        // Progress active recovery mission
+        if (activeMission && activeMission.active) {
+          activeMission.sessionCountCurrent += 1;
+          if (activeMission.sessionCountCurrent >= activeMission.sessionCountTarget) {
+            // Reward completed mission
+            bal += activeMission.pointsToRecover;
+            ledger.push({
+              email: cand,
+              name: info.name,
+              date,
+              order: 2.5,
+              cat: 'recovery_reward',
+              delta: activeMission.pointsToRecover,
+              balanceAfter: bal,
+              reason: `Recovery Mission Completed: +${activeMission.pointsToRecover} SP.`
+            });
+            activeMission.active = false;
+          }
+        }
+
+        // Streak milestone: free shield every 10 sessions
+        if (currentStreak > 0 && currentStreak % 10 === 0) {
+          shieldsCount += 1;
+          ledger.push({
+            email: cand,
+            name: info.name,
+            date,
+            order: 2.5,
+            cat: 'shield_grant',
+            delta: 0,
+            balanceAfter: bal,
+            reason: `${currentStreak}-Session Streak Milestone reached: +1 SP Shield rewarded!`
+          });
+        }
+      } else {
+        // Failed session: check if SP Shield can protect streak
+        if (shieldsCount > 0 && settings.shieldAutoApply !== false) {
+          shieldsCount -= 1;
+          const shieldAward = Math.max(0, 5 - currentAttendanceDelta);
+          bal += shieldAward;
+          ledger.push({
+            email: cand,
+            name: info.name,
+            date,
+            order: 2.5,
+            cat: 'shield_consume',
+            delta: shieldAward,
+            balanceAfter: bal,
+            reason: `SP Shield consumed: streak preserved and attendance points protected (+${shieldAward} SP).`
+          });
+        } else {
+          // No shield: reset streak and mission progress
+          currentStreak = 0;
+          if (activeMission && activeMission.active) {
+            activeMission.sessionCountCurrent = 0;
+          } else {
+            // Activate a new recovery mission upon streak reset
+            activeMission = {
+              active: true,
+              sessionCountTarget: 3,
+              sessionCountCurrent: 0,
+              pointsToRecover: 15,
+              createdAt: new Date()
+            };
+          }
+        }
+      }
+    };
+
+    for (const r of rows) {
+      // If we move to a new date, evaluate the previous date's session qualification if applicable
+      if (currentSessionDate && r.date !== currentSessionDate) {
+        evaluateSession(currentSessionDate);
+        currentSessionDate = null;
+      }
+
+      bal += r.delta;
+
+      if (r.cat === 'attendance' || r.cat === 'attendance_absent' || r.cat === 'poll') {
+        currentSessionDate = r.date;
+        const sess = sessions.find(s => s.date === r.date);
+        sessionHadPoll = sess ? sess.hasPoll : false;
+        if (r.cat === 'attendance' || r.cat === 'attendance_absent') {
+          currentAttendanceDelta = r.delta;
+        } else {
+          currentPollDelta = r.delta;
+        }
+        // ONLY push real attendance and poll rows (exclude virtual absent)
+        if (r.cat !== 'attendance_absent') {
+          ledger.push({
+            email: cand,
+            name: info.name,
+            ...r,
+            balanceAfter: bal
+          });
+        }
+      } else {
+        // User/admin transactions
+        if (r.cat === 'shield_purchase') {
+          shieldsCount += r.shieldDelta || 1;
+        } else if (r.cat === 'shield_grant') {
+          shieldsCount += r.shieldDelta || 1;
+        }
+        
+        ledger.push({
+          email: cand,
+          name: info.name,
+          ...r,
+          balanceAfter: bal
+        });
+      }
+    }
+
+    // Evaluate the final date if it was a session
+    if (currentSessionDate) {
+      evaluateSession(currentSessionDate);
+    }
+
+    finalBal.set(cand, bal);
+    nameByCanon.set(cand, info.name);
+    streaksAndShields.set(cand, { currentStreak, longestStreak, shieldsCount, recoveryMission: activeMission });
     if (spa || penRate > 0) spaSummary.push({ email: cand, learnValidated: spa ? spa.learn.length : 0, teachValidated: spa ? spa.teach.length : 0, learnCredited: spaLearnUsed, teachCredited: spaTeachUsed, auditFail: !!flags.auditFail, fraud: !!flags.fraud, penaltyApplied: spaPenalty });
   }
   for (const [e, o] of students) { if (STAFF.has(e) || matched.has(e) || emailToCanon.has(e)) continue; setAside.push({ email: e, name: o.name, rows: o.rows.length }); }
@@ -466,12 +718,38 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     const start = ledger.find((r) => r.email === email && r.cat === 'initial').date;
     const name = nameByCanon.get(email) || email;
     const st = excusedSet.has(email) ? 'excused' : 'active'; // started intern -> active (preserve excused)
-    sBulk.push({ updateOne: { filter: { email }, update: { $set: { name, totalSp: bal, internshipStartDate: new Date(start + 'T00:00:00.000Z'), status: st }, $setOnInsert: { alternateEmail: '', internshipEndDate: null } }, upsert: true } });
+    const ss = streaksAndShields.get(email) || { currentStreak: 0, longestStreak: 0, shieldsCount: 0, recoveryMission: { active: false, sessionCountTarget: 3, sessionCountCurrent: 0, pointsToRecover: 15, createdAt: null } };
+    sBulk.push({
+      updateOne: {
+        filter: { email },
+        update: {
+          $set: {
+            name,
+            totalSp: bal,
+            internshipStartDate: new Date(start + 'T00:00:00.000Z'),
+            status: st,
+            currentStreak: ss.currentStreak,
+            longestStreak: ss.longestStreak,
+            shieldsCount: ss.shieldsCount,
+            recoveryMission: ss.recoveryMission
+          },
+          $setOnInsert: { alternateEmail: '', internshipEndDate: null }
+        },
+        upsert: true
+      }
+    });
   }
   for (let i = 0; i < sBulk.length; i += 1000) await Students.bulkWrite(sBulk.slice(i, i + 1000), { ordered: false });
   const idMap = new Map(); for (const s of await Students.find({ email: { $in: emails } }, { projection: { email: 1 } }).toArray()) idMap.set(s.email, s._id);
   // replace transactions
-  let del = 0; for (let i = 0; i < emails.length; i += 500) { const r = await Tx.deleteMany({ email: { $in: emails.slice(i, i + 500) } }); del += r.deletedCount; }
+  let del = 0;
+  for (let i = 0; i < emails.length; i += 500) {
+    const r = await Tx.deleteMany({
+      email: { $in: emails.slice(i, i + 500) },
+      category: { $in: ['initial', 'attendance', 'poll', 'shield_consume', 'recovery_reward', 'spa', 'query'] }
+    });
+    del += r.deletedCount;
+  }
   const docs = ledger.map((r) => { const idx = r.reason.indexOf(': '); return { email: r.email, studentId: idMap.get(r.email), category: r.cat, sessionLabel: r.cat === 'initial' ? '' : (idx > 0 ? r.reason.slice(0, idx) : ''), deltaMode: 'absolute', deltaValue: r.delta, appliedDelta: r.delta, balanceAfter: r.balanceAfter, reason: r.reason, dateTime: new Date(r.date + (r.cat === 'initial' ? 'T00:00:00.000Z' : 'T09:00:00.000Z')), createdAt: new Date(), updatedAt: new Date() }; });
   let ins = 0; for (let i = 0; i < docs.length; i += 2000) { await Tx.insertMany(docs.slice(i, i + 2000), { ordered: false }); ins += Math.min(2000, docs.length - i); }
   console.log(`APPLIED -> students upserted ${sBulk.length}, old txns deleted ${del}, new txns inserted ${ins}`);
@@ -493,7 +771,14 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   for (const e of await Tx.distinct('email')) if (!keep.has(e)) staleSet.add(e);
   const staleEmails = [...staleSet];
   let zdel = 0; for (let i = 0; i < staleEmails.length; i += 500) { const r = await Tx.deleteMany({ email: { $in: staleEmails.slice(i, i + 500) } }); zdel += r.deletedCount; }
-  for (let i = 0; i < staleEmails.length; i += 1000) await Students.bulkWrite(staleEmails.slice(i, i + 1000).map((email) => ({ updateOne: { filter: { email }, update: { $set: { totalSp: 0 } } } })), { ordered: false });
-  console.log(`RECONCILED -> ${staleEmails.length} students not in new ledger cleared (incl ${zeroOut.length} future-start; ghost txns deleted ${zdel}, totalSp=0)`);
+  const zeroOutSet = new Set(zeroOut);
+  const staleBulk = staleEmails.map((email) => {
+    const isExcused = excusedSet.has(email);
+    const isFuture = zeroOutSet.has(email);
+    const status = isExcused ? 'excused' : (isFuture ? 'yet to onboard' : 'active');
+    return { updateOne: { filter: { email }, update: { $set: { totalSp: 0, status } } } };
+  });
+  for (let i = 0; i < staleBulk.length; i += 1000) await Students.bulkWrite(staleBulk.slice(i, i + 1000), { ordered: false });
+  console.log(`RECONCILED -> ${staleEmails.length} students not in new ledger cleared (incl ${zeroOut.length} future-start set to 'yet to onboard'; ghost txns deleted ${zdel}, totalSp=0)`);
   await conn.close();
 })().catch((e) => { console.error('FATAL', e.message); process.exit(1); });

@@ -6,7 +6,7 @@ const studentSchema = new mongoose.Schema({
   alternateEmail: { type: String, lowercase: true, trim: true, default: '', index: true },
   internshipStartDate: { type: Date, required: true, index: true },
   internshipEndDate: { type: Date, default: null },
-  status: { type: String, enum: ['active', 'excused'], default: 'active', index: true },
+  status: { type: String, enum: ['active', 'excused', 'yet to onboard'], default: 'active', index: true },
   excusedAt: { type: Date, default: null },
   excusedReason: { type: String, default: '' },
   totalSp: { type: Number, default: 100, index: true },
@@ -16,6 +16,22 @@ const studentSchema = new mongoose.Schema({
   trophyLeague: { type: String, default: 'Bronze II' },
   legendBadgeUnlocked: { type: Boolean, default: false },
   leaderboardGroup: { type: String, default: '', index: true },
+  currentStreak: { type: Number, default: 0 },
+  longestStreak: { type: Number, default: 0 },
+  shieldsCount: { type: Number, default: 0 },
+  shieldAutoApply: { type: Boolean, default: true },
+  nudges: [{
+    message: { type: String, required: true },
+    sentAt: { type: Date, default: Date.now },
+    read: { type: Boolean, default: false }
+  }],
+  recoveryMission: {
+    active: { type: Boolean, default: false },
+    sessionCountTarget: { type: Number, default: 3 },
+    sessionCountCurrent: { type: Number, default: 0 },
+    pointsToRecover: { type: Number, default: 15 },
+    createdAt: { type: Date, default: null }
+  },
   // Survey triangulation (perception follow-up). Set when the student submits
   // the dashboard pop-up Google Form — via the Apps Script webhook or the
   // "I've submitted" button. Drives whether the survey modal still shows.
@@ -28,6 +44,13 @@ const studentSchema = new mongoose.Schema({
   // Third pop-up ("poll3") — dashboard usability survey. Same mechanism, own flag.
   poll3Completed: { type: Boolean, default: false, index: true },
   poll3CompletedAt: { type: Date, default: null }
+  ,
+  jscalendar: {
+    google: {
+      refreshToken: { type: String, default: '' },
+      tokenExpiry: { type: Date, default: null }
+    }
+  }
 }, { timestamps: true });
 
 studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });
