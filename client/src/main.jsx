@@ -302,6 +302,7 @@ function StudentView({ profile, onBack }) {
         ['journey','My Journey'],
         ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
         ['spa','SPA Points'],
+        ['resources','Resource Hub'],
         ...(ach?.visible ? [['achievements','Achievements']] : []),
         ['leaderboard','Leaderboard'],
         ['faq','FAQ']]} />
@@ -309,6 +310,7 @@ function StudentView({ profile, onBack }) {
       {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
+      {tab === 'resources' && <ResourceHubView student={student} />}
       {tab === 'achievements' && ach?.visible && <AchievementsPanel student={student} data={ach} />}
       {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
       {tab === 'faq' && <FaqTab />}
@@ -2055,5 +2057,558 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
+
+function ResourceHubView({ student }) {
+  const [feed, setFeed] = useState('latest');
+  const [resources, setResources] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [hasMore, setHasMore] = useState(false);
+
+  const [selectedCategory, setSelectedCategory] = useState('');
+  const [search, setSearch] = useState('');
+  const [subjectFilter, setSubjectFilter] = useState('');
+  const [semesterFilter, setSemesterFilter] = useState('');
+  const [fileTypeFilter, setFileTypeFilter] = useState('');
+
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [subject, setSubject] = useState('');
+  const [category, setCategory] = useState('Programming');
+  const [fileType, setFileType] = useState('PDF');
+  const [url, setUrl] = useState('');
+  const [semester, setSemester] = useState('');
+  const [tags, setTags] = useState([]);
+  const [tagText, setTagText] = useState('');
+
+  const [editingResource, setEditingResource] = useState(null);
+  const [reportingResource, setReportingResource] = useState(null);
+  const [reportReason, setReportReason] = useState('Spam');
+  const [reportDetails, setReportDetails] = useState('');
+
+  const categories = [
+    'Programming', 'DSA', 'Java', 'Python', 'React', 'Node',
+    'Machine Learning', 'Operating System', 'DBMS', 'Computer Networks',
+    'Mathematics', 'Interview Preparation', 'Placement', 'Others'
+  ];
+
+  const fileTypes = ['PDF', 'PPT', 'Notes', 'Google Drive', 'YouTube', 'GitHub', 'Article', 'Documentation', 'ZIP', 'Others'];
+
+  // The Samagama chatengine_token cookie is sent automatically on same-origin
+  // fetches — no student email header needed (and one would be spoofable anyway).
+  const headers = { 'Content-Type': 'application/json' };
+
+  const buildQuery = page => {
+    const params = new URLSearchParams({ feed, page });
+    if (selectedCategory) params.set('category', selectedCategory);
+    if (search) params.set('search', search);
+    if (subjectFilter) params.set('subject', subjectFilter);
+    if (semesterFilter) params.set('semester', semesterFilter);
+    if (fileTypeFilter) params.set('fileType', fileTypeFilter);
+    return params.toString();
+  };
+
+  const loadResources = async (page = 1, append = false) => {
+    if (page === 1) setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${API}/resources?${buildQuery(page)}`, { headers });
+      if (res.status === 401) throw new Error('Please login to view the Resource Hub.');
+      if (!res.ok) throw new Error('Failed to load resources');
+      const data = await res.json();
+      setResources(prev => append ? [...prev, ...(data.resources || [])] : (data.resources || []));
+      setHasMore(!!data.hasMore);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || 'Could not fetch resources. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setResources([]);
+    loadResources(1);
+  }, [feed, selectedCategory, subjectFilter, semesterFilter, fileTypeFilter]);
+
+  const handleSearchSubmit = e => {
+    e.preventDefault();
+    loadResources(1);
+  };
+
+  const handleUpload = async e => {
+    e.preventDefault();
+    setError('');
+    try {
+      const res = await fetch(`${API}/resources`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ title, description, subject, category, fileType, url, semester, tags })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to upload resource');
+      }
+      setUploadOpen(false);
+      setTitle(''); setDescription(''); setSubject(''); setCategory('Programming');
+      setFileType('PDF'); setUrl(''); setSemester(''); setTags([]);
+      loadResources(1);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleEdit = async e => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API}/resources/${editingResource._id}`, {
+        method: 'PUT', headers,
+        body: JSON.stringify({ title, description, subject, category, fileType, url, semester, tags })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to update resource');
+      }
+      setEditOpen(false);
+      setEditingResource(null);
+      loadResources(1);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleDelete = async resourceId => {
+    if (!confirm('Are you sure you want to delete this resource?')) return;
+    try {
+      const res = await fetch(`${API}/resources/${resourceId}`, { method: 'DELETE', headers });
+      if (!res.ok) throw new Error('Failed to delete resource');
+      loadResources(1);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleLike = async resourceId => {
+    try {
+      const res = await fetch(`${API}/resources/${resourceId}/like`, { method: 'POST', headers });
+      if (res.ok) {
+        const data = await res.json();
+        setResources(prev => prev.map(r => r._id === resourceId ? { ...r, likesCount: data.likesCount, likedByMe: data.likedByMe } : r));
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleBookmark = async resourceId => {
+    try {
+      const res = await fetch(`${API}/resources/${resourceId}/bookmark`, { method: 'POST', headers });
+      if (res.ok) {
+        const data = await res.json();
+        setResources(prev => prev.map(r => r._id === resourceId ? { ...r, bookmarksCount: data.bookmarksCount, bookmarkedByMe: data.bookmarkedByMe } : r));
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDownloadClick = async resource => {
+    try {
+      fetch(`${API}/resources/${resource._id}/download`, { method: 'POST', headers });
+      setResources(prev => prev.map(r => r._id === resource._id ? { ...r, downloadsCount: r.downloadsCount + 1 } : r));
+      window.open(resource.url, '_blank', 'noopener');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleReportSubmit = async e => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API}/resources/${reportingResource._id}/report`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ reason: reportReason, details: reportDetails })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to submit report');
+      }
+      setReportOpen(false);
+      setReportingResource(null);
+      setReportReason('Spam');
+      setReportDetails('');
+      alert('Resource has been reported successfully. Administration will review it.');
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const addTag = () => {
+    if (tagText.trim() && !tags.includes(tagText.trim())) {
+      setTags([...tags, tagText.trim()]);
+      setTagText('');
+    }
+  };
+
+  const removeTag = val => setTags(tags.filter(t => t !== val));
+
+  const getThumbnailEmoji = type => {
+    switch (type) {
+      case 'PDF': return '📄';
+      case 'PPT': return '📊';
+      case 'Notes': return '📝';
+      case 'Google Drive': return '📁';
+      case 'YouTube': return '🎥';
+      case 'GitHub': return '💻';
+      case 'Article': return '📰';
+      case 'Documentation': return '📚';
+      case 'ZIP': return '📦';
+      default: return '🔗';
+    }
+  };
+
+  const openEditModal = resource => {
+    setEditingResource(resource);
+    setTitle(resource.title);
+    setDescription(resource.description);
+    setSubject(resource.subject);
+    setCategory(resource.category);
+    setFileType(resource.fileType);
+    setUrl(resource.url);
+    setSemester(resource.semester);
+    setTags(resource.tags || []);
+    setEditOpen(true);
+  };
+
+  return (
+    <div className="resource-container">
+      <nav className="buddy-sub-nav">
+        <button className={feed === 'latest' ? 'active' : ''} onClick={() => setFeed('latest')}>All Resources</button>
+        <button className={feed === 'trending' ? 'active' : ''} onClick={() => setFeed('trending')}>Trending 🔥</button>
+        <button className={feed === 'downloads' ? 'active' : ''} onClick={() => setFeed('downloads')}>Popular 📥</button>
+        <button className={feed === 'verified' ? 'active' : ''} onClick={() => setFeed('verified')}>Verified ✅</button>
+        <button className={feed === 'bookmarks' ? 'active' : ''} onClick={() => setFeed('bookmarks')}>My Bookmarks 📌</button>
+        <button className={feed === 'my_uploads' ? 'active' : ''} onClick={() => setFeed('my_uploads')}>My Uploads 📤</button>
+      </nav>
+
+      <div className="category-chips-scroll">
+        <button className={selectedCategory === '' ? 'category-chip active' : 'category-chip'} onClick={() => setSelectedCategory('')}>All Categories</button>
+        {categories.map(cat => (
+          <button key={cat} className={selectedCategory === cat ? 'category-chip active' : 'category-chip'} onClick={() => setSelectedCategory(cat)}>
+            {cat}
+          </button>
+        ))}
+      </div>
+
+      <div className="resource-layout">
+        <aside className="resource-sidebar">
+          <section className="panel" style={{ margin: 0 }}>
+            <h3 style={{ fontSize: '14px', textTransform: 'uppercase', margin: '0 0 12px', color: 'var(--primary)' }}>Search & Filters</h3>
+
+            <form onSubmit={handleSearchSubmit} className="login-form" style={{ marginTop: 0, gap: '10px' }}>
+              <input placeholder="Search title, tags..." value={search} onChange={e => setSearch(e.target.value)} />
+              <button className="primary" type="submit" style={{ minHeight: '36px' }}>Search</button>
+            </form>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
+              <div className="form-group" style={{ gap: '4px' }}>
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--muted)' }}>Subject</label>
+                <input placeholder="Filter subject" value={subjectFilter} onChange={e => setSubjectFilter(e.target.value)} style={{ padding: '8px' }} />
+              </div>
+
+              <div className="form-group" style={{ gap: '4px' }}>
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--muted)' }}>Semester</label>
+                <select value={semesterFilter} onChange={e => setSemesterFilter(e.target.value)} style={{ padding: '8px', borderRadius: '7px', border: '1px solid var(--line)' }}>
+                  <option value="">Any Semester</option>
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map(n => <option key={n} value={String(n)}>Semester {n}</option>)}
+                </select>
+              </div>
+
+              <div className="form-group" style={{ gap: '4px' }}>
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--muted)' }}>File Type</label>
+                <select value={fileTypeFilter} onChange={e => setFileTypeFilter(e.target.value)} style={{ padding: '8px', borderRadius: '7px', border: '1px solid var(--line)' }}>
+                  <option value="">Any File Type</option>
+                  {fileTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+
+              <button className="secondary" style={{ width: '100%', minHeight: '36px', marginTop: '6px' }} onClick={() => {
+                setSearch(''); setSubjectFilter(''); setSemesterFilter(''); setFileTypeFilter('');
+              }}>Reset Filters</button>
+            </div>
+          </section>
+
+          <button className="primary" style={{ width: '100%', minHeight: '42px' }} onClick={() => setUploadOpen(true)}>
+            + Share Resource
+          </button>
+        </aside>
+
+        <main className="resource-content">
+          {loading ? (
+            <p className="muted">Loading hub resources...</p>
+          ) : error ? (
+            <p className="error">{error}</p>
+          ) : resources.length === 0 ? (
+            <p className="empty">No study resources found in this feed. Try uploading one or changing filters!</p>
+          ) : (
+            <>
+              <div className="resource-card-grid">
+                {resources.map(res => {
+                  const canEdit = String(res.uploaderId) === String(student._id);
+                  return (
+                    <article key={res._id} className="resource-card">
+                      <div>
+                        <div className="resource-thumbnail-container">
+                          {getThumbnailEmoji(res.fileType)}
+
+                          <div className="resource-badge-container">
+                            {res.isVerified && <span className="resource-card-badge verified">Verified ✅</span>}
+                            {res.isPinned && <span className="resource-card-badge pinned">Pinned 📌</span>}
+                            {res.isHighlighted && <span className="resource-card-badge highlighted">Featured ⭐</span>}
+                          </div>
+
+                          <button className="resource-bookmark-action" onClick={() => handleBookmark(res._id)}
+                            style={{ color: res.bookmarkedByMe ? 'var(--amber)' : 'var(--muted)' }} title="Bookmark">
+                            📌
+                          </button>
+                        </div>
+
+                        <div className="resource-card-info">
+                          <div>
+                            <div className="resource-card-meta">
+                              {res.category} &bull; {res.fileType} {res.semester && `&bull; Sem ${res.semester}`}
+                            </div>
+                            <h4 className="resource-card-title">{res.title}</h4>
+                            <p className="resource-card-desc">{res.description}</p>
+                            <div className="muted" style={{ fontSize: '12px' }}>Subject: <b>{res.subject}</b></div>
+                          </div>
+
+                          {res.tags?.length > 0 && (
+                            <div className="resource-card-tags">
+                              {res.tags.map(t => <span key={t} className="resource-card-tag">#{t}</span>)}
+                            </div>
+                          )}
+
+                          <div className="resource-card-uploader">
+                            Uploader: <b>{res.uploaderName}</b>
+                          </div>
+
+                          <div className="resource-card-stats">
+                            <span>❤️ {res.likesCount}</span>
+                            <span>📥 {res.downloadsCount}</span>
+                            {res.reportsCount > 0 && <span style={{ color: 'var(--red)' }}>⚠️ {res.reportsCount}</span>}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="resource-card-actions" style={{ flexDirection: 'column', gap: '6px' }}>
+                        <div style={{ display: 'flex', gap: '6px', width: '100%' }}>
+                          <button className="primary" onClick={() => handleDownloadClick(res)}>Open/Download</button>
+                          <button className="secondary" onClick={() => handleLike(res._id)} style={{ color: res.likedByMe ? 'var(--red)' : '' }}>
+                            {res.likedByMe ? 'Liked ❤️' : 'Like'}
+                          </button>
+                        </div>
+
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', width: '100%', borderTop: '1px solid #f1f5f9', paddingTop: '6px' }}>
+                          {canEdit && (
+                            <>
+                              <button className="secondary" style={{ minHeight: '28px', fontSize: '11px', flex: 1 }} onClick={() => openEditModal(res)}>Edit</button>
+                              <button className="secondary" style={{ minHeight: '28px', fontSize: '11px', color: 'var(--red)', flex: 1 }} onClick={() => handleDelete(res._id)}>Delete</button>
+                            </>
+                          )}
+                          <button className="secondary" style={{ minHeight: '28px', fontSize: '11px', flex: 1, color: 'var(--muted)' }} onClick={() => { setReportingResource(res); setReportOpen(true); }}>Report</button>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              {hasMore && (
+                <div style={{ textAlign: 'center', margin: '16px 0' }}>
+                  <button className="secondary" onClick={() => loadResources(Math.floor(resources.length / 50) + 1, true)}>Load more</button>
+                </div>
+              )}
+            </>
+          )}
+        </main>
+      </div>
+
+      {uploadOpen && (
+        <div className="resource-dialog-overlay" onClick={e => e.target === e.currentTarget && setUploadOpen(false)}>
+          <div className="resource-dialog-panel">
+            <div className="resource-dialog-header">
+              <h3>Share Learning Resource</h3>
+              <button className="icon" onClick={() => setUploadOpen(false)}>x</button>
+            </div>
+            <form onSubmit={handleUpload}>
+              <div className="resource-dialog-body">
+                <div className="form-group">
+                  <label>Resource Title</label>
+                  <input required placeholder="e.g. DBMS lecture notes unit-1" value={title} onChange={e => setTitle(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label>Description</label>
+                  <textarea required placeholder="Short summary about the content..." value={description} onChange={e => setDescription(e.target.value)} rows="2" style={{ width: '100%', border: '1px solid var(--line)', borderRadius: '7px', padding: '8px' }} />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Subject</label>
+                    <input required placeholder="e.g. Database Management" value={subject} onChange={e => setSubject(e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label>Semester</label>
+                    <input placeholder="e.g. 4" value={semester} onChange={e => setSemester(e.target.value)} />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Category</label>
+                    <select value={category} onChange={e => setCategory(e.target.value)} style={{ padding: '8px', borderRadius: '7px', border: '1px solid var(--line)' }}>
+                      {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>File Type</label>
+                    <select value={fileType} onChange={e => setFileType(e.target.value)} style={{ padding: '8px', borderRadius: '7px', border: '1px solid var(--line)' }}>
+                      {fileTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Resource URL (Drive/Link/YouTube/Repository)</label>
+                  <input required type="url" placeholder="https://..." value={url} onChange={e => setUrl(e.target.value)} />
+                </div>
+
+                <div className="form-group">
+                  <label>Tags (Press Add/Enter to append)</label>
+                  <div className="tag-input-container">
+                    {tags.map(t => (
+                      <span key={t} className="tag-pill">{t} <button type="button" onClick={() => removeTag(t)}>x</button></span>
+                    ))}
+                    <input value={tagText} onChange={e => setTagText(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } }}
+                      placeholder="e.g. notes, dbms" />
+                    <button type="button" className="secondary" style={{ minHeight: '30px', padding: '0 8px' }} onClick={addTag}>Add</button>
+                  </div>
+                </div>
+              </div>
+              <div className="resource-dialog-footer">
+                <button type="button" className="secondary" onClick={() => setUploadOpen(false)}>Cancel</button>
+                <button type="submit" className="primary">Share Resource</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editOpen && (
+        <div className="resource-dialog-overlay" onClick={e => e.target === e.currentTarget && setEditOpen(false)}>
+          <div className="resource-dialog-panel">
+            <div className="resource-dialog-header">
+              <h3>Edit Resource Details</h3>
+              <button className="icon" onClick={() => { setEditOpen(false); setEditingResource(null); }}>x</button>
+            </div>
+            <form onSubmit={handleEdit}>
+              <div className="resource-dialog-body">
+                <div className="form-group">
+                  <label>Resource Title</label>
+                  <input required placeholder="e.g. DBMS lecture notes unit-1" value={title} onChange={e => setTitle(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label>Description</label>
+                  <textarea required placeholder="Short summary about the content..." value={description} onChange={e => setDescription(e.target.value)} rows="2" style={{ width: '100%', border: '1px solid var(--line)', borderRadius: '7px', padding: '8px' }} />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Subject</label>
+                    <input required placeholder="e.g. Database Management" value={subject} onChange={e => setSubject(e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label>Semester</label>
+                    <input placeholder="e.g. 4" value={semester} onChange={e => setSemester(e.target.value)} />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Category</label>
+                    <select value={category} onChange={e => setCategory(e.target.value)} style={{ padding: '8px', borderRadius: '7px', border: '1px solid var(--line)' }}>
+                      {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>File Type</label>
+                    <select value={fileType} onChange={e => setFileType(e.target.value)} style={{ padding: '8px', borderRadius: '7px', border: '1px solid var(--line)' }}>
+                      {fileTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Resource URL (Drive/Link/YouTube/Repository)</label>
+                  <input required type="url" placeholder="https://..." value={url} onChange={e => setUrl(e.target.value)} />
+                </div>
+
+                <div className="form-group">
+                  <label>Tags (Press Add/Enter to append)</label>
+                  <div className="tag-input-container">
+                    {tags.map(t => (
+                      <span key={t} className="tag-pill">{t} <button type="button" onClick={() => removeTag(t)}>x</button></span>
+                    ))}
+                    <input value={tagText} onChange={e => setTagText(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } }}
+                      placeholder="e.g. notes, dbms" />
+                    <button type="button" className="secondary" style={{ minHeight: '30px', padding: '0 8px' }} onClick={addTag}>Add</button>
+                  </div>
+                </div>
+              </div>
+              <div className="resource-dialog-footer">
+                <button type="button" className="secondary" onClick={() => { setEditOpen(false); setEditingResource(null); }}>Cancel</button>
+                <button type="submit" className="primary">Save Changes</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {reportOpen && (
+        <div className="resource-dialog-overlay" onClick={e => e.target === e.currentTarget && setReportOpen(false)}>
+          <div className="resource-dialog-panel" style={{ width: '480px' }}>
+            <div className="resource-dialog-header">
+              <h3>Report Resource</h3>
+              <button className="icon" onClick={() => { setReportOpen(false); setReportingResource(null); }}>x</button>
+            </div>
+            <form onSubmit={handleReportSubmit}>
+              <div className="resource-dialog-body">
+                <p style={{ fontSize: '13px', color: 'var(--muted)', margin: 0 }}>
+                  Please select a reason for reporting <b>{reportingResource?.title}</b>.
+                </p>
+                <div className="form-group">
+                  <label>Reason</label>
+                  <select value={reportReason} onChange={e => setReportReason(e.target.value)} style={{ padding: '8px', borderRadius: '7px', border: '1px solid var(--line)' }}>
+                    <option value="Spam">Spam / Advertisements</option>
+                    <option value="Invalid Link">Broken or Invalid Link</option>
+                    <option value="Incorrect Category">Incorrect Subject / Category</option>
+                    <option value="Copyright">Copyright Infringement</option>
+                    <option value="Inappropriate">Inappropriate / Harmful Content</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Additional Details</label>
+                  <textarea placeholder="Provide details to help administrators review..." value={reportDetails} onChange={e => setReportDetails(e.target.value)} rows="3" style={{ width: '100%', border: '1px solid var(--line)', borderRadius: '7px', padding: '8px' }} />
+                </div>
+              </div>
+              <div className="resource-dialog-footer">
+                <button type="button" className="secondary" onClick={() => { setReportOpen(false); setReportingResource(null); }}>Cancel</button>
+                <button type="submit" className="primary" style={{ background: 'var(--red)' }}>Submit Report</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App />);
