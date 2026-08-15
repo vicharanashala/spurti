@@ -301,6 +301,7 @@ function StudentView({ profile, onBack }) {
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
         ['journey','My Journey'],
         ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
+        ['peer-review','Peer Review'],
         ['spa','SPA Points'],
         ...(ach?.visible ? [['achievements','Achievements']] : []),
         ['leaderboard','Leaderboard'],
@@ -308,6 +309,7 @@ function StudentView({ profile, onBack }) {
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
+      {tab === 'peer-review' && <PeerReviewTab email={student.email} student={student} />}
       {tab === 'spa' && <SpaModule student={student} />}
       {tab === 'achievements' && ach?.visible && <AchievementsPanel student={student} data={ach} />}
       {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
@@ -2062,6 +2064,432 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
         </div>
         {note && <p className="survey-note">{note}</p>}
       </div>
+    </div>
+  );
+}
+
+
+function PeerReviewTab({ email, student }) {
+  const [view, setView] = useState('dashboard');
+  const [submission, setSubmission] = useState(null);
+  const [reviewsReceived, setReviewsReceived] = useState([]);
+  const [reviewsGiven, setReviewsGiven] = useState([]);
+  const [completedReviewCount, setCompletedReviewCount] = useState(0);
+  const [availableSubmissions, setAvailableSubmissions] = useState([]);
+  const [currentReview, setCurrentReview] = useState(null);
+  const [rubric, setRubric] = useState([]);
+  const [responses, setResponses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [subRes, givenRes] = await Promise.all([
+        fetch(`${API}/peer-review/my-submission`).then(r => r.json()),
+        fetch(`${API}/peer-review/my-reviews-given`).then(r => r.json())
+      ]);
+      if (subRes.submitted) {
+        setSubmission(subRes.submission);
+        setReviewsReceived(subRes.reviews || []);
+      }
+      setReviewsGiven(givenRes.reviews || []);
+      setCompletedReviewCount(givenRes.completedCount || 0);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { loadData(); }, [email]);
+
+  const submitProject = async (data) => {
+    setSubmitting(true);
+    setMessage('');
+    try {
+      const res = await fetch(`${API}/peer-review/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      const d = await res.json();
+      if (res.ok) {
+        setMessage('Project submitted successfully! You can now review other peers.');
+        await loadData();
+        setView('review-list');
+      } else {
+        setMessage(d.error || 'Failed to submit');
+      }
+    } catch { setMessage('Network error'); }
+    setSubmitting(false);
+  };
+
+  const loadReviewableSubmissions = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/peer-review/to-review`).then(r => r.json());
+      setAvailableSubmissions(res.submissions || []);
+      if (!res.canReview && res.mustSubmit) {
+        setView('submit');
+      }
+    } catch {}
+    setLoading(false);
+  };
+
+  const startReview = async (submissionId) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/peer-review/start/${submissionId}`, { method: 'POST' }).then(r => r.json());
+      if (res.review) {
+        setCurrentReview(res.review);
+        setRubric(res.review.rubric);
+        setResponses(res.review.rubric.map(q => ({ questionId: q.id, answer: null, explanation: '' })));
+        setView('review-form');
+      } else {
+        setMessage(res.error || 'Failed to start review');
+        await loadReviewableSubmissions();
+      }
+    } catch { setMessage('Network error'); }
+    setLoading(false);
+  };
+
+  const submitReview = async () => {
+    const errors = [];
+    responses.forEach((r, i) => {
+      if (r.answer === null) errors.push(`Question ${i + 1}: Please select Yes or No`);
+      if (!r.explanation || r.explanation.trim().length < 10) errors.push(`Question ${i + 1}: Explanation must be at least 10 characters`);
+    });
+    if (errors.length) { setMessage(errors[0]); return; }
+
+    setSubmitting(true);
+    setMessage('');
+    try {
+      const res = await fetch(`${API}/peer-review/submit-review/${currentReview._id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ responses })
+      }).then(r => r.json());
+      if (res.success) {
+        setMessage(res.message);
+        setCurrentReview(null);
+        await loadData();
+        await loadReviewableSubmissions();
+        setView('dashboard');
+      } else {
+        setMessage(res.error || 'Failed to submit review');
+      }
+    } catch { setMessage('Network error'); }
+    setSubmitting(false);
+  };
+
+  if (loading && !submission && reviewsGiven.length === 0) {
+    return <section className="panel"><p className="muted">Loading peer review data...</p></section>;
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Peer Review — Phase 1</h2>
+        {view !== 'dashboard' && view !== 'review-form' && (
+          <button className="secondary small" onClick={() => { setView('dashboard'); loadData(); }}>Back to Dashboard</button>
+        )}
+      </div>
+
+      {message && (
+        <div className={`peer-review-message ${message.includes('successfully') || message.includes('Congratulations') ? 'success' : 'error'}`}>
+          {message}
+        </div>
+      )}
+
+      {view === 'dashboard' && (
+        <PeerReviewDashboard
+          submission={submission}
+          reviewsReceived={reviewsReceived}
+          reviewsGiven={reviewsGiven}
+          completedReviewCount={completedReviewCount}
+          onNavigate={(v) => { setView(v); if (v === 'review-list') loadReviewableSubmissions(); }}
+        />
+      )}
+
+      {view === 'submit' && (
+        <SubmitProjectForm onSubmit={submitProject} submitting={submitting} />
+      )}
+
+      {view === 'review-list' && (
+        <ReviewList
+          submissions={availableSubmissions}
+          completedReviewCount={completedReviewCount}
+          onStartReview={startReview}
+          loading={loading}
+        />
+      )}
+
+      {view === 'review-form' && currentReview && (
+        <PeerReviewForm
+          review={currentReview}
+          rubric={rubric}
+          responses={responses}
+          setResponses={setResponses}
+          onSubmit={submitReview}
+          submitting={submitting}
+        />
+      )}
+
+      {view === 'review-status' && (
+        <ReviewStatus submission={submission} reviews={reviewsReceived} />
+      )}
+    </section>
+  );
+}
+
+function PeerReviewDashboard({ submission, reviewsReceived, reviewsGiven, completedReviewCount, onNavigate }) {
+  const hasSubmitted = !!submission;
+  const reviewsCompleted = completedReviewCount;
+  const mandatoryDone = reviewsCompleted >= 3;
+  const allDone = reviewsCompleted >= 5;
+
+  return (
+    <div className="peer-review-dashboard">
+      <div className="peer-review-stats">
+        <div className="peer-review-stat">
+          <span>Submission</span>
+          <strong>{hasSubmitted ? '✓ Submitted' : '○ Not submitted'}</strong>
+        </div>
+        <div className="peer-review-stat">
+          <span>Mandatory Reviews</span>
+          <strong>{Math.min(reviewsCompleted, 3)}/3</strong>
+          <em>{mandatoryDone ? '✓ Complete (+50 SP earned)' : `${3 - reviewsCompleted} left for SP`}</em>
+        </div>
+        <div className="peer-review-stat">
+          <span>Optional Reviews</span>
+          <strong>{Math.max(0, reviewsCompleted - 3)}/2</strong>
+          <em>{allDone ? '✓ Complete' : mandatoryDone ? `${5 - reviewsCompleted} left (no SP)` : 'Available after 3 mandatory'}</em>
+        </div>
+        <div className="peer-review-stat">
+          <span>Reviews Received</span>
+          <strong>{reviewsReceived.length}/3</strong>
+        </div>
+        {submission?.spAwarded > 0 && (
+          <div className="peer-review-stat sp">
+            <span>SP Earned</span>
+            <strong>+{submission.spAwarded} SP</strong>
+          </div>
+        )}
+      </div>
+
+      <div className="peer-review-actions">
+        {!hasSubmitted && (
+          <button className="primary" onClick={() => onNavigate('submit')}>Submit Your Project</button>
+        )}
+        {hasSubmitted && !mandatoryDone && (
+          <button className="primary" onClick={() => onNavigate('review-list')}>
+            Review Peers — {3 - reviewsCompleted} mandatory review{3 - reviewsCompleted !== 1 ? 's' : ''} left for SP
+          </button>
+        )}
+        {hasSubmitted && mandatoryDone && !allDone && (
+          <button className="secondary" onClick={() => onNavigate('review-list')}>
+            Review 2 More Peers (Optional, no SP)
+          </button>
+        )}
+        {hasSubmitted && reviewsReceived.length > 0 && (
+          <button className="secondary" onClick={() => onNavigate('review-status')}>View Reviews Received</button>
+        )}
+        {mandatoryDone && !allDone && (
+          <div className="peer-review-note">
+            <p className="success-text">✓ Mandatory 3 reviews done! +50 SP earned.</p>
+            <p className="muted">You can review 2 more peers — this is optional and does not award additional SP.</p>
+          </div>
+        )}
+        {allDone && (
+          <p className="success-text">You've completed all 5 reviews (3 mandatory + 2 optional). Thank you!</p>
+        )}
+      </div>
+
+      {reviewsGiven.length > 0 && (
+        <div className="peer-review-history">
+          <h3>Reviews You Gave</h3>
+          <div className="bank">
+            <div className="bank-header"><span>Reviewee</span><span>Score</span><span>Status</span></div>
+            {reviewsGiven.map((r, i) => (
+              <div className="bank-row" key={i}>
+                <span>{r.revieweeName || 'Peer'}</span>
+                <span>{r.totalPoints}/{30} ({r.percentageScore}%)</span>
+                <span className={r.status === 'completed' ? 'status-accepted' : 'status-pending'}>{r.status}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SubmitProjectForm({ onSubmit, submitting }) {
+  const [prLink, setPrLink] = useState('');
+  const [projectReport, setProjectReport] = useState('');
+  const [productMd, setProductMd] = useState('');
+
+  return (
+    <div className="peer-review-submit">
+      <h3>Submit Phase 1 Project</h3>
+      <p className="muted">Submit your crowd-source-faq project for peer review. Once submitted, you'll be able to review other peers' projects.</p>
+      <form onSubmit={(e) => { e.preventDefault(); onSubmit({ prLink, projectReport, productMd }); }}>
+        <div className="form-group">
+          <label>GitHub PR Link *</label>
+          <input type="url" value={prLink} onChange={e => setPrLink(e.target.value)} placeholder="https://github.com/vicharanashala/crowd-source-faq/pull/..." required />
+        </div>
+        <div className="form-group">
+          <label>Project Report *</label>
+          <textarea value={projectReport} onChange={e => setProjectReport(e.target.value)} placeholder="Describe your implementation, challenges faced, and learnings..." rows={6} required />
+        </div>
+        <div className="form-group">
+          <label>product.md Content *</label>
+          <textarea value={productMd} onChange={e => setProductMd(e.target.value)} placeholder="Paste your product.md content here..." rows={8} required />
+        </div>
+        <button type="submit" disabled={submitting}>{submitting ? 'Submitting...' : 'Submit Project'}</button>
+      </form>
+    </div>
+  );
+}
+
+function ReviewList({ submissions, completedReviewCount, onStartReview, loading }) {
+  if (completedReviewCount >= 5) {
+    return (
+      <div className="peer-review-list">
+        <p className="success-text">You've completed all 5 peer reviews (3 mandatory + 2 optional). Thank you!</p>
+      </div>
+    );
+  }
+
+  const mandatoryDone = completedReviewCount >= 3;
+
+  return (
+    <div className="peer-review-list">
+      <h3>Available Submissions to Review</h3>
+      {mandatoryDone ? (
+        <div className="peer-review-note">
+          <p className="success-text">✓ Mandatory 3 reviews completed (+50 SP earned)</p>
+          <p className="muted">The 2 remaining reviews are <strong>optional</strong> — no additional SP will be awarded. You can skip them if you want.</p>
+        </div>
+      ) : (
+        <p className="muted">You have <strong>{3 - completedReviewCount} mandatory</strong> review(s) remaining for SP. After that, 2 more are optional.</p>
+      )}
+      {submissions.length === 0 ? (
+        <p className="muted">No submissions available for review at the moment.</p>
+      ) : (
+        <div className="review-cards">
+          {submissions.map(s => (
+            <div className="review-card" key={s._id}>
+              <h4>{s.studentName}</h4>
+              <p><strong>PR:</strong> <a href={s.resolvedPrUrl || s.prLink} target="_blank" rel="noopener noreferrer">{s.prLink}</a></p>
+              <p className="muted">Submitted: {new Date(s.submittedAt).toLocaleDateString()}</p>
+              <button className="primary small" onClick={() => onStartReview(s._id)} disabled={loading}>
+                {mandatoryDone ? 'Review (Optional)' : 'Start Review'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function linkTypeInfo(link) {
+  const s = (link || '').trim().toLowerCase();
+  if (/\/pull[s]?\/(\d+)/.test(s))
+    return { type: 'pull-request', label: 'Pull Request', tip: 'This is a team PR. View the code changes, read the description, and check the diff. Team members share the same PR — evaluate the team\'s collective work as presented here.' };
+  if (/^\d+$/.test(s))
+    return { type: 'pull-number', label: 'PR #' + s, tip: 'Only a PR number was submitted — a full PR link has been generated for you above.' };
+  if (/team-/.test(s) || /^[0-9a-f]{10,}$/.test(s))
+    return { type: 'team-repo', label: 'Team Repository', tip: 'This is a team repository. Browse the code in the repo link above. Since it\'s a shared team repo, evaluate the student\'s specific contributions based on the project report and product.md.' };
+  return { type: 'fork', label: 'Link', tip: 'This appears to be a personal fork or external link. Evaluate the code as-is — the student is working independently on their own copy.' };
+}
+
+function PeerReviewForm({ review, rubric, responses, setResponses, onSubmit, submitting }) {
+  const handleAnswer = (questionId, answer) => {
+    setResponses(prev => prev.map(r => r.questionId === questionId ? { ...r, answer } : r));
+  };
+  const handleExplanation = (questionId, explanation) => {
+    setResponses(prev => prev.map(r => r.questionId === questionId ? { ...r, explanation } : r));
+  };
+
+  const linkInfo = linkTypeInfo(review.submission?.prLink);
+
+  return (
+    <div className="peer-review-form">
+      <div className="review-header">
+        <h3>Review: {review.submission?.studentName}'s Project</h3>
+        <a href={review.submission?.resolvedPrUrl || review.submission?.prLink} target="_blank" rel="noopener noreferrer" className="primary small">View →</a>
+      </div>
+
+      <div className="review-guidance">
+        <p><strong>Submission type:</strong> {linkInfo.label}</p>
+        <p className="muted">{linkInfo.tip}</p>
+      </div>
+
+      <div className="review-materials">
+        <div className="material-section">
+          <h4>Project Report</h4>
+          <div className="content-box">{review.submission?.projectReport}</div>
+        </div>
+        <div className="material-section">
+          <h4>product.md</h4>
+          <div className="content-box">{review.submission?.productMd}</div>
+        </div>
+      </div>
+
+      <div className="rubric-questions">
+        {rubric.map((q, index) => (
+          <div className="rubric-question" key={q.id}>
+            <div className="question-header">
+              <span className="question-number">{index + 1}</span>
+              <span className="question-points">+{q.points} SP</span>
+            </div>
+            <p className="question-text">{q.question}</p>
+            <p className="question-desc">{q.description}</p>
+            <div className="answer-buttons">
+              <button type="button" className={`answer-btn yes ${responses[index]?.answer === true ? 'selected' : ''}`} onClick={() => handleAnswer(q.id, true)}>Yes</button>
+              <button type="button" className={`answer-btn no ${responses[index]?.answer === false ? 'selected' : ''}`} onClick={() => handleAnswer(q.id, false)}>No</button>
+            </div>
+            <div className="explanation-box">
+              <label>Explain your choice (required, min 10 chars):</label>
+              <textarea value={responses[index]?.explanation || ''} onChange={e => handleExplanation(q.id, e.target.value)} placeholder="Why did you choose this answer? Provide specific examples from the code..." rows={3} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <button className="primary" onClick={onSubmit} disabled={submitting}>{submitting ? 'Submitting...' : 'Submit Review'}</button>
+    </div>
+  );
+}
+
+function ReviewStatus({ submission, reviews }) {
+  if (!submission) return null;
+  return (
+    <div className="peer-review-status">
+      <h3>Your Submission Status</h3>
+      <div className="status-info">
+        <p><strong>Submitted:</strong> {new Date(submission.submittedAt).toLocaleDateString()}</p>
+        <p><strong>Status:</strong> {submission.status}</p>
+        <p><strong>Reviews Received:</strong> {submission.reviewCount}/3</p>
+        {submission.averageScore > 0 && <p><strong>Average Score:</strong> {submission.averageScore}%</p>}
+        {submission.spAwarded > 0 && <p className="sp-awarded">+{submission.spAwarded} SP earned!</p>}
+      </div>
+      {reviews.length > 0 && (
+        <div className="reviews-received">
+          <h4>Reviews</h4>
+          <div className="review-cards">
+            {reviews.map((r, i) => (
+              <div className="review-card" key={i}>
+                <h4>Reviewer {r.reviewerNumber}</h4>
+                <p>Score: {r.totalPoints}/{30} ({r.percentageScore}%)</p>
+                <p>Yes answers: {r.score}/10</p>
+                <p className="muted">Reviewed: {new Date(r.completedAt).toLocaleDateString()}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

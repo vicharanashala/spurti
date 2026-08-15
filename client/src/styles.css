@@ -689,6 +689,99 @@ input {
 .cm-body .vg { margin-top: 8px; }
 .cm-soon { color: var(--muted); font-size: 14px; line-height: 1.6; padding: 10px 2px; }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   PEER REVIEW STYLES
+   ═══════════════════════════════════════════════════════════════════════════ */
+.peer-review-message { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+.peer-review-message.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+.peer-review-message.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+
+.peer-review-dashboard { display: flex; flex-direction: column; gap: 20px; }
+
+.peer-review-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.peer-review-stat { border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: #fff; display: flex; flex-direction: column; gap: 4px; }
+.peer-review-stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.peer-review-stat strong { font-size: 18px; }
+.peer-review-stat.sp { border-color: var(--green); background: #f0fdf4; }
+.peer-review-stat.sp strong { color: var(--green); }
+
+.peer-review-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.peer-review-actions button { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; font-size: 14px; }
+.peer-review-actions .primary { background: var(--accent); color: #fff; }
+.peer-review-actions .primary:hover { opacity: 0.9; }
+.peer-review-actions .secondary { background: #f1f5f9; color: var(--text); border: 1px solid var(--line); }
+.peer-review-actions .secondary:hover { background: #e2e8f0; }
+.success-text { color: var(--green); font-weight: 600; font-size: 14px; }
+
+.peer-review-submit, .peer-review-list, .peer-review-form, .peer-review-status { display: flex; flex-direction: column; gap: 16px; }
+.peer-review-submit h3, .peer-review-list h3, .peer-review-form h3, .peer-review-status h3 { margin: 0; }
+
+.form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.form-group label { font-size: 13px; font-weight: 600; color: var(--text); }
+.form-group input, .form-group textarea { padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; font-size: 14px; font-family: inherit; resize: vertical; }
+.form-group input:focus, .form-group textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(99,102,241,0.15); }
+
+.peer-review-submit button, .peer-review-form > button { padding: 10px 20px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-weight: 600; font-size: 14px; cursor: pointer; align-self: flex-start; }
+.peer-review-submit button:hover, .peer-review-form > button:hover { opacity: 0.9; }
+.peer-review-submit button:disabled, .peer-review-form > button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.review-cards { display: flex; flex-direction: column; gap: 12px; }
+.review-card { border: 1px solid var(--line); border-radius: 8px; padding: 16px; background: #fff; display: flex; flex-direction: column; gap: 8px; }
+.review-card h4 { margin: 0; font-size: 15px; }
+.review-card p { margin: 0; font-size: 13px; }
+.review-card a { color: var(--accent); text-decoration: none; }
+.review-card a:hover { text-decoration: underline; }
+.review-card .muted { color: var(--muted); font-size: 12px; }
+.review-card button { margin-top: 8px; align-self: flex-start; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; font-size: 13px; }
+.review-card .primary { background: var(--accent); color: #fff; }
+.review-card .primary:hover { opacity: 0.9; }
+
+.review-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.review-header a { padding: 8px 16px; background: var(--accent); color: #fff; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 13px; white-space: nowrap; }
+.review-header a:hover { opacity: 0.9; }
+
+.review-guidance { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 12px 16px; font-size: 13px; line-height: 1.5; }
+.review-guidance strong { color: var(--text); }
+.review-guidance p { margin: 2px 0; }
+
+.review-materials { display: flex; flex-direction: column; gap: 16px; }
+.material-section h4 { margin: 0 0 6px; font-size: 14px; }
+.content-box { background: #f8fafc; border: 1px solid var(--line); border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.6; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+
+.rubric-questions { display: flex; flex-direction: column; gap: 20px; }
+.rubric-question { border: 1px solid var(--line); border-radius: 8px; padding: 16px; background: #fff; }
+.question-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.question-number { background: var(--accent); color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+.question-points { font-size: 13px; font-weight: 600; color: var(--green); }
+.question-text { font-size: 14px; font-weight: 600; margin: 0 0 4px; line-height: 1.5; }
+.question-desc { font-size: 12px; color: var(--muted); margin: 0 0 12px; line-height: 1.4; }
+
+.answer-buttons { display: flex; gap: 10px; margin-bottom: 12px; }
+.answer-btn { padding: 8px 24px; border: 2px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer; font-weight: 600; font-size: 13px; transition: all 0.15s; }
+.answer-btn.yes:hover, .answer-btn.yes.selected { border-color: var(--green); background: #d4edda; color: #155724; }
+.answer-btn.no:hover, .answer-btn.no.selected { border-color: #dc3545; background: #f8d7da; color: #721c24; }
+
+.explanation-box { display: flex; flex-direction: column; gap: 6px; }
+.explanation-box label { font-size: 12px; color: var(--muted); }
+.explanation-box textarea { padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; font-family: inherit; resize: vertical; line-height: 1.5; }
+.explanation-box textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(99,102,241,0.15); }
+
+.status-info { display: flex; flex-direction: column; gap: 6px; }
+.status-info p { margin: 0; font-size: 14px; }
+.sp-awarded { color: var(--green); font-weight: 700; font-size: 16px !important; }
+
+.reviews-received h4 { margin: 0 0 8px; font-size: 14px; }
+
+.peer-review-history { margin-top: 8px; }
+.peer-review-history h3 { font-size: 14px; margin-bottom: 8px; }
+
+.peer-review-list p.muted { font-size: 13px; color: var(--muted); }
+.peer-review-submit p.muted { font-size: 13px; color: var(--muted); }
+
+.peer-review-note { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
+.peer-review-note .success-text { margin-bottom: 4px; }
+.peer-review-note .muted { margin: 0; font-size: 13px; }
+
 /* FAQ accordion tab (one answer open at a time) */
 .faq-intro { font-size: 12.5px; margin: 0 0 10px; }
 .faq-list { display: flex; flex-direction: column; gap: 8px; }

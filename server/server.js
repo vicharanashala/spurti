@@ -23,6 +23,8 @@ import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
 import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
+import PeerReviewSubmission from './models/PeerReviewSubmission.js';
+import PeerReview from './models/PeerReview.js';
 import { buildSpaState } from './services/spa.js';
 import { buildTrajectoryState } from './services/trajectory.js';
 
@@ -1089,6 +1091,430 @@ function pipelineHealth() {
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PEER REVIEW RUBRIC — 10 Yes/No questions for Phase 1 project evaluation
+// Each question is worth 3 points (max 30 total)
+// ═══════════════════════════════════════════════════════════════════════════
+const PEER_REVIEW_RUBRIC = [
+  { id: 1, question: "Is the claimed feature/fix verified with proof — does the report, README.md, or product.md include screenshots, links, or evidence that it actually works?", description: "Evaluates whether the student provided verifiable proof (screenshots, demo links, output samples) in their submission documents that the change works as claimed.", points: 3 },
+  { id: 2, question: "Is the code change well-scoped — does it avoid unrelated modifications or unnecessary refactoring?", description: "Assesses whether the student kept the PR focused and avoided scope creep.", points: 3 },
+  { id: 3, question: "Does the code follow the existing project conventions and patterns (naming, file structure, framework usage)?", description: "Checks if the change is consistent with how the rest of the codebase is written.", points: 3 },
+  { id: 4, question: "Does the PR include a clear description explaining what was changed and why?", description: "Evaluates documentation quality — commit messages, PR description, and inline comments where needed.", points: 3 },
+  { id: 5, question: "Does the project report follow the given format — correct sections, headings, structure, and length as specified?", description: "Evaluates whether the student adhered to the prescribed project report template and formatting guidelines.", points: 3 },
+  { id: 6, question: "Is the product.md well-written with a clear problem statement, proposed solution, architecture overview, and future roadmap?", description: "Evaluates documentation quality — product.md should clearly explain what the feature/fix does, why it matters, and how it fits into the project.", points: 3 },
+  { id: 7, question: "Is the code readable and easy to understand — are variable names clear, functions well-sized, and logic straightforward?", description: "Evaluates code clarity — another developer should be able to understand the change without difficulty.", points: 3 },
+  { id: 8, question: "Does the implementation correctly use the project's tech stack (React, Express, Mongoose, TypeScript) without unnecessary dependencies?", description: "Checks if the student used the right tools from the existing stack rather than introducing new libraries.", points: 3 },
+  { id: 9, question: "Is the project report well-structured with clear sections covering the problem, approach, implementation details, and results?", description: "Evaluates the project report PDF — should document the journey from understanding the problem to delivering the solution.", points: 3 },
+  { id: 10, question: "Does the submission demonstrate problem-solving — does the student explain trade-offs, challenges faced, or alternative approaches considered?", description: "Evaluates critical thinking — the student should reflect on why they chose their approach and what difficulties they encountered.", points: 3 }
+];
+const PEER_REVIEW_MAX_POINTS = 30;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PEER REVIEW — Phase 1 project submission and peer evaluation
+// ═══════════════════════════════════════════════════════════════════════════
+
+api.get('/peer-review/rubric', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  res.json({ rubric: PEER_REVIEW_RUBRIC, maxPoints: PEER_REVIEW_MAX_POINTS });
+});
+
+api.post('/peer-review/submit', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+
+    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const { prLink, projectReport, productMd } = req.body;
+    if (!prLink || !projectReport || !productMd) {
+      return res.status(400).json({ error: 'prLink, projectReport, and productMd are required' });
+    }
+
+    const existing = await PeerReviewSubmission.findOne({ studentEmail: email });
+    if (existing) {
+      return res.status(409).json({ error: 'Already submitted', submission: existing });
+    }
+
+    const raw = prLink.trim().toLowerCase();
+    let teamLink;
+    let resolvedPrUrl;
+    if (/\/pull[s]?\/(\d+)/.test(raw)) {
+      const num = raw.match(/\/pull[s]?\/(\d+)/)[1];
+      teamLink = 'pr-' + num;
+      resolvedPrUrl = `https://github.com/vicharanashala/crowd-source-faq/pull/${num}`;
+    } else if (/^\d+$/.test(raw)) {
+      teamLink = 'pr-' + raw;
+      resolvedPrUrl = `https://github.com/vicharanashala/crowd-source-faq/pull/${raw}`;
+    } else if (/team-/.test(raw)) {
+      const parts = raw.replace(/^https?:\/\/github\.com\//, '').replace(/\/+$/, '').replace(/[?#].*$/, '').split('/');
+      teamLink = parts[parts.length - 1];
+      resolvedPrUrl = raw.startsWith('http') ? raw : `https://github.com/vicharanashala/${teamLink}`;
+    } else if (/^[0-9a-f]{10,}$/.test(raw)) {
+      teamLink = 'team-' + raw;
+      resolvedPrUrl = `https://github.com/vicharanashala/team-${raw}`;
+    } else {
+      teamLink = raw.replace(/\/+$/, '').replace(/[?#].*$/, '');
+      resolvedPrUrl = raw.startsWith('http') ? raw : `https://github.com/vicharanashala/${raw}`;
+    }
+
+    const submission = await PeerReviewSubmission.create({
+      studentEmail: email,
+      studentId: student._id,
+      studentName: student.name,
+      prLink,
+      teamLink,
+      resolvedPrUrl,
+      projectReport,
+      productMd,
+      status: 'submitted'
+    });
+
+    res.json({ success: true, submission });
+  } catch (err) {
+    console.error('peer-review submit error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.get('/peer-review/my-submission', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+
+    const submission = await PeerReviewSubmission.findOne({ studentEmail: email }).lean();
+    if (!submission) {
+      return res.json({ submitted: false });
+    }
+
+    const reviews = await PeerReview.find({
+      revieweeEmail: email,
+      status: 'completed'
+    }).select('reviewerNumber totalYesCount totalPoints percentageScore completedAt').lean();
+
+    res.json({
+      submitted: true,
+      submission,
+      reviews: reviews.map(r => ({
+        reviewerNumber: r.reviewerNumber,
+        score: r.totalYesCount,
+        totalPoints: r.totalPoints,
+        percentageScore: r.percentageScore,
+        completedAt: r.completedAt
+      })),
+      averageScore: submission.averageScore,
+      spAwarded: submission.spAwarded
+    });
+  } catch (err) {
+    console.error('peer-review my-submission error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.get('/peer-review/to-review', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+
+    const mySubmission = await PeerReviewSubmission.findOne({ studentEmail: email });
+    if (!mySubmission) {
+      return res.status(400).json({ error: 'Must submit your project first', mustSubmit: true });
+    }
+
+    const completedReviews = await PeerReview.countDocuments({
+      reviewerEmail: email,
+      status: 'completed'
+    });
+
+    if (completedReviews >= 5) {
+      return res.json({ canReview: false, message: 'You have completed all 5 reviews', completedReviews });
+    }
+
+    const reviewedEmails = await PeerReview.find({ reviewerEmail: email }).distinct('revieweeEmail');
+
+    const excludeFilter = { studentEmail: { $ne: email, $nin: reviewedEmails } };
+    if (mySubmission.teamLink) {
+      excludeFilter.teamLink = { $ne: mySubmission.teamLink };
+    }
+
+    const availableSubmissions = await PeerReviewSubmission.find({
+      ...excludeFilter,
+      status: { $in: ['submitted', 'under_review'] }
+    }).select('studentName studentEmail prLink resolvedPrUrl submittedAt reviewCount').lean();
+
+    res.json({
+      canReview: true,
+      completedReviews,
+      mandatoryReviews: Math.min(completedReviews, 3),
+      remainingReviews: 5 - completedReviews,
+      remainingForSp: Math.max(0, 3 - completedReviews),
+      submissions: availableSubmissions.map(s => ({
+        _id: s._id,
+        studentName: s.studentName,
+        maskedEmail: maskEmail(s.studentEmail),
+        prLink: s.prLink,
+        resolvedPrUrl: s.resolvedPrUrl,
+        teamLink: s.teamLink,
+        submittedAt: s.submittedAt,
+        reviewCount: s.reviewCount
+      }))
+    });
+  } catch (err) {
+    console.error('peer-review to-review error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.post('/peer-review/start/:submissionId', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { submissionId } = req.params;
+    const submission = await PeerReviewSubmission.findById(submissionId);
+    if (!submission) return res.status(404).json({ error: 'Submission not found' });
+    if (submission.studentEmail === email) {
+      return res.status(400).json({ error: 'Cannot review your own submission' });
+    }
+
+    if (submission.teamLink) {
+      const mySubmission = await PeerReviewSubmission.findOne({ studentEmail: email });
+      if (mySubmission && mySubmission.teamLink === submission.teamLink) {
+        return res.status(400).json({ error: 'Cannot review a teammate' });
+      }
+    }
+
+    const existingReview = await PeerReview.findOne({
+      reviewerEmail: email, revieweeEmail: submission.studentEmail
+    });
+    if (existingReview) {
+      return res.status(409).json({ error: 'Already reviewing or reviewed this submission' });
+    }
+
+    const completedReviews = await PeerReview.countDocuments({ reviewerEmail: email, status: 'completed' });
+    if (completedReviews >= 5) return res.status(400).json({ error: 'Already completed 5 reviews' });
+
+    const existingReviewCount = await PeerReview.countDocuments({ revieweeEmail: submission.studentEmail, status: 'completed' });
+    if (existingReviewCount >= 5) return res.status(400).json({ error: 'This submission already has 5 reviews' });
+
+    const reviewerNumber = existingReviewCount + 1;
+    const reviewer = await Student.findOne({ email });
+
+    const review = await PeerReview.create({
+      reviewerEmail: email, reviewerId: reviewer._id, reviewerName: reviewer.name,
+      revieweeEmail: submission.studentEmail, revieweeId: submission.studentId, revieweeName: submission.studentName,
+      reviewerNumber, submissionId: submission._id, status: 'pending', startedAt: new Date()
+    });
+
+    submission.status = 'under_review';
+    await submission.save();
+
+    res.json({
+      success: true,
+      review: {
+        _id: review._id, reviewerNumber: review.reviewerNumber,
+        submission: { prLink: submission.prLink, resolvedPrUrl: submission.resolvedPrUrl, projectReport: submission.projectReport, productMd: submission.productMd, studentName: submission.studentName },
+        rubric: PEER_REVIEW_RUBRIC, maxPoints: PEER_REVIEW_MAX_POINTS
+      }
+    });
+  } catch (err) {
+    console.error('peer-review start error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.post('/peer-review/submit-review/:reviewId', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { reviewId } = req.params;
+    const { responses } = req.body;
+
+    if (!responses || !Array.isArray(responses) || responses.length !== 10) {
+      return res.status(400).json({ error: 'Must provide exactly 10 responses' });
+    }
+
+    const review = await PeerReview.findById(reviewId);
+    if (!review) return res.status(404).json({ error: 'Review not found' });
+    if (review.reviewerEmail !== email) return res.status(403).json({ error: 'Not authorized' });
+    if (review.status !== 'pending') return res.status(400).json({ error: 'Review already submitted' });
+
+    let totalYesCount = 0, totalPoints = 0;
+
+    const processedResponses = responses.map((r, index) => {
+      const rubricQuestion = PEER_REVIEW_RUBRIC[index];
+      if (!rubricQuestion) throw new Error(`Invalid question index ${index}`);
+      if (r.questionId !== rubricQuestion.id) throw new Error(`Question ID mismatch at index ${index}`);
+      if (typeof r.answer !== 'boolean') throw new Error(`Answer must be boolean at question ${rubricQuestion.id}`);
+      if (!r.explanation || r.explanation.trim().length < 10) {
+        throw new Error(`Explanation must be at least 10 characters at question ${rubricQuestion.id}`);
+      }
+      const points = r.answer ? rubricQuestion.points : 0;
+      if (r.answer) totalYesCount++;
+      totalPoints += points;
+      return { questionId: rubricQuestion.id, questionText: rubricQuestion.question, answer: r.answer, explanation: r.explanation.trim(), points };
+    });
+
+    const percentageScore = Math.round((totalPoints / PEER_REVIEW_MAX_POINTS) * 100);
+    review.responses = processedResponses;
+    review.totalYesCount = totalYesCount;
+    review.totalPoints = totalPoints;
+    review.percentageScore = percentageScore;
+    review.status = 'completed';
+    review.completedAt = new Date();
+    await review.save();
+
+    const submission = await PeerReviewSubmission.findById(review.submissionId);
+    submission.reviewCount += 1;
+    const allReviews = await PeerReview.find({ revieweeEmail: submission.studentEmail, status: 'completed' });
+    const avgScore = allReviews.reduce((sum, r) => sum + r.percentageScore, 0) / allReviews.length;
+    submission.averageScore = Math.round(avgScore);
+    submission.totalPoints = allReviews.reduce((sum, r) => sum + r.totalPoints, 0);
+
+    let revieweeSpAwarded = 0;
+    if (allReviews.length === 3) {
+      const finalAvg = allReviews.reduce((sum, r) => sum + r.percentageScore, 0) / 3;
+      revieweeSpAwarded = finalAvg === 100 ? 30 : Math.round((finalAvg / 100) * 30);
+      submission.spAwarded = revieweeSpAwarded;
+      submission.spAwardedAt = new Date();
+      submission.status = 'reviewed';
+
+      const reviewee = await Student.findOne({ email: submission.studentEmail });
+      if (reviewee) {
+        const currentBalance = Number(reviewee.totalSp) || 0;
+        await SPTransaction.create({
+          email: reviewee.email, studentId: reviewee._id, category: 'peer_review',
+          sessionLabel: 'Phase 1 Peer Review', deltaMode: 'absolute', deltaValue: revieweeSpAwarded,
+          appliedDelta: revieweeSpAwarded, balanceAfter: currentBalance + revieweeSpAwarded,
+          reason: `Peer Review: Received 3 peer reviews with ${Math.round(finalAvg)}% average score`,
+          dateTime: new Date()
+        });
+        await Student.updateOne({ _id: reviewee._id }, { $inc: { totalSp: revieweeSpAwarded } });
+      }
+    }
+
+    await submission.save();
+
+    let reviewerSpAwarded = 0;
+    const reviewerCompletedCount = await PeerReview.countDocuments({ reviewerEmail: email, status: 'completed' });
+
+    if (reviewerCompletedCount === 3) {
+      reviewerSpAwarded = 50;
+      const reviewer = await Student.findOne({ email });
+      if (reviewer) {
+        const currentBalance = Number(reviewer.totalSp) || 0;
+        await SPTransaction.create({
+          email: reviewer.email, studentId: reviewer._id, category: 'peer_review',
+          sessionLabel: 'Phase 1 Peer Review', deltaMode: 'absolute', deltaValue: reviewerSpAwarded,
+          appliedDelta: reviewerSpAwarded, balanceAfter: currentBalance + reviewerSpAwarded,
+          reason: 'Peer Review: Completed 3 peer reviews', dateTime: new Date()
+        });
+        await Student.updateOne({ _id: reviewer._id }, { $inc: { totalSp: reviewerSpAwarded } });
+        review.reviewerSpAwarded = reviewerSpAwarded;
+        review.reviewerSpAwardedAt = new Date();
+        await review.save();
+      }
+    }
+
+    res.json({
+      success: true,
+      review: { _id: review._id, totalYesCount: review.totalYesCount, totalPoints: review.totalPoints, percentageScore: review.percentageScore },
+      submission: { reviewCount: submission.reviewCount, averageScore: submission.averageScore, spAwarded: submission.spAwarded },
+      revieweeSpAwarded, reviewerSpAwarded, reviewerCompletedCount,
+      message: reviewerSpAwarded > 0
+        ? `Congratulations! You've completed 3 mandatory reviews and earned ${reviewerSpAwarded} SP!`
+        : revieweeSpAwarded > 0
+          ? `Review submitted. The reviewee earned ${revieweeSpAwarded} SP from 3 peer reviews!`
+          : `Review submitted. ${Math.max(0, 3 - reviewerCompletedCount)} more mandatory reviews for SP reward.`
+    });
+  } catch (err) {
+    console.error('peer-review submit-review error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.get('/peer-review/my-reviews-given', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ error: 'Not authenticated' });
+
+    const reviews = await PeerReview.find({ reviewerEmail: email })
+      .select('revieweeName reviewerNumber totalYesCount totalPoints percentageScore status completedAt reviewerSpAwarded')
+      .lean();
+
+    const completedCount = reviews.filter(r => r.status === 'completed').length;
+    res.json({
+      reviews, completedCount,
+      mandatoryCompleted: Math.min(completedCount, 3),
+      remainingCount: 5 - completedCount,
+      remainingForSp: Math.max(0, 3 - completedCount),
+      spAwarded: completedCount >= 3 ? (reviews[0]?.reviewerSpAwarded || 50) : 0
+    });
+  } catch (err) {
+    console.error('peer-review my-reviews-given error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.get('/admin/peer-review/submissions', adminGuard, async (req, res) => {
+  try {
+    const submissions = await PeerReviewSubmission.find().sort({ submittedAt: -1 }).lean();
+    res.json(submissions.map(s => ({
+      _id: s._id, studentName: s.studentName, studentEmail: s.studentEmail, prLink: s.prLink,
+      resolvedPrUrl: s.resolvedPrUrl, teamLink: s.teamLink, submittedAt: s.submittedAt, status: s.status, reviewCount: s.reviewCount,
+      averageScore: s.averageScore, totalPoints: s.totalPoints, spAwarded: s.spAwarded
+    })));
+  } catch (err) {
+    console.error('admin peer-review submissions error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.get('/admin/peer-review/reviews', adminGuard, async (req, res) => {
+  try {
+    const { status, revieweeEmail, reviewerEmail } = req.query;
+    const filter = {};
+    if (status) filter.status = status;
+    if (revieweeEmail) filter.revieweeEmail = revieweeEmail;
+    if (reviewerEmail) filter.reviewerEmail = reviewerEmail;
+    const reviews = await PeerReview.find(filter).sort({ createdAt: -1 }).lean();
+    res.json(reviews);
+  } catch (err) {
+    console.error('admin peer-review reviews error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.get('/admin/peer-review/stats', adminGuard, async (req, res) => {
+  try {
+    const [totalSubmissions, completedReviews, pendingSubmissions] = await Promise.all([
+      PeerReviewSubmission.countDocuments(),
+      PeerReview.countDocuments({ status: 'completed' }),
+      PeerReviewSubmission.countDocuments({ status: 'submitted' })
+    ]);
+    const spStats = await PeerReviewSubmission.aggregate([
+      { $match: { spAwarded: { $gt: 0 } } },
+      { $group: { _id: null, totalSpAwardedToReviewees: { $sum: '$spAwarded' }, avgScore: { $avg: '$averageScore' } } }
+    ]);
+    const reviewerSpStats = await PeerReview.aggregate([
+      { $match: { reviewerSpAwarded: { $gt: 0 } } },
+      { $group: { _id: null, totalSpAwardedToReviewers: { $sum: '$reviewerSpAwarded' }, totalReviewersRewarded: { $sum: 1 } } }
+    ]);
+    res.json({
+      totalSubmissions, completedReviews, pendingSubmissions,
+      totalSpAwardedToReviewees: spStats[0]?.totalSpAwardedToReviewees || 0,
+      totalSpAwardedToReviewers: reviewerSpStats[0]?.totalSpAwardedToReviewers || 0,
+      totalReviewersRewarded: reviewerSpStats[0]?.totalReviewersRewarded || 0,
+      averageScore: Math.round(spStats[0]?.avgScore || 0)
+    });
+  } catch (err) {
+    console.error('admin peer-review stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.use('/api', api);
 app.use('/spurti/api', api);
