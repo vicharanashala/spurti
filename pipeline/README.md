@@ -103,3 +103,11 @@ node sync-spurti-from-sakshi.js
 # attendance + poll records are rebuilt by Sakshi's sp-refresh.sh:
 #   cd ~/spurti && node pipeline/sync-attendance-records.cjs && node pipeline/sync-poll-records.cjs
 ```
+### Notifications
+
+After the daily SP pipeline completes successfully, `notify.js` publishes a notification to the configured ntfy topic.
+
+Required environment variables:
+
+NTFY_URL=https://ntfy.sh
+NTFY_TOPIC=spurti-announcements

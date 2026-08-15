@@ -55,6 +55,10 @@ $NODE sync-poll-records.js
 rc=$?; echo "--- $(ts) stage5 exit=$rc ---"
 [ $rc -eq 0 ] || { echo "ABORT: sync-poll-records failed (rc=$rc)"; exit 1; }
 
+echo "=== $(ts) NOTIFY: ntfy ==="
+$NODE notify.js
+echo "--- $(ts) notification completed ---"
+
 echo "=== $(ts) STAGE 6/6: zoom-fetch-transcripts (AI summaries -> zoom_data.summaries) ==="
 $NODE /home/samagama/samagama/server/zoom-fetch-transcripts.js
 rc=$?; echo "--- $(ts) stage6 exit=$rc ---"
