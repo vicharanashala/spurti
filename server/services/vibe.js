@@ -34,7 +34,7 @@ export const floorPctFor = course => Math.round(CONFIG.floorHours / course.hours
 function daysFromToday(deadline) {
   const t = new Date(); t.setHours(0, 0, 0, 0);
   const d = new Date(deadline); d.setHours(0, 0, 0, 0);
-  return Math.round((d - t) / 86400000);
+  return Math.floor((d - t) / 86400000);
 }
 
 // Build the full student-facing ViBe state.

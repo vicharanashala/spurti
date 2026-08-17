@@ -160,6 +160,24 @@ app.set('trust proxy', 1);
 const api = express.Router();
 const liveViewers = new Map();
 
+// Express 4 does NOT forward rejections from async route handlers to the error
+// middleware — an unhandled rejection crashes the Node process (remote DoS; e.g.
+// a CastError from a malformed ObjectId in /confirm). Wrap every handler so sync
+// throws AND async rejections reach the single error handler registered below.
+for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
+  const original = api[method].bind(api);
+  api[method] = (path, ...handlers) => original(path, ...handlers.map(handler => {
+    const wrapped = (req, res, next) => {
+      try {
+        return Promise.resolve(handler(req, res, next)).catch(next);
+      } catch (err) {
+        return next(err);
+      }
+    };
+    return wrapped;
+  }));
+}
+
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
@@ -190,7 +208,14 @@ function parseCookies(header = '') {
   return Object.fromEntries(String(header).split(';').map(part => {
     const index = part.indexOf('=');
     if (index < 0) return null;
-    return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())];
+    let value;
+    try {
+      value = decodeURIComponent(part.slice(index + 1).trim());
+    } catch {
+      // Malformed %-encoding in one cookie must not take down every session route.
+      return null;
+    }
+    return [part.slice(0, index).trim(), value];
   }).filter(Boolean));
 }
 
@@ -343,7 +368,7 @@ api.get('/me', async (req, res) => {
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
 async function vibeStudent(req) {
-  const email = normalizeEmail(req.body?.email || req.query.email) || await studentEmailFromRequest(req);
+  const email = await studentEmailFromRequest(req);
   if (!email) return null;
   return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
 }
@@ -428,7 +453,11 @@ api.get('/journey/state', async (req, res) => {
 api.put('/journey/plan', async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });   // My Journey goals are universal (Phase 1)
-  await saveJourneyPlan(student.email, req.body || {});
+  try {
+    await saveJourneyPlan(student, req.body || {});
+  } catch (err) {
+    return res.status(400).json({ error: err.message });   // invalid / out-of-bounds date
+  }
   res.json(await buildJourneyState(student));
 });
 
@@ -437,13 +466,12 @@ api.get('/search', async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ exact: false, matches: [] });
 
-  if (q.includes('@')) {
-    const email = normalizeEmail(q);
-    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
-    if (student?.status === 'excused') return res.json(excusedPayload(student));
-    if (student) return res.json({ exact: true, profile: await studentPayload(student) });
-  }
-
+  // Search NEVER returns the full profile — only masked public rows. The caller
+  // must pick a record and prove email ownership via POST /confirm to unlock the
+  // full personal payload (transactions, poll responses, attendance, alt email).
+  // Previously an exact-email query short-circuited to studentPayload() with zero
+  // ownership check, leaking any student's private record to anyone who knew the
+  // email. (Regressed fix — see PR for the search-data-leak issue.)
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const matches = await Student.find({
     $or: [
@@ -459,6 +487,7 @@ api.get('/search', async (req, res) => {
 api.post('/confirm', async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const { studentId, email } = req.body || {};
+  if (!mongoose.isValidObjectId(studentId)) return res.status(404).json({ error: 'Student not found' });
   const typed = normalizeEmail(email);
   const student = await Student.findById(studentId).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
@@ -498,10 +527,11 @@ api.get('/leaderboard/board', async (req, res) => {
   if (!board) return res.json({ window, category, scope: wantCohort ? 'cohort' : 'all', weekLabel: '', builtAt: null, rows: [], me: null });
   const meId = student ? String(student._id) : null;
   const meRow = meId ? board.rows.find((r) => r.studentId === meId) : null;
+  const publicRow = ({ studentId: _id, ...rest }) => rest;
   res.json({
     window: board.window, category: board.category, scope: wantCohort ? 'cohort' : 'all',
     weekLabel: board.weekLabel, builtAt: board.builtAt, total: board.rows.length,
-    rows: board.rows.slice(0, 50),
+    rows: board.rows.slice(0, 50).map(publicRow),
     me: meRow ? { rank: meRow.rank, sp: meRow.sp } : null
   });
 });
@@ -624,19 +654,26 @@ api.post('/share/track', async (req, res) => {
 });
 
 api.post('/ping', async (req, res) => {
-  const { email, name, page } = req.body || {};
-  const normalized = normalizeEmail(email);
-  if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
+  // Resolve identity from a verified session: Samagama cookie for students,
+  // admin headers for the admin dashboard. Body email is rejected — it was
+  // unverified and allowed any caller to write analytics as any user.
+  let email = await studentEmailFromRequest(req);
+  if (!email && isAdmin(req)) email = normalizeEmail(req.headers['x-admin-email']);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  const { name, page } = req.body || {};
+  if (!name || !page) return res.status(400).json({ error: 'name and page required' });
   // Telemetry is best-effort: an unknown page value (e.g. a new admin sub-page
   // not yet in the enum) must never crash the request or leak an unhandled
   // rejection. Drop the write and carry on.
   try {
-    await SessionEvent.create({ email: normalized, name, event: 'page_view', page });
+    await SessionEvent.create({ email, name, event: 'page_view', page });
   } catch (err) {
     if (err?.name !== 'ValidationError') console.error('ping log failed:', err?.message);
   }
   if (page === 'record' || page.startsWith('admin')) {
-    liveViewers.set(normalized, { name, page, lastSeen: new Date() });
+    const cutoff = Date.now() - 60_000;
+    for (const [k, v] of liveViewers) if (v.lastSeen.getTime() < cutoff) liveViewers.delete(k);
+    liveViewers.set(email, { name, page, lastSeen: new Date() });
   }
   res.json({ ok: true });
 });
@@ -765,6 +802,7 @@ api.get('/admin/attendance', adminGuard, async (_req, res) => {
 });
 
 api.get('/admin/student/:id', adminGuard, async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ error: 'Student not found' });
   const student = await Student.findById(req.params.id).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await studentPayload(student));
@@ -786,6 +824,66 @@ api.get('/admin/active', adminGuard, (_req, res) => {
     }
   }
   res.json(viewers);
+});
+
+// Admin integrity audit: verifies every student's totalSp equals the sum of their
+// appliedDelta transactions, and flags negative-SP students + deltaMode issues.
+api.get('/admin/integrity-check', adminGuard, async (_req, res) => {
+  const issues = await Student.aggregate([
+    { $match: { status: { $ne: 'excused' } } },
+    {
+      $lookup: {
+        from: 'sptransactions',
+        let: { studentEmail: '$email' },
+        pipeline: [
+          { $match: { $expr: { $eq: ['$email', '$$studentEmail'] } } },
+          { $group: { _id: null, computedBalance: { $sum: '$appliedDelta' }, transactions: { $sum: 1 } } }
+        ],
+        as: 'txInfo'
+      }
+    },
+    {
+      $addFields: {
+        computedBalance: { $ifNull: [{ $arrayElemAt: ['$txInfo.computedBalance', 0] }, 0] },
+        transactions: { $ifNull: [{ $arrayElemAt: ['$txInfo.transactions', 0] }, 0] }
+      }
+    },
+    { $match: { $expr: { $ne: ['$computedBalance', '$totalSp'] } } },
+    {
+      $project: {
+        _id: 0,
+        email: 1,
+        name: 1,
+        storedTotalSp: '$totalSp',
+        computedBalance: 1,
+        discrepancy: { $subtract: ['$totalSp', '$computedBalance'] },
+        transactions: 1
+      }
+    },
+    { $sort: { discrepancy: -1 } }
+  ]);
+
+  const negativeSp = await Student.find({ totalSp: { $lt: 0 } })
+    .select('email name totalSp')
+    .lean();
+
+  const deltaModeIssues = await SPTransaction.countDocuments({ deltaMode: 'percent' });
+
+  res.json({
+    clean: issues.length === 0 && negativeSp.length === 0,
+    checkedAt: new Date().toISOString(),
+    summary: {
+      totalIssues: issues.length,
+      studentsWithNegativeSp: negativeSp.length,
+      deltaModeIssues,
+      totalStudentsChecked: await Student.countDocuments({ status: 'active' })
+    },
+    balanceDiscrepancies: issues,
+    negativeSpStudents: negativeSp,
+    deltaModeFixNeeded: deltaModeIssues > 0
+      ? `Run: db.sptransactions.updateMany({deltaMode:'percent'},{$set:{deltaMode:'percentage'}})`
+      : null
+  });
 });
 
 api.get('/admin/analytics', adminGuard, async (_req, res) => {
@@ -865,7 +963,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     };
   });
 
-  const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
+  const categoryTotals = ['initial', 'attendance', 'poll', 'spa', 'query', 'manual'].map(category => {
     const rows = activeTransactions.filter(t => t.category === category);
     return {
       category,
@@ -1169,6 +1267,19 @@ if (fs.existsSync(clientDist)) {
 } else {
   app.get('*', (_req, res) => res.status(404).send('Build the client first with npm run build.'));
 }
+
+// Global error handler — last middleware. Catches sync throws, async rejections
+// (forwarded via next(err) by the route wrapper above) and body-parser errors
+// (invalid JSON, oversized payload). Returns a clean JSON error instead of the
+// Express default HTML stack trace, and never crashes the process.
+app.use((err, _req, res, _next) => {
+  if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON body' });
+  if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request body too large' });
+  if (err?.name === 'CastError') return res.status(400).json({ error: 'Invalid identifier' });
+  if (err?.name === 'ValidationError') return res.status(400).json({ error: 'Invalid input', details: err.message });
+  console.error('[error]', err?.stack || err);
+  res.status(err?.statusCode || 500).json({ error: err?.message || 'Internal server error' });
+});
 
 mongoose.connect(MONGO_URI).then(() => {
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));

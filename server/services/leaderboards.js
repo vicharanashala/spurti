@@ -88,7 +88,7 @@ const levelOfStudent = (s) => levelFor(Math.max(Number(s.highestSpEver) || 0, Nu
 export function rankRows(subset, valueOf, tieAware) {
   const sorted = subset
     .map((s) => ({ studentId: String(s._id), name: s.name || '', level: levelOfStudent(s), sp: Math.round(valueOf(String(s._id))) }))
-    .sort((a, b) => b.sp - a.sp || a.name.localeCompare(b.name));
+    .sort((a, b) => b.sp - a.sp || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   if (!tieAware) return sorted.map((r, i) => ({ ...r, rank: i + 1 }));
   let rank = 0, prevSp = null;
   return sorted.map((r, i) => {

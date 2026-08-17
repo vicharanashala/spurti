@@ -179,8 +179,9 @@ Client: `LeaderboardPanel` (a preset dropdown). Population = `activeFilter`
 
 > NOTE: session labels are now `Day N (DD Mon)` / `Orientation (15 May)`
 > (produced by the pipeline), NOT the old `"15 May Morning"` form still listed
-> in `server/config.js SESSION_LABELS`. The display path in `server/services/sp.js`
-> iterates the old labels and is out of sync — known issue to reconcile.
+> in `server/config.js SESSION_LABELS`. The retired ±5 display service
+> (`server/services/sp.js`) that iterated the old labels was deleted on
+> 2026-08-10; the My Journey/standup/level views all read the modern labels.
 
 ## Achievements — permanent cards + public verify (env-gated)
 

@@ -28,12 +28,7 @@ function AppShell() {
     const send = () => fetch(`${API}/ping`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: profile.student.email,
-        name: profile.student.name,
-        page: 'record',
-        recordViewed: profile.student.email
-      })
+      body: JSON.stringify({ name: profile.student.name, page: 'record' })
     }).catch(() => {});
     send();
     const id = setInterval(send, 30000);
@@ -326,7 +321,7 @@ function SpaModule({ student }) {
 
   useEffect(() => {
     (async () => {
-      const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
+      const r = await fetch(`${API}/spa/state`);
       setData(await r.json());
     })();
   }, [email]);
@@ -442,7 +437,7 @@ function useAchievements(email) {
   const [data, setData] = useState(null);
   useEffect(() => {
     let live = true;
-    fetch(`${API}/achievements?email=${encodeURIComponent(email)}`)
+    fetch(`${API}/achievements`)
       .then(r => r.json())
       .then(d => { if (live) setData(d); })
       .catch(() => { if (live) setData({ visible: false, groups: [], locked: [], counts: {} }); });
@@ -784,15 +779,15 @@ function LeaderboardPanel({ student }) {
   useEffect(() => {
     let live = true;
     setLoading(true);
-    fetch(`${API}/leaderboard/board?window=${preset.window}&category=${preset.category}&scope=${preset.scope}&email=${encodeURIComponent(student.email)}`)
+    fetch(`${API}/leaderboard/board?window=${preset.window}&category=${preset.category}&scope=${preset.scope}`)
       .then(r => r.json())
       .then(d => { if (live) { setData(d); setLoading(false); } })
       .catch(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [presetKey, student.email]);
+  }, [presetKey]);
   const rows = data?.rows || [];
   const me = data?.me || null;
-  const meOutside = me && !rows.some(r => r.studentId === student._id);
+  const meOutside = me && !rows.some(r => r.rank === me.rank);
   return (
     <section className="panel">
       <div className="panel-head">
@@ -807,7 +802,7 @@ function LeaderboardPanel({ student }) {
           <table className="table lb-table">
             <thead><tr><th>Rank</th><th>Name</th><th>Level</th><th>SP</th></tr></thead>
             <tbody>{rows.map(r => (
-              <tr key={r.studentId} className={r.studentId === student._id ? 'current-student' : ''}>
+              <tr key={r.rank} className={me && r.rank === me.rank ? 'current-student' : ''}>
                 <td>{r.rank}</td><td>{r.name}</td><td>L{r.level}</td><td>{r.sp}</td>
               </tr>
             ))}</tbody>
@@ -829,7 +824,7 @@ function LeaderboardPanel({ student }) {
 function TrajectoryModal({ student, onClose }) {
   const [data, setData] = useState(null);
   useEffect(() => {
-    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`).then(r => r.json()).then(setData);
+    fetch(`${API}/trajectory/state`).then(r => r.json()).then(setData);
   }, [student.email]);
 
   const series = data ? [
@@ -902,7 +897,7 @@ function StudentPulse({ profile }) {
         <div className="pulse-card progress-card">
           <span>Standing</span>
           <strong>Rank {student.rank}</strong>
-          <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP to enter Top 50.`}</p>
+          <p>{cohort.pointsToTop50 == null || cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP to enter Top 50.`}</p>
           <div className="compare-list">
             <b>Cohort avg: {cohort.averageSp}</b>
             <b>Top 50: {cohort.top50Cutoff ?? '—'}</b>
@@ -1149,7 +1144,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
   const [err, setErr] = useState(null);
 
   const load = async () => {
-    const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`);
+    const r = await fetch(`${API}/journey/state`);
     setData(await r.json());
   };
   useEffect(() => { load(); }, [email]);
@@ -1285,7 +1280,7 @@ function VibeGoals({ student }) {
   const [err, setErr] = useState(null);
 
   const load = async () => {
-    const r = await fetch(`${API}/vibe/state?email=${encodeURIComponent(email)}`);
+    const r = await fetch(`${API}/vibe/state`);
     setData(await r.json());
   };
   useEffect(() => {
@@ -1456,7 +1451,7 @@ function StandupGoals({ student }) {
   const [err, setErr] = useState(null);
 
   const load = async () => {
-    const r = await fetch(`${API}/standup/state?email=${encodeURIComponent(email)}`);
+    const r = await fetch(`${API}/standup/state`);
     setData(await r.json());
   };
   useEffect(() => { load(); }, [email]);
@@ -1566,8 +1561,8 @@ function AdminView({ admin, auth, onBack }) {
     if (!auth?.email) return;
     const doPing = (page) => fetch(`${API}/ping`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: auth.email, name: auth.email, page })
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Email': auth.email, 'X-Admin-Token': auth.token },
+      body: JSON.stringify({ name: auth.email, page })
     }).catch(() => {});
     doPing('admin-analytics');
     const id = setInterval(() => doPing('admin-live'), 30000);
@@ -1596,7 +1591,7 @@ function AdminView({ admin, auth, onBack }) {
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
   const fetchStats = async () => {
-    const r = await fetch(`${API}/admin/stats`, headers);
+    const r = await fetch(`${API}/admin/stats`, { headers });
     if (r.ok) setStats(await r.json());
   };
   useEffect(() => {
@@ -1956,7 +1951,7 @@ function Chart({ title, rows, max }) {
 
 
 function AllStudentsPanel({ stats, onStudent, auth }) {
-  const [activeTab, setActiveTab] = useState('yetToOnboard');
+  const [activeTab, setActiveTab] = useState('yet to onboard');
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
   const headers = adminHeaders(auth);
@@ -1964,7 +1959,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   const loadList = async (status) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/admin/students-by-status?status=${status}&limit=200`, headers);
+      const res = await fetch(`${API}/admin/students-by-status?status=${status}&limit=200`, { headers });
       if (res.ok) setList(await res.json());
     } finally {
       setLoading(false);
@@ -1979,7 +1974,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
         <h2>All Students</h2>
       </div>
       <div className="tab-bar">
-        <button className={activeTab === 'yetToOnboard' ? 'active' : ''} onClick={() => { setActiveTab('yetToOnboard'); }}>Yet to Onboard ({stats?.yetToOnboard ?? 0})</button>
+        <button className={activeTab === 'yet to onboard' ? 'active' : ''} onClick={() => { setActiveTab('yet to onboard'); }}>Yet to Onboard ({stats?.yetToOnboard ?? 0})</button>
         <button className={activeTab === 'active' ? 'active' : ''} onClick={() => { setActiveTab('active'); }}>Active ({stats?.activeStudents ?? 0})</button>
         <button className={activeTab === 'excused' ? 'active' : ''} onClick={() => { setActiveTab('excused'); }}>Excused ({stats?.excusedStudents ?? 0})</button>
       </div>

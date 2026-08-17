@@ -8,7 +8,7 @@ import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
 
 /**
- * Get full ledger (all transactions) for a student, ordered by sessionDatetime.
+ * Get full ledger (all transactions) for a student, ordered by dateTime.
  * Returns running balance at each step.
  */
 export async function getLedger(email) {
@@ -16,20 +16,20 @@ export async function getLedger(email) {
   if (!student) return null;
 
   const transactions = await SPTransaction.find({ email: email.toLowerCase() })
-    .sort({ sessionDatetime: 1 })
+    .sort({ dateTime: 1, createdAt: 1 })
     .lean();
 
   let runningBalance = 0;
   const ledger = transactions.map(t => {
-    runningBalance += Number(t.delta || 0);
+    runningBalance += Number(t.appliedDelta || 0);
     return {
       category: t.category,
       sessionLabel: t.sessionLabel,
-      sessionDatetime: t.sessionDatetime,
-      delta: t.delta,
+      dateTime: t.dateTime,
+      delta: t.appliedDelta,
       reason: t.reason,
       balanceAfter: runningBalance,
-      recordedAt: t.recordedAt
+      createdAt: t.createdAt
     };
   });
 
@@ -73,8 +73,7 @@ export async function getAllStudentsSummary() {
   return students.map(s => ({
     email: s.email,
     name: s.name,
-    totalSp: s.totalSp,
-    hasAttendance: s.sessions && Object.values(s.sessions).some(v => v > 0)
+    totalSp: s.totalSp
   }));
 }
 
@@ -82,24 +81,23 @@ export async function getAllStudentsSummary() {
  * Append a new transaction and update Student.totalSp atomically.
  * Use this when new data arrives (attendance, chat, poll, activity).
  */
-export async function appendTransaction(email, category, sessionLabel, sessionDatetime, delta, reason, ingestedFrom) {
-  const sessionDt = sessionDatetime instanceof Date ? sessionDatetime : new Date(sessionDatetime);
+export async function appendTransaction(email, category, sessionLabel, dateTime, deltaValue, reason) {
+  const sessionDt = dateTime instanceof Date ? dateTime : new Date(dateTime);
 
   const [txn] = await SPTransaction.create([{
     email: email.toLowerCase(),
     category,
     sessionLabel,
-    sessionDatetime: sessionDt,
-    delta,
-    reason,
-    recordedAt: new Date(),
-    ingestedFrom
+    dateTime: sessionDt,
+    deltaValue,
+    appliedDelta: deltaValue,
+    reason
   }]);
 
   // Atomic update of student totalSp
   await Student.updateOne(
     { email: email.toLowerCase() },
-    { $inc: { totalSp: delta } }
+    { $inc: { totalSp: deltaValue } }
   );
 
   return txn;
