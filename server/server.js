@@ -159,6 +159,12 @@ const app = express();
 app.set('trust proxy', 1);
 const api = express.Router();
 const liveViewers = new Map();
+function evictStaleViewers() {
+  const cutoff = Date.now() - 60_000;
+  for (const [email, data] of liveViewers.entries()) {
+    if (data.lastSeen.getTime() < cutoff) liveViewers.delete(email);
+  }
+}
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -457,8 +463,11 @@ api.get('/search', async (req, res) => {
 });
 
 api.post('/confirm', async (req, res) => {
+  const sessionEmail = await studentEmailFromRequest(req);
+  if (!sessionEmail) return res.status(401).json({ error: 'Not authenticated' });
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const { studentId, email } = req.body || {};
+  if (!mongoose.Types.ObjectId.isValid(studentId)) return res.status(400).json({ error: 'Invalid student ID' });
   const typed = normalizeEmail(email);
   const student = await Student.findById(studentId).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
@@ -624,6 +633,8 @@ api.post('/share/track', async (req, res) => {
 });
 
 api.post('/ping', async (req, res) => {
+  const sessionEmail = await studentEmailFromRequest(req);
+  if (!sessionEmail) return res.status(401).json({ error: 'Not authenticated' });
   const { email, name, page } = req.body || {};
   const normalized = normalizeEmail(email);
   if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
@@ -636,6 +647,7 @@ api.post('/ping', async (req, res) => {
     if (err?.name !== 'ValidationError') console.error('ping log failed:', err?.message);
   }
   if (page === 'record' || page.startsWith('admin')) {
+    evictStaleViewers();
     liveViewers.set(normalized, { name, page, lastSeen: new Date() });
   }
   res.json({ ok: true });
@@ -1160,7 +1172,8 @@ if (fs.existsSync(clientDist)) {
       // A crawler only ever hits this route, which is what the bot flag is for.
       logAchievementView(req, req.params.code, found);
       res.status(found ? 200 : 404).type('html').send(html);
-    } catch {
+    } catch (err) {
+      console.error('[verify-page]', err);
       res.sendFile(path.join(clientDist, 'index.html'));
     }
   });
@@ -1170,6 +1183,11 @@ if (fs.existsSync(clientDist)) {
   app.get('*', (_req, res) => res.status(404).send('Build the client first with npm run build.'));
 }
 
+mongoose.connect(MONGO_URI).then(() => {
+  app.use((err, _req, res, _next) => {
+    console.error(err.stack);
+    res.status(500).json({ error: 'Internal server error' });
+  });
 mongoose.connect(MONGO_URI).then(() => {
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
 }).catch((error) => {

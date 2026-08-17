@@ -96,13 +96,14 @@ const REASON_RE = /present (\d+) of (\d+) min \(([\d.]+)%\)/;
 
   console.log(`Done. written=${upserted} skipped=${skipped} of ${txns.length} attendance txns`);
 
-  // Verify for harsh007rana
-  const check = await db.collection('attendancerecords')
-    .find({ email: 'harsh007rana@gmail.com' })
-    .sort({ sessionLabel: 1 })
-    .toArray();
-  console.log(`\nharsh007rana AttendanceRecord count: ${check.length}`);
-  check.forEach(r => console.log(` ${r.sessionLabel} | qualified:${r.qualified} | mins:${r.attendedMinutes}/${r.totalSessionMinutes} (${r.attendancePercentage}%)`));
+  if (process.env.DEBUG) {
+    const check = await db.collection('attendancerecords')
+      .find({ email: 'harsh007rana@gmail.com' })
+      .sort({ sessionLabel: 1 })
+      .toArray();
+    console.log(`\nharsh007rana AttendanceRecord count: ${check.length}`);
+    check.forEach(r => console.log(` ${r.sessionLabel} | qualified:${r.qualified} | mins:${r.attendedMinutes}/${r.totalSessionMinutes} (${r.attendancePercentage}%)`));
+  }
 
   await client.close();
 })().catch(e => { console.error('FATAL', e); process.exit(1); });

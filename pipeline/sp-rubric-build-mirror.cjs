@@ -59,7 +59,7 @@ const { MongoClient } = require('mongodb');
 const MONGO_URI = process.env.MONGO_URI || '';
 const START_DATE = process.env.START_DATE || '2026-05-15';
 const PROGRAM_START = process.env.PROGRAM_START || '2026-05-15';
-const TODAY = process.env.TODAY || new Date().toISOString().slice(0, 10);
+const TODAY = process.env.TODAY || new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 const OUT_DIR = process.env.OUT_DIR || process.cwd();
 const APPLY = process.env.APPLY === '1';
 
@@ -127,8 +127,9 @@ const QUERY_BAD_ACTIONS = ['rejected', 'marked_unworthy'];
 // ── PRESERVED categories — NOT recomputable from Zoom source, so they must survive
 // the delete-and-rebuild (else the wipe erases them every run). 'manual' = ViBe/
 // standup commitment SP (stake debits + wins) AND admin manual awards; 'peer_faq' =
-// peer-review FAQ awards. We fold their deltas back into each student's balance.
-const PRESERVED_CATS = ['manual', 'peer_faq'];
+// peer-review FAQ awards; 'streak' = streak bonuses; 'peer_review' = peer-review
+// SP. We fold their deltas back into each student's balance.
+const PRESERVED_CATS = ['manual', 'peer_faq', 'streak', 'peer_review'];
 
 const isMandatory = (t) => /stand|orientation/i.test(t) && !/breakout|weekend|nptel|special|support|non[- ]?mandatory/i.test(t);
 const tier = (pct) => { pct = Math.min(100, pct); return pct >= 90 ? 10 : pct >= 75 ? 5 : pct >= 50 ? 3 : 0; };
@@ -454,6 +455,15 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
 
   if (!APPLY) { console.log('\nDRY RUN — no DB write. Set APPLY=1 to replace sakshi_spurti points.'); await conn.close(); return; }
 
+  // Safety floor: an empty/stale mirror (sync-collaborator-mirrors.js failed) would
+  // wipe everyone's SP on APPLY. Abort if the new ledger is implausibly small.
+  const MIN_STUDENTS = 2000;
+  if (finalBal.size < MIN_STUDENTS) {
+    console.error(`ABORT: new ledger has only ${finalBal.size} students (floor ${MIN_STUDENTS}). Mirror data is likely stale or empty.`);
+    await conn.close();
+    process.exit(1);
+  }
+
   // 6. APPLY: replace sakshi_spurti points (backs up sptransactions + students first)
   const backupDir = path.join(OUT_DIR, `sp_backup_mirror_${ts}`); fs.mkdirSync(backupDir, { recursive: true });
   for (const coll of ['sptransactions', 'students']) fs.writeFileSync(path.join(backupDir, `${coll}.json`), JSON.stringify(await sak.collection(coll).find({}).toArray()));
@@ -478,7 +488,7 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   // SPA summary for the web-app SPA tab (display only; SP itself is in the ledger above).
   const Spa = sak.collection('spaprogresses');
   const spaOps = spaSummary.map((s) => ({ updateOne: { filter: { email: s.email },
-    update: { $set: { ...s, activity: 'Activity 1: Linear Algebra', updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, upsert: true } }));
+    update: { $set: { ...s, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, upsert: true } }));
   for (let i = 0; i < spaOps.length; i += 1000) await Spa.bulkWrite(spaOps.slice(i, i + 1000), { ordered: false });
   console.log(`SPA -> spaprogresses upserted ${spaOps.length}`);
   // RECONCILE: the new ledger is the COMPLETE source of truth — all current SP is

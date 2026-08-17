@@ -1053,37 +1053,6 @@ function pollSortKey(label = '') {
   return ((m * 100 + day) * 10) + tod;
 }
 
-function Polls({ polls }) {
-  if (!polls.length) return <section className="panel empty">No poll records found.</section>;
-  const sorted = [...polls].sort((a, b) => pollSortKey(b.sessionLabel) - pollSortKey(a.sessionLabel));
-  return (
-    <section className="panel">
-      <h2>Polls</h2>
-      <div className="cards">
-        {sorted.map(poll => (
-          <article className="card" key={poll._id}>
-            <div className="card-head static">
-              <strong>{poll.sessionLabel}</strong>
-              <span>{poll.attemptedQuestions}/{poll.totalQuestions} attempted</span>
-            </div>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function Leaderboard({ rows }) {
-  return (
-    <section className="panel">
-      <h2>Top 50 Leaderboard</h2>
-      <table className="table">
-        <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>SP</th></tr></thead>
-        <tbody>{rows.map(row => <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}><td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.totalSp}</td></tr>)}</tbody>
-      </table>
-    </section>
-  );
-}
 
 const fmtDate = d => d ? new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '—';
 const toInput = d => d ? new Date(d).toISOString().slice(0, 10) : '';
