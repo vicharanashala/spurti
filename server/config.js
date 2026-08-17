@@ -8,58 +8,42 @@ export const ALLOW_STUDENT_SEARCH = process.env.ALLOW_STUDENT_SEARCH !== 'false'
 export const SAMAGAMA_AUTH_URL = process.env.SAMAGAMA_AUTH_URL || 'http://127.0.0.1:5001/api/auth/me';
 
 export const SESSION_LABELS = [
-  '15 May Morning',
-  '15 May Evening',
-  '16 May Morning',
-  '16 May Evening',
-  '17 May Evening',
-  '18 May Morning',
-  '19 May Morning',
-  '20 May Morning',
-  '21 May Morning',
-  '21 May Followup',
-  '22 May Morning',
-  '22 May Afternoon',
-  '22 May Evening'
+  'Orientation (15 May)',
+  'Day 1 (16 May)',
+  'Day 2 (17 May)',
+  'Day 3 (18 May)',
+  'Day 4 (19 May)',
+  'Day 5 (20 May)',
+  'Day 6 (21 May)',
+  'Day 7 (22 May)'
 ];
 
 export const SESSION_DURATIONS = {
-  '15 May Morning': 250,
-  '15 May Evening': 225,
-  '16 May Morning': 261,
-  '16 May Evening': 231,
-  '17 May Evening': 111,
-  '18 May Morning': 117,
-  '19 May Morning': 95,
-  '20 May Morning': 121,
-  '21 May Morning': 81,
-  '21 May Followup': 70,
-  '22 May Morning': 240,
-  '22 May Afternoon': 140,
-  '22 May Evening': 127
+  'Orientation (15 May)': 250,
+  'Day 1 (16 May)': 261,
+  'Day 2 (17 May)': 111,
+  'Day 3 (18 May)': 117,
+  'Day 4 (19 May)': 95,
+  'Day 5 (20 May)': 121,
+  'Day 6 (21 May)': 81,
+  'Day 7 (22 May)': 240
 };
 
 // Session end times from Zoom CSV headers — used for ordering and onboarding filter
 export const SESSION_DATETIME_MAP = {
-  '15 May Morning': '2026-05-15T12:37:30',
-  '15 May Evening': '2026-05-15T17:14:45',
-  '16 May Morning': '2026-05-16T12:16:32',
-  '16 May Evening': '2026-05-16T17:50:51',
-  '17 May Evening': '2026-05-17T22:33:56',
-  '18 May Morning': '2026-05-18T11:00:14',
-  '19 May Morning': '2026-05-19T10:35:17',
-  '20 May Morning': '2026-05-20T11:04:39',
-  '21 May Morning': '2026-05-21T11:00:00',
-  '21 May Followup': '2026-05-21T12:00:00',
-  '22 May Morning': '2026-05-22T13:00:00',
-  '22 May Afternoon': '2026-05-22T16:20:00',
-  '22 May Evening': '2026-05-22T18:36:50'
+  'Orientation (15 May)': '2026-05-15T12:37:30',
+  'Day 1 (16 May)': '2026-05-16T12:16:32',
+  'Day 2 (17 May)': '2026-05-17T22:33:56',
+  'Day 3 (18 May)': '2026-05-18T11:00:14',
+  'Day 4 (19 May)': '2026-05-19T10:35:17',
+  'Day 5 (20 May)': '2026-05-20T11:04:39',
+  'Day 6 (21 May)': '2026-05-21T11:00:00',
+  'Day 7 (22 May)': '2026-05-22T13:00:00'
 };
 
-// Per-session attendance threshold in MINUTES (null = use 75% of duration)
-// "17 May Evening": 50  →  student needs ≥50 min to earn +5 SP; <50 & >0 = 0 SP; absent = -5 SP
+// Per-session attendance threshold in MINUTES (used as fixed override for specific sessions)
 export const SESSION_THRESHOLDS_MINUTES = {
-  '17 May Evening': 50
+  'Day 2 (17 May)': 50
 };
 
 export const SESSION_THRESHOLDS_PCT = 0.75; // default % of session duration to qualify

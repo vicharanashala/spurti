@@ -1,10 +1,10 @@
 /**
  * SP Service
  * Uses Student.totalSp (pre-computed, stored) and SP_Transactions (append-only log).
- * No recomputation from raw data — unless totalSp is missing (migration fallback).
+ * No recomputation from raw data - unless totalSp is missing (migration fallback).
  */
 
-import { SESSION_LABELS, SESSION_DURATIONS, SESSION_DATETIME_MAP, SESSION_THRESHOLDS_MINUTES, SESSION_THRESHOLDS_PCT } from '../config.js';
+import { SESSION_LABELS, SESSION_DURATIONS, SESSION_DATETIME_MAP } from '../config.js';
 import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
 
@@ -32,19 +32,19 @@ export function withSp(studentDoc) {
     }
   }
 
+  const tier = (pct) => { pct = Math.min(100, pct); return pct >= 90 ? 10 : pct >= 75 ? 5 : pct >= 50 ? 3 : 0; };
+
   const sessionLedger = SESSION_LABELS.map(label => {
     const minutes = Number(sessions[label] || 0);
     const fullMinutes = SESSION_DURATIONS[label] || 0;
-    const threshold = requiredMinutes(label);
-    const qualified = minutes >= threshold;
-    const attendedPartial = minutes > 0 && !qualified;
-    const sp = qualified ? 5 : -5;
-    const reason = qualified
-      ? `Present for at least ${threshold} min (${Math.round(minutes)}/${fullMinutes} min) — earned +5 SP`
+    const pct = fullMinutes ? Math.round((minutes / fullMinutes) * 100) : 0;
+    const sp = tier(pct);
+    const reason = sp > 0
+      ? `Present for ${Math.round(minutes)} min (${pct}% of ${fullMinutes}) - earned +${sp} SP`
       : minutes > 0
-        ? `Present for ${Math.round(minutes)} min (${Math.round((minutes/fullMinutes)*100)}% of ${fullMinutes}) — below ${threshold} min threshold — -5 SP applied`
-        : `Absent — -5 SP applied`;
-    return { label, minutes, fullMinutes, threshold, qualified, attendedPartial, sp, reason };
+        ? `Present for ${Math.round(minutes)} min (${pct}% of ${fullMinutes}) - below 50% threshold - 0 SP`
+        : `Absent - 0 SP`;
+    return { label, minutes, fullMinutes, pct, sp, reason };
   });
 
   const onboardingDate = raw.onboardingDate ? new Date(raw.onboardingDate) : null;
@@ -96,7 +96,7 @@ export function withSp(studentDoc) {
 }
 
 /**
- * withSpFromTxns — use when transactions are pre-fetched
+ * withSpFromTxns - use when transactions are pre-fetched
  * Passes _txns into withSp to avoid extra DB query
  */
 export async function withSpFromTxns(studentDoc) {
@@ -149,10 +149,7 @@ function sessionMinutes(raw, label) {
   return Number(raw.sessions?.[label] || 0);
 }
 
-function requiredMinutes(label) {
-  if (label in SESSION_THRESHOLDS_MINUTES) return SESSION_THRESHOLDS_MINUTES[label];
-  return Math.round((SESSION_DURATIONS[label] || 0) * SESSION_THRESHOLDS_PCT);
-}
+
 
 function hasActivity(raw) {
   return Array.isArray(raw.activities) && raw.activities.length > 0;
