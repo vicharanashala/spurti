@@ -767,7 +767,6 @@ api.get('/admin/active', adminGuard, (_req, res) => {
         email,
         name: data.name,
         page: data.page,
-        recordViewed: data.recordViewed,
         secondsAgo: Math.round((now.getTime() - data.lastSeen.getTime()) / 1000)
       });
     }
