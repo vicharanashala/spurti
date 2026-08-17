@@ -6,6 +6,7 @@
 
 import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
+import { maskEmail } from '../utils/email.js';
 
 /**
  * Get full ledger (all transactions) for a student, ordered by sessionDatetime.
@@ -103,13 +104,4 @@ export async function appendTransaction(email, category, sessionLabel, sessionDa
   );
 
   return txn;
-}
-
-function maskEmail(email) {
-  const value = String(email || '').trim();
-  const [name, domain] = value.split('@');
-  if (!name || !domain) return 'hidden email';
-  const visibleStart = name.slice(0, Math.min(2, name.length));
-  const visibleEnd = name.length > 4 ? name.slice(-2) : '';
-  return `${visibleStart}${'*'.repeat(Math.max(3, name.length - visibleStart.length - visibleEnd.length))}${visibleEnd}@${domain}`;
 }
