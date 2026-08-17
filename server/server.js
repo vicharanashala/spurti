@@ -175,7 +175,9 @@ function publicStudent(student) {
     maskedEmail: maskEmail(student.email),
     maskedAlternateEmail: student.alternateEmail ? maskEmail(student.alternateEmail) : '',
     status: student.status || 'active',
-    totalSp: student.totalSp
+    totalSp: student.totalSp,
+    level: levelFor(Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0)),
+    trophyLeague: leagueBand(student.totalSp)
   };
 }
 
@@ -257,11 +259,13 @@ async function studentPayload(student) {
   const myGroup = leaderboardGroup(student.internshipStartDate);
   const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
   const mapRow = (row, index) => ({
+    _id: String(row._id),
     rank: index + 1,
     name: row.name,
     maskedEmail: maskEmail(row.email),
     totalSp: row.totalSp,
     level: levelFor(Math.max(Number(row.highestSpEver) || 0, Number(row.totalSp) || 0)),
+    trophyLeague: leagueBand(row.totalSp),
     isCurrentStudent: row.email === email
   });
   return {
