@@ -614,6 +614,22 @@ api.post('/ping', async (req, res) => {
   const { email, name, page } = req.body || {};
   const normalized = normalizeEmail(email);
   if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
+  // Identity check: page-view telemetry must match the authenticated caller, or
+  // anyone could spoof analytics and inject fake entries into the admin
+  // live-viewer panel. Admin pings need admin credentials; student pings must
+  // resolve to the same record as the session email (primary or alternate).
+  const isAdminPing = page.startsWith('admin');
+  let identityOk = false;
+  if (isAdminPing) {
+    identityOk = isAdmin(req);
+  } else {
+    const authedEmail = await studentEmailFromRequest(req);
+    if (authedEmail) {
+      const student = await Student.findOne({ $or: [{ email: authedEmail }, { alternateEmail: authedEmail }] }).lean();
+      identityOk = student && (student.email === normalized || student.alternateEmail === normalized);
+    }
+  }
+  if (!identityOk) return res.status(403).json({ error: 'Forbidden' });
   // Telemetry is best-effort: an unknown page value (e.g. a new admin sub-page
   // not yet in the enum) must never crash the request or leak an unhandled
   // rejection. Drop the write and carry on.

@@ -1566,7 +1566,7 @@ function AdminView({ admin, auth, onBack }) {
     if (!auth?.email) return;
     const doPing = (page) => fetch(`${API}/ping`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminHeaders(auth) },
       body: JSON.stringify({ email: auth.email, name: auth.email, page })
     }).catch(() => {});
     doPing('admin-analytics');
