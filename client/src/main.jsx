@@ -787,7 +787,7 @@ function LeaderboardPanel({ student }) {
   }, [presetKey]);
   const rows = data?.rows || [];
   const me = data?.me || null;
-  const meOutside = me && !rows.some(r => r.rank === me.rank);
+  const meOutside = me && !rows.some(r => r.isMe);
   return (
     <section className="panel">
       <div className="panel-head">
@@ -801,8 +801,8 @@ function LeaderboardPanel({ student }) {
         <>
           <table className="table lb-table">
             <thead><tr><th>Rank</th><th>Name</th><th>Level</th><th>SP</th></tr></thead>
-            <tbody>{rows.map(r => (
-              <tr key={r.rank} className={me && r.rank === me.rank ? 'current-student' : ''}>
+            <tbody>{rows.map((r, i) => (
+              <tr key={i} className={r.isMe ? 'current-student' : ''}>
                 <td>{r.rank}</td><td>{r.name}</td><td>L{r.level}</td><td>{r.sp}</td>
               </tr>
             ))}</tbody>

@@ -491,7 +491,8 @@ api.get('/leaderboard/board', async (req, res) => {
   if (!board) return res.json({ window, category, scope: wantCohort ? 'cohort' : 'all', weekLabel: '', builtAt: null, rows: [], me: null });
   const meId = student ? String(student._id) : null;
   const meRow = meId ? board.rows.find((r) => r.studentId === meId) : null;
-  const publicRow = ({ studentId: _id, ...rest }) => rest;
+  const publicRow = ({ studentId, ...rest }) =>
+    studentId === meId ? { ...rest, isMe: true } : rest;
   res.json({
     window: board.window, category: board.category, scope: wantCohort ? 'cohort' : 'all',
     weekLabel: board.weekLabel, builtAt: board.builtAt, total: board.rows.length,
