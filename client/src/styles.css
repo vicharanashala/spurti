@@ -138,6 +138,32 @@ input {
   justify-content: space-between;
   gap: 16px;
 }
+.nudge-stack { display: grid; gap: 10px; margin-bottom: 16px; }
+.nudge-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fff7e0;
+  border: 1px solid #f0c674;
+  border-left: 4px solid #f0a21c;
+  border-radius: 8px;
+  padding: 12px 16px;
+  color: var(--amber);
+}
+.nudge-icon { font-size: 20px; flex-shrink: 0; }
+.nudge-message { flex: 1; margin: 0; line-height: 1.5; }
+.nudge-dismiss {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.nudge-dismiss:hover { background: var(--amber); color: #fff; }
 .search-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

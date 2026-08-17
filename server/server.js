@@ -20,6 +20,8 @@ import BoardReign from './models/BoardReign.js';
 import { buildAchievementState, verifyAchievement } from './services/achievements.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
+import Nudge from './models/Nudge.js';
+import { detectAtRiskStudents, sendEmailNudge } from './nudgeEngine.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
 import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
@@ -462,6 +464,35 @@ api.post('/confirm', async (req, res) => {
   res.json(await studentPayload(student));
 });
 
+// Pending nudges for the logged-in student (cookie-authed). Returns nothing for
+// anyone else's account — no spoofable email header/body is trusted.
+api.get('/students/:id/nudges', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  const student = await Student.findById(req.params.id).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (normalizeEmail(email) !== normalizeEmail(student.email) &&
+      normalizeEmail(email) !== normalizeEmail(student.alternateEmail)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const nudges = await Nudge.find({ studentId: req.params.id, status: 'pending' }).sort({ createdAt: -1 }).lean();
+  res.json(nudges);
+});
+
+api.post('/nudges/:id/dismiss', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  const nudge = await Nudge.findById(req.params.id);
+  if (!nudge) return res.status(404).json({ error: 'Nudge not found' });
+  if (normalizeEmail(email) !== normalizeEmail(nudge.studentEmail)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  nudge.status = 'dismissed';
+  nudge.dismissedAt = new Date();
+  await nudge.save();
+  res.json(nudge);
+});
+
 api.get('/leaderboard', async (req, res) => {
   const type = String(req.query.leaderboardType || 'overall');
   const filter = { status: { $ne: 'excused' } };
@@ -755,6 +786,27 @@ api.get('/admin/student/:id', adminGuard, async (req, res) => {
   const student = await Student.findById(req.params.id).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await studentPayload(student));
+});
+
+api.post('/admin/nudges/run', adminGuard, async (_req, res) => {
+  const generated = await detectAtRiskStudents();
+  const errors = [];
+  let sent = 0;
+  let skipped = 0;
+  for (const nudge of generated) {
+    const result = await sendEmailNudge(nudge);
+    if (result.success) sent++;
+    else if (result.skipped) skipped++;
+    else errors.push({ studentEmail: nudge.studentEmail, error: result.error });
+  }
+  res.json({ generated: generated.length, sent, skipped, errors });
+});
+
+api.get('/admin/nudges', adminGuard, async (req, res) => {
+  const filter = {};
+  if (['pending', 'sent', 'dismissed'].includes(req.query.status)) filter.status = req.query.status;
+  const nudges = await Nudge.find(filter).sort({ createdAt: -1 }).limit(500).lean();
+  res.json(nudges);
 });
 
 api.get('/admin/active', adminGuard, (_req, res) => {
