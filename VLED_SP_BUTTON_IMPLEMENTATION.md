@@ -1,5 +1,19 @@
 # Adding "My Spurti" Button to Samagama Dashboard
 
+> **⚠️ DEPRECATED (2026-06-29)** — This HMAC-based auth handoff has been **retired**.
+> Samagama deleted the shared `SPURTI_AUTH_SECRET`, so the flow below verifies
+> against an empty secret and 401s every student. **Do not reintroduce.**
+>
+> **Current auth (live since 2026-06-29):** Spurti lives at `samagama.in/spurti`
+> (same origin as Samagama), so the browser already carries the student's
+> `chatengine_token` cookie. Spurti forwards that cookie to Samagama's internal
+> `/api/auth/me` endpoint (`SAMAGAMA_AUTH_URL`, default
+> `http://127.0.0.1:5001/api/auth/me`) to validate the session. No token in the
+> URL, no shared secret, no login page. See `CONTEXT.md` §Auth and `HOW_TO_USE.md`
+> for the current flow.
+>
+> This file is preserved as historical context for the HMAC implementation only.
+
 ## Overview
 
 This document describes what needs to be done to add a "My Spurti →" button in the Samagama student dashboard. When clicked, the button redirects the logged-in student to their Spurti (Summership SP) dashboard without requiring them to log in again.

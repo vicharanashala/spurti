@@ -61,7 +61,7 @@ On production, direct student search should stay disabled:
 ALLOW_STUDENT_SEARCH=false
 ```
 
-Students should enter Spurti from Samagama using a signed link to `/spurti/auth?token=...`. Samagama and Spurti must share the same `SPURTI_AUTH_SECRET`.
+Students enter Spurti from their Samagama dashboard. Spurti lives at `samagama.in/spurti` (same origin), so the browser already carries the `chatengine_token` cookie that Samagama validates — Spurti forwards it to Samagama's internal `/api/auth/me` endpoint (`SAMAGAMA_AUTH_URL`) to confirm the session. No token in the URL, no shared secret, no login page.
 
 ## Folder Structure
 

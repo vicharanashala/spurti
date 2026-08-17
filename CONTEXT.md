@@ -17,7 +17,7 @@ Spurti is a student engagement tracking app for the VLED Summership program at I
 - **Frontend:** React + Vite (client/), served as static SPA
 - **Backend:** Express.js (server/server.js)
 - **Database:** MongoDB with Mongoose
-- **Auth:** Cookie-based (`spurti_student`), HMAC-signed token via `/spurti/auth?token=`
+- **Auth:** Cookie-based (`chatengine_token`), forwarded to Samagama's `/api/auth/me` for verification
 - **Nginx proxy:** `/spurti` → `127.0.0.1:5003`
 
 ## Database Schema
