@@ -1596,7 +1596,7 @@ function AdminView({ admin, auth, onBack }) {
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
   const fetchStats = async () => {
-    const r = await fetch(`${API}/admin/stats`, headers);
+    const r = await fetch(`${API}/admin/stats`, { headers });
     if (r.ok) setStats(await r.json());
   };
   useEffect(() => {
@@ -1956,7 +1956,7 @@ function Chart({ title, rows, max }) {
 
 
 function AllStudentsPanel({ stats, onStudent, auth }) {
-  const [activeTab, setActiveTab] = useState('yetToOnboard');
+  const [activeTab, setActiveTab] = useState('yet to onboard');
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
   const headers = adminHeaders(auth);
@@ -1964,7 +1964,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   const loadList = async (status) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/admin/students-by-status?status=${status}&limit=200`, headers);
+      const res = await fetch(`${API}/admin/students-by-status?status=${status}&limit=200`, { headers });
       if (res.ok) setList(await res.json());
     } finally {
       setLoading(false);
@@ -1979,7 +1979,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
         <h2>All Students</h2>
       </div>
       <div className="tab-bar">
-        <button className={activeTab === 'yetToOnboard' ? 'active' : ''} onClick={() => { setActiveTab('yetToOnboard'); }}>Yet to Onboard ({stats?.yetToOnboard ?? 0})</button>
+        <button className={activeTab === 'yet to onboard' ? 'active' : ''} onClick={() => { setActiveTab('yet to onboard'); }}>Yet to Onboard ({stats?.yetToOnboard ?? 0})</button>
         <button className={activeTab === 'active' ? 'active' : ''} onClick={() => { setActiveTab('active'); }}>Active ({stats?.activeStudents ?? 0})</button>
         <button className={activeTab === 'excused' ? 'active' : ''} onClick={() => { setActiveTab('excused'); }}>Excused ({stats?.excusedStudents ?? 0})</button>
       </div>
