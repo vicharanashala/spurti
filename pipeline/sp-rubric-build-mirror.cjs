@@ -392,8 +392,8 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     let spaLearnUsed = 0, spaTeachUsed = 0;
     if (spa) {
       const byDay = new Map(); // date -> { learn, teach }
-      for (const d of spa.learn.slice().sort()) { if (spaLearnUsed >= SPA_LEARN_CAP) break; spaLearnUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.learn++; byDay.set(d, o); }
-      for (const d of spa.teach.slice().sort()) { if (spaTeachUsed >= SPA_TEACH_CAP) break; spaTeachUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.teach++; byDay.set(d, o); }
+      for (const d of spa.learn.slice().sort()) { if (d < info.start) continue; if (spaLearnUsed >= SPA_LEARN_CAP) break; spaLearnUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.learn++; byDay.set(d, o); }
+      for (const d of spa.teach.slice().sort()) { if (d < info.start) continue; if (spaTeachUsed >= SPA_TEACH_CAP) break; spaTeachUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.teach++; byDay.set(d, o); }
       for (const [d, o] of byDay) {
         const delta = o.learn * SPA_LEARN_UNIT + o.teach * SPA_TEACH_UNIT; if (!delta) continue;
         const parts = []; if (o.learn) parts.push(`${o.learn} learned`); if (o.teach) parts.push(`${o.teach} taught`);
@@ -416,6 +416,7 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       for (const d of qDates) qByDay.set(d, (qByDay.get(d) || 0) + 1);
       let qUsed = 0;
       for (const d of [...qByDay.keys()].sort()) {
+        if (d < info.start) continue;
         if (qUsed >= QUERY_CAP) break;
         const n = qByDay.get(d);
         let delta = n * QUERY_UNIT;
@@ -453,6 +454,17 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   console.log(`reconcile: ${stalePreview.length} currently-scored students NOT in new ledger would be cleared (totalSp=0) on APPLY`);
 
   if (!APPLY) { console.log('\nDRY RUN — no DB write. Set APPLY=1 to replace sakshi_spurti points.'); await conn.close(); return; }
+
+  // SAFETY: abort if the new ledger is suspiciously small — a stale/empty mirror
+  // would otherwise wipe all student SP. Require at least MIN_ROWS students or
+  // at least 50% of currently-scored students, whichever is lower.
+  const currentlyScored = (await Students.countDocuments({ totalSp: { $ne: 0 } }));
+  const MIN_ROWS = 100;
+  const minRequired = Math.min(MIN_ROWS, Math.floor(currentlyScored * 0.5));
+  if (finalBal.size < minRequired) {
+    console.error(`ABORT: only ${finalBal.size} students in new ledger (need >= ${minRequired}; ${currentlyScored} currently scored). Mirror data may be stale.`);
+    await conn.close(); process.exit(1);
+  }
 
   // 6. APPLY: replace sakshi_spurti points (backs up sptransactions + students first)
   const backupDir = path.join(OUT_DIR, `sp_backup_mirror_${ts}`); fs.mkdirSync(backupDir, { recursive: true });
