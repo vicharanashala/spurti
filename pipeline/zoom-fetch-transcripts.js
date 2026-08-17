@@ -27,12 +27,14 @@
  *   node zoom-fetch-transcripts.js --force      # re-fetch even already-stored
  */
 
-require('dotenv').config({ path: '/var/samagama/server/.env' });
-const axios = require('axios');
-const { MongoClient } = require('mongodb');
+import dotenv from 'dotenv';
+dotenv.config({ path: '/var/samagama/server/.env' });
+import axios from 'axios';
+import { MongoClient } from 'mongodb';
+import { withRetry } from './retryUtils.js';
 
 const OAUTH_URL = 'https://zoom.us/oauth/token';
-const API_BASE  = 'https://api.zoom.us/v2';
+const API_BASE = 'https://api.zoom.us/v2';
 const { ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET } = process.env;
 
 const ZOOM_DB_URI = (process.env.MONGO_URI || '')
@@ -43,14 +45,14 @@ function istDate(d) { return new Date(new Date(d).getTime() + IST_OFFSET_MS).toI
 function todayIST() { return istDate(new Date()); }
 
 const args = process.argv.slice(2);
-function arg(name, def) { const i = args.indexOf('--' + name); return i >= 0 && args[i+1] ? args[i+1] : def; }
+function arg(name, def) { const i = args.indexOf('--' + name); return i >= 0 && args[i + 1] ? args[i + 1] : def; }
 const FORCE = args.includes('--force');
 
 let FROM = arg('from', null), TO = arg('to', null);
 if (!FROM || !TO) {
   const days = parseInt(arg('days', '7'), 10);
   const now = new Date();
-  TO   = istDate(now);
+  TO = istDate(now);
   FROM = istDate(new Date(now.getTime() - days * 86400000));
 }
 
@@ -59,10 +61,10 @@ let _tok = null, _exp = 0;
 async function token() {
   if (_tok && Date.now() < _exp) return _tok;
   const basic = Buffer.from(`${ZOOM_CLIENT_ID}:${ZOOM_CLIENT_SECRET}`).toString('base64');
-  const r = await axios.post(OAUTH_URL, null, {
+  const r = await withRetry(() => axios.post(OAUTH_URL, null, {
     params: { grant_type: 'account_credentials', account_id: ZOOM_ACCOUNT_ID },
     headers: { Authorization: `Basic ${basic}` }, timeout: 10000,
-  });
+  }));
   _tok = r.data.access_token;
   _exp = Date.now() + (Math.max(60, (r.data.expires_in || 3600) - 60) * 1000);
   return _tok;
@@ -70,9 +72,9 @@ async function token() {
 
 async function apiGet(path) {
   const t = await token();
-  const r = await axios.get(API_BASE + path, {
+  const r = await withRetry(() => axios.get(API_BASE + path, {
     headers: { Authorization: `Bearer ${t}` }, timeout: 30000,
-  });
+  }));
   return r.data;
 }
 
@@ -84,7 +86,7 @@ async function run() {
 
   const client = await MongoClient.connect(ZOOM_DB_URI);
   const db = client.db();
-  const Meetings  = db.collection('meetings');
+  const Meetings = db.collection('meetings');
   const Summaries = db.collection('summaries');
 
   await Summaries.createIndex({ date: 1 });
@@ -121,26 +123,28 @@ async function run() {
 
     await Summaries.updateOne(
       { _id: uuid },
-      { $set: {
-        _id:                      uuid,
-        meetingId:                m.meetingId,
-        date:                     m.date,
-        topic:                    m.topic,
-        overview:                 summary.summary_overview       || '',
-        details:                  summary.summary_details        || [],
-        nextSteps:                summary.next_steps             || [],
-        summaryContent:           summary.summary_content        || '',
-        summaryDocUrl:            summary.summary_doc_url        || '',
-        summaryCreatedTime:       summary.summary_created_time   ? new Date(summary.summary_created_time) : null,
-        summaryLastModifiedTime:  summary.summary_last_modified_time ? new Date(summary.summary_last_modified_time) : null,
-        ingestedAt:               new Date(),
-      } },
+      {
+        $set: {
+          _id: uuid,
+          meetingId: m.meetingId,
+          date: m.date,
+          topic: m.topic,
+          overview: summary.summary_overview || '',
+          details: summary.summary_details || [],
+          nextSteps: summary.next_steps || [],
+          summaryContent: summary.summary_content || '',
+          summaryDocUrl: summary.summary_doc_url || '',
+          summaryCreatedTime: summary.summary_created_time ? new Date(summary.summary_created_time) : null,
+          summaryLastModifiedTime: summary.summary_last_modified_time ? new Date(summary.summary_last_modified_time) : null,
+          ingestedAt: new Date(),
+        }
+      },
       { upsert: true }
     );
 
     fetched++;
     const detailCount = (summary.summary_details || []).length;
-    const nextCount   = (summary.next_steps || []).length;
+    const nextCount = (summary.next_steps || []).length;
     console.log(`  + ${m.date} "${m.topic}" — ${detailCount} sections, ${nextCount} next steps`);
   }
 
