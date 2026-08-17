@@ -104,11 +104,15 @@ export async function buildJourneyState(student) {
 }
 
 const DAY_MS = 86400000;
-const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; };
+const IST_MS = 5.5 * 3600 * 1000;
+const startOfToday = () => {
+  const ist = new Date(Date.now() + IST_MS);
+  return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()) - IST_MS);
+};
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
-// Local date-only string (yyyy-mm-dd) — matches how <input type="date"> works and
+// IST date-only string (yyyy-mm-dd) — matches how <input type="date"> works and
 // avoids UTC/local off-by-one between the picker min/max and server validation.
-const ymd = d => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+const ymd = d => { const x = new Date(new Date(d).getTime() + IST_MS); return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, '0')}-${String(x.getUTCDate()).padStart(2, '0')}`; };
 export const STANDUP_MIN_PER_DAY = 60;      // one 60-min standup per working day
 export const STANDUP_DAYS_PER_WEEK = 6;     // 6 working days per week
 
