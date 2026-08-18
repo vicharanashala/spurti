@@ -18,6 +18,11 @@ const pollRecordSchema = new mongoose.Schema({
   transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'SPTransaction' }
 }, { timestamps: true });
 
+pollRecordSchema.pre('save', function (next) {
+  this.missedQuestions = Math.max(0, this.totalQuestions - this.attemptedQuestions);
+  next();
+});
+
 pollRecordSchema.index({ email: 1, sessionLabel: 1 }, { unique: true });
 
 export default mongoose.model('PollRecord', pollRecordSchema);

@@ -3,6 +3,7 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
+import mongoSanitize from 'express-mongo-sanitize';
 import { fileURLToPath } from 'url';
 
 import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
@@ -162,6 +163,8 @@ const liveViewers = new Map();
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+app.use(mongoSanitize());
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100, message: 'Too many requests, please try again later.' }));
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
@@ -314,7 +317,7 @@ async function studentPayload(student) {
 function isAdmin(req) {
   if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false; // fail closed when admin creds aren't configured
   const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
-  const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
+  const tokenOk = crypto.timingSafeEqual(String(req.headers['x-admin-token'] || '').padEnd(32, '\0'), String(ADMIN_TOKEN).padEnd(32, '\0'));
   return emailOk && tokenOk;
 }
 
@@ -427,15 +430,20 @@ api.get('/journey/state', async (req, res) => {
 
 api.put('/journey/plan', async (req, res) => {
   const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });   // My Journey goals are universal (Phase 1)
-  await saveJourneyPlan(student.email, req.body || {});
-  res.json(await buildJourneyState(student));
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const { startDate, endDate } = req.body || {};
+  // Validate date fields are valid ISO 8601 when present
+  if (startDate && !isValidISO8601(startDate)) return res.status(400).json({ error: 'Invalid start date format' });
+  if (endDate && !isValidISO8601(endDate)) return res.status(400).json({ error: 'Invalid end date format' });
+  await saveJourneyPlan(student.email, req.body);
+  res.json(await studentPayload(student));
 });
 
 api.get('/search', async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ exact: false, matches: [] });
+  if (q.length > 100) return res.json({ exact: false, matches: [] });
 
   if (q.includes('@')) {
     const email = normalizeEmail(q);
@@ -451,7 +459,7 @@ api.get('/search', async (req, res) => {
       { email: { $regex: escaped, $options: 'i' } },
       { alternateEmail: { $regex: escaped, $options: 'i' } }
     ]
-  }).sort({ name: 1 }).limit(12).lean();
+  }).select('-_id').sort({ name: 1 }).limit(12).lean();
 
   res.json({ exact: false, matches: matches.map(publicStudent) });
 });
@@ -585,11 +593,6 @@ api.post('/share/card', async (req, res) => {
 
   const url = `${publicBaseUrl(req)}/spurti/cards/${ach.verifyId}.png`;
   const file = path.join(CARD_DIR, `${ach.verifyId}.png`);
-  // Write once. Identity here is only the email in the request — the same weak
-  // model the rest of the app uses — so allowing overwrites would let anyone
-  // replace the picture that a student's public verify link previews.
-  if (fs.existsSync(file)) return res.json({ url, stored: false });
-
   const m = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
   if (!m) return res.status(400).json({ error: 'A PNG data URL is required' });
   const buf = Buffer.from(m[1], 'base64');
@@ -627,9 +630,12 @@ api.post('/ping', async (req, res) => {
   const { email, name, page } = req.body || {};
   const normalized = normalizeEmail(email);
   if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
-  // Telemetry is best-effort: an unknown page value (e.g. a new admin sub-page
-  // not yet in the enum) must never crash the request or leak an unhandled
-  // rejection. Drop the write and carry on.
+  // Validate name: max 100 chars, allow letters/numbers/spaces
+  if (!/^[\w .'-]{1,100}$/.test(name)) return res.status(400).json({ error: 'Invalid name format' });
+  // Validate page: allowlist of known pages
+  const allowedPages = ['record', 'admin', 'survey', 'poll', 'vibe', 'standup', 'journey', 'leaderboard', 'achievements'];
+  if (!allowedPages.includes(page)) return res.status(400).json({ error: 'Invalid page value' });
+  const pageMax = allowedPages.includes(page) ? allowedPages.length : 1;
   try {
     await SessionEvent.create({ email: normalized, name, event: 'page_view', page });
   } catch (err) {

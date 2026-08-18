@@ -325,10 +325,12 @@ function SpaModule({ student }) {
   const [data, setData] = useState(null);
 
   useEffect(() => {
+    let live = true;
     (async () => {
-      const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
+      const r = await fetch(`${API}/spa/state`);
       setData(await r.json());
     })();
+    return () => { live = false; };
   }, [email]);
 
   if (!data) return <section className="panel">Loading your SPA points…</section>;
@@ -442,7 +444,7 @@ function useAchievements(email) {
   const [data, setData] = useState(null);
   useEffect(() => {
     let live = true;
-    fetch(`${API}/achievements?email=${encodeURIComponent(email)}`)
+    fetch(`${API}/achievements`)
       .then(r => r.json())
       .then(d => { if (live) setData(d); })
       .catch(() => { if (live) setData({ visible: false, groups: [], locked: [], counts: {} }); });
@@ -605,7 +607,7 @@ function ShareModal({ item, me, onClose }) {
         fetch(`${API}/share/card`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: me.email, achId: item.achId, dataUrl: url })
+          body: JSON.stringify({ achId: item.achId, dataUrl: url })
         }).catch(() => {});
       })
       .catch(() => { if (live) setError('Could not draw the card. Try again.'); });
@@ -727,10 +729,12 @@ function ShareModal({ item, me, onClose }) {
 function VerifyView({ code }) {
   const [state, setState] = useState({ loading: true });
   useEffect(() => {
+    let live = true;
     fetch(`${API}/verify/${encodeURIComponent(code)}`)
       .then(r => r.ok ? r.json() : { valid: false })
       .then(d => setState({ loading: false, ...d }))
       .catch(() => setState({ loading: false, valid: false }));
+    return () => { live = false; };
   }, [code]);
 
   return (
@@ -784,7 +788,7 @@ function LeaderboardPanel({ student }) {
   useEffect(() => {
     let live = true;
     setLoading(true);
-    fetch(`${API}/leaderboard/board?window=${preset.window}&category=${preset.category}&scope=${preset.scope}&email=${encodeURIComponent(student.email)}`)
+    fetch(`${API}/leaderboard/board?window=${preset.window}&category=${preset.category}&scope=${preset.scope}`)
       .then(r => r.json())
       .then(d => { if (live) { setData(d); setLoading(false); } })
       .catch(() => { if (live) setLoading(false); });
@@ -829,7 +833,7 @@ function LeaderboardPanel({ student }) {
 function TrajectoryModal({ student, onClose }) {
   const [data, setData] = useState(null);
   useEffect(() => {
-    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`).then(r => r.json()).then(setData);
+    fetch(`${API}/trajectory/state`).then(r => r.json()).then(setData);
   }, [student.email]);
 
   const series = data ? [
@@ -1149,10 +1153,10 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
   const [err, setErr] = useState(null);
 
   const load = async () => {
-    const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`);
+    const r = await fetch(`${API}/journey/state`);
     setData(await r.json());
   };
-  useEffect(() => { load(); }, [email]);
+  useEffect(() => { load(); }, []);
 
   if (!data) return <section className="panel">Loading your journey…</section>;
   if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
@@ -1285,14 +1289,14 @@ function VibeGoals({ student }) {
   const [err, setErr] = useState(null);
 
   const load = async () => {
-    const r = await fetch(`${API}/vibe/state?email=${encodeURIComponent(email)}`);
+    const r = await fetch(`${API}/vibe/state`);
     setData(await r.json());
   };
   useEffect(() => {
     load();
     const d = new Date(); d.setDate(d.getDate() + 2);
     setForm(f => ({ ...f, deadline: d.toISOString().slice(0, 10) }));
-  }, [email]);
+  }, []);
 
   if (!data) return <section className="panel">Loading ViBe Goals…</section>;
   if (!data.eligible) return <section className="panel empty">ViBe Goals isn’t available for your cohort yet.</section>;
@@ -1456,10 +1460,10 @@ function StandupGoals({ student }) {
   const [err, setErr] = useState(null);
 
   const load = async () => {
-    const r = await fetch(`${API}/standup/state?email=${encodeURIComponent(email)}`);
+    const r = await fetch(`${API}/standup/state`);
     setData(await r.json());
   };
-  useEffect(() => { load(); }, [email]);
+  useEffect(() => { load(); }, []);
 
   if (!data) return <section className="panel">Loading standups…</section>;
   if (!data.eligible) return <section className="panel empty">Standup commitments aren’t available for your cohort yet.</section>;

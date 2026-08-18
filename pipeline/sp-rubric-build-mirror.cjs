@@ -454,6 +454,15 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
 
   if (!APPLY) { console.log('\nDRY RUN — no DB write. Set APPLY=1 to replace sakshi_spurti points.'); await conn.close(); return; }
 
+  // Safety floor: an empty/stale mirror (sync-collaborator-mirrors.js failed) would
+  // wipe everyone's SP on APPLY. Abort if the new ledger is implausibly small.
+  const MIN_STUDENTS = 2000;
+  if (finalBal.size < MIN_STUDENTS) {
+    console.error(`ABORT: new ledger has only ${finalBal.size} students (floor ${MIN_STUDENTS}). Mirror data is likely stale or empty.`);
+    await conn.close();
+    process.exit(1);
+  }
+
   // 6. APPLY: replace sakshi_spurti points (backs up sptransactions + students first)
   const backupDir = path.join(OUT_DIR, `sp_backup_mirror_${ts}`); fs.mkdirSync(backupDir, { recursive: true });
   for (const coll of ['sptransactions', 'students']) fs.writeFileSync(path.join(backupDir, `${coll}.json`), JSON.stringify(await sak.collection(coll).find({}).toArray()));
