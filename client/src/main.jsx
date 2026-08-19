@@ -224,23 +224,28 @@ function SearchModal({ onClose, onStudent }) {
 
   const search = async () => {
     if (query.trim().length < 2) return setMessage('Type at least 2 characters.');
-    const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
-    const data = await res.json();
-    if (data.excused) return onStudent(data);
-    if (data.exact) return onStudent(data.profile);
-    setMatches(data.matches || []);
-    setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
+    try {
+      const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
+      if (!res.ok) return setMessage('Search failed. Please try again.');
+      const data = await res.json();
+      if (data.excused) return onStudent(data);
+      if (data.exact) return onStudent(data.profile);
+      setMatches(data.matches || []);
+      setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
+    } catch { setMessage('Network error. Please try again.'); }
   };
 
   const confirm = async () => {
-    const res = await fetch(`${API}/confirm`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ studentId: selected?._id, email: confirmEmail })
-    });
-    const data = await res.json();
-    if (!res.ok) return setMessage(data.error || 'Email did not match.');
-    onStudent(data);
+    try {
+      const res = await fetch(`${API}/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: selected?._id, email: confirmEmail })
+      });
+      const data = await res.json();
+      if (!res.ok) return setMessage(data.error || 'Email did not match.');
+      onStudent(data);
+    } catch { setMessage('Network error. Please try again.'); }
   };
 
   return (
@@ -325,10 +330,13 @@ function SpaModule({ student }) {
   const [data, setData] = useState(null);
 
   useEffect(() => {
+    let live = true;
     (async () => {
-      const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
+      const r = await fetch(`${API}/spa/state`);
+      if (!live) return;
       setData(await r.json());
     })();
+    return () => { live = false; };
   }, [email]);
 
   if (!data) return <section className="panel">Loading your SPA points…</section>;
@@ -442,7 +450,7 @@ function useAchievements(email) {
   const [data, setData] = useState(null);
   useEffect(() => {
     let live = true;
-    fetch(`${API}/achievements?email=${encodeURIComponent(email)}`)
+    fetch(`${API}/achievements`)
       .then(r => r.json())
       .then(d => { if (live) setData(d); })
       .catch(() => { if (live) setData({ visible: false, groups: [], locked: [], counts: {} }); });
@@ -605,7 +613,7 @@ function ShareModal({ item, me, onClose }) {
         fetch(`${API}/share/card`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: me.email, achId: item.achId, dataUrl: url })
+          body: JSON.stringify({ achId: item.achId, dataUrl: url })
         }).catch(() => {});
       })
       .catch(() => { if (live) setError('Could not draw the card. Try again.'); });
@@ -727,10 +735,12 @@ function ShareModal({ item, me, onClose }) {
 function VerifyView({ code }) {
   const [state, setState] = useState({ loading: true });
   useEffect(() => {
+    let live = true;
     fetch(`${API}/verify/${encodeURIComponent(code)}`)
       .then(r => r.ok ? r.json() : { valid: false })
       .then(d => setState({ loading: false, ...d }))
       .catch(() => setState({ loading: false, valid: false }));
+    return () => { live = false; };
   }, [code]);
 
   return (
@@ -784,7 +794,7 @@ function LeaderboardPanel({ student }) {
   useEffect(() => {
     let live = true;
     setLoading(true);
-    fetch(`${API}/leaderboard/board?window=${preset.window}&category=${preset.category}&scope=${preset.scope}&email=${encodeURIComponent(student.email)}`)
+    fetch(`${API}/leaderboard/board?window=${preset.window}&category=${preset.category}&scope=${preset.scope}`)
       .then(r => r.json())
       .then(d => { if (live) { setData(d); setLoading(false); } })
       .catch(() => { if (live) setLoading(false); });
@@ -829,7 +839,9 @@ function LeaderboardPanel({ student }) {
 function TrajectoryModal({ student, onClose }) {
   const [data, setData] = useState(null);
   useEffect(() => {
-    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`).then(r => r.json()).then(setData);
+    let live = true;
+    fetch(`${API}/trajectory/state`).then(r => r.json()).then(d => { if (live) setData(d); });
+    return () => { live = false; };
   }, [student.email]);
 
   const series = data ? [
@@ -1148,11 +1160,11 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
   const [showTraj, setShowTraj] = useState(false);
   const [err, setErr] = useState(null);
 
-  const load = async () => {
-    const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`);
-    setData(await r.json());
-  };
-  useEffect(() => { load(); }, [email]);
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/journey/state`).then(r => r.json()).then(d => { if (live) setData(d); });
+    return () => { live = false; };
+  }, []);
 
   if (!data) return <section className="panel">Loading your journey…</section>;
   if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
@@ -1285,14 +1297,16 @@ function VibeGoals({ student }) {
   const [err, setErr] = useState(null);
 
   const load = async () => {
-    const r = await fetch(`${API}/vibe/state?email=${encodeURIComponent(email)}`);
+    const r = await fetch(`${API}/vibe/state`);
     setData(await r.json());
   };
   useEffect(() => {
-    load();
+    let live = true;
+    fetch(`${API}/vibe/state`).then(r => r.json()).then(d => { if (live) setData(d); });
     const d = new Date(); d.setDate(d.getDate() + 2);
     setForm(f => ({ ...f, deadline: d.toISOString().slice(0, 10) }));
-  }, [email]);
+    return () => { live = false; };
+  }, []);
 
   if (!data) return <section className="panel">Loading ViBe Goals…</section>;
   if (!data.eligible) return <section className="panel empty">ViBe Goals isn’t available for your cohort yet.</section>;
@@ -1319,8 +1333,6 @@ function VibeGoals({ student }) {
     { email, course: cur.key, goalPct: g, stake: s, multiplier: m, deadline: form.deadline }); if (j) setData(j); };
   const saveEdit = async () => { const j = await post(`${API}/vibe/bet/${data.active._id}`,
     { email, goalPct: g, stake: s, multiplier: m }, 'PUT'); if (j) { setEditing(false); setData(j); } };
-  const settle = async (result) => { const j = await post(`${API}/vibe/bet/${data.active._id}/settle`,
-    { email, result }); if (j) { setEditing(false); setData(j); } };
 
   const showForm = cur && (!data.active || editing);
 
@@ -1422,8 +1434,6 @@ function VibeGoals({ student }) {
               <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
               <div className="vg-betbtns">
                 {!editing && <button className="secondary" onClick={() => { setForm({ goalPct: data.active.goalPct, stake: data.active.stake, multiplier: data.active.multiplier, deadline: form.deadline }); setEditing(true); }}>Edit commitment</button>}
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
               </div>
             </div>
           </div>
@@ -1456,10 +1466,14 @@ function StandupGoals({ student }) {
   const [err, setErr] = useState(null);
 
   const load = async () => {
-    const r = await fetch(`${API}/standup/state?email=${encodeURIComponent(email)}`);
+    const r = await fetch(`${API}/standup/state`);
     setData(await r.json());
   };
-  useEffect(() => { load(); }, [email]);
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/standup/state`).then(r => r.json()).then(d => { if (live) setData(d); });
+    return () => { live = false; };
+  }, []);
 
   if (!data) return <section className="panel">Loading standups…</section>;
   if (!data.eligible) return <section className="panel empty">Standup commitments aren’t available for your cohort yet.</section>;
@@ -1475,7 +1489,6 @@ function StandupGoals({ student }) {
     const j = await r.json(); if (!r.ok) { setErr(j.error); return null; } setErr(null); return j;
   };
   const place = async () => { const j = await post(`${API}/standup/commit`, { email, tierKey, multiplier }); if (j) setData(j); };
-  const settle = async (result) => { const j = await post(`${API}/standup/commit/${data.active._id}/settle`, { email, result }); if (j) setData(j); };
 
   return (
     <div className="vg">
@@ -1526,8 +1539,6 @@ function StandupGoals({ student }) {
             <div className="side">
               <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
               <div className="vg-betbtns">
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
               </div>
             </div>
           </div>
@@ -1574,24 +1585,19 @@ function AdminView({ admin, auth, onBack }) {
     return () => clearInterval(id);
   }, [admin]);
   const loadLeaderboard = async (limit = leaderLimit) => {
-    const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers });
-    setLeaderboard(await res.json());
+    try { const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers }); if (res.ok) setLeaderboard(await res.json()); } catch {}
   };
   const loadAttendance = async () => {
-    const res = await fetch(`${API}/admin/attendance`, { headers });
-    setAttendance(await res.json());
+    try { const res = await fetch(`${API}/admin/attendance`, { headers }); if (res.ok) setAttendance(await res.json()); } catch {}
   };
   const loadStudent = async (id) => {
-    const res = await fetch(`${API}/admin/student/${id}`, { headers });
-    setStudentProfile(await res.json());
+    try { const res = await fetch(`${API}/admin/student/${id}`, { headers }); if (res.ok) setStudentProfile(await res.json()); } catch {}
   };
   const loadActive = async () => {
-    const res = await fetch(`${API}/admin/active`, { headers });
-    setActive(await res.json());
+    try { const res = await fetch(`${API}/admin/active`, { headers }); if (res.ok) setActive(await res.json()); } catch {}
   };
   const loadAnalytics = async () => {
-    const res = await fetch(`${API}/admin/analytics`, { headers });
-    setAnalytics(await res.json());
+    try { const res = await fetch(`${API}/admin/analytics`, { headers }); if (res.ok) setAnalytics(await res.json()); } catch {}
   };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
@@ -2067,4 +2073,19 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
 }
 
 
-createRoot(document.getElementById('root')).render(<App />);
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  render() {
+    if (this.state.hasError) return (
+      <div style={{ padding: '2rem', textAlign: 'center' }}>
+        <h2>Something went wrong.</h2>
+        <p className="muted">Please refresh the page.</p>
+        <button className="primary" onClick={() => this.setState({ hasError: false })}>Try again</button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
+createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);

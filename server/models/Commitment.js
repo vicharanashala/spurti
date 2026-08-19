@@ -37,5 +37,6 @@ const commitmentSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 commitmentSchema.index({ email: 1, type: 1, status: 1 });
+commitmentSchema.index({ email: 1, type: 1 }, { unique: true, partialFilterExpression: { status: 'active' } });
 
 export default mongoose.model('Commitment', commitmentSchema);

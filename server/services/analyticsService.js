@@ -53,7 +53,7 @@ export async function computeSnapshot() {
   ]);
 
   const activeStudents = allStudents.filter(s => s.status === 'active');
-  const yetToOnboard = allStudents.filter(s => s.status === 'yet to onboard');
+  const yetToOnboard = allStudents.filter(s => !s.internshipStartDate || new Date(s.internshipStartDate) > now);
   const excused = allStudents.filter(s => s.status === 'excused');
 
   const activeEmails = new Set(activeStudents.map(s => s.email.toLowerCase()));
@@ -62,8 +62,8 @@ export async function computeSnapshot() {
   const spValues = activeStudents.map(s => s.totalSp || 0);
   const totalSp = spValues.reduce((a, b) => a + b, 0);
   const avgSp = activeStudents.length ? Math.round(totalSp / activeStudents.length) : 0;
-  const minSp = spValues.length ? Math.min(...spValues) : 0;
-  const maxSp = spValues.length ? Math.max(...spValues) : 0;
+  const minSp = spValues.length ? spValues.reduce((a, b) => Math.min(a, b), Infinity) : 0;
+  const maxSp = spValues.length ? spValues.reduce((a, b) => Math.max(a, b), -Infinity) : 0;
 
   // sessions completed
   const completedSessions = sessions.filter(s => s.endDateTime && new Date(s.endDateTime) <= now);
@@ -83,7 +83,7 @@ export async function computeSnapshot() {
   const deltaMap = {};
   for (const t of activeRecentTx) {
     const key = t.email.toLowerCase();
-    deltaMap[key] = (deltaMap[key] || 0) + (t.delta || 0);
+    deltaMap[key] = (deltaMap[key] || 0) + (t.appliedDelta || 0);
   }
   const emailToName = {};
   for (const s of activeStudents) {
