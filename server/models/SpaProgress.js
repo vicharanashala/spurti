@@ -22,8 +22,6 @@ const spaProgressSchema = new mongoose.Schema({
   teachCredited: { type: Number, default: 0 },       // teaches already posted to the ledger
   auditFail: { type: Boolean, default: false },      // → one-time -20% of current SP
   fraud: { type: Boolean, default: false },          // → one-time -50% of current SP
-  auditPenaltyApplied: { type: Boolean, default: false },
-  fraudPenaltyApplied: { type: Boolean, default: false },
   penaltyApplied: { type: Number, default: 0 },      // total SP removed by integrity penalties
   penaltyAt: { type: Date, default: null }
 }, { timestamps: true });

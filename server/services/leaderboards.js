@@ -203,7 +203,7 @@ export async function computeAndStoreLeaderboards() {
   // Persist: upsert each board; drop any stale group boards no longer present.
   const keys = new Set(boards.map((b) => b.boardKey));
   await Promise.all(boards.map((b) => LeaderboardSnapshot.updateOne({ boardKey: b.boardKey }, { $set: b }, { upsert: true })));
-  await LeaderboardSnapshot.deleteMany({ boardKey: { $nin: [...keys] } });
+  if (keys.size) await LeaderboardSnapshot.deleteMany({ boardKey: { $nin: [...keys] } });
 
   // Award permanent podium achievements — 1st, 2nd and 3rd on each GLOBAL board.
   //
@@ -319,14 +319,13 @@ async function trackReigns(boards, now) {
       open.sp = me.sp;
       open.peakSp = Math.max(open.peakSp || 0, me.sp);
       await open.save();
-    } else {
-      for (const r of leaders) {
-        await BoardReign.create({
-          board: b.category, studentId: r.studentId, name: r.name,
-          from: now, to: null, sp: r.sp, peakSp: r.sp
-        });
-        changes += 1;
-      }
+    } else if (leaders.length) {
+      const sole = leaders[0];
+      await BoardReign.create({
+        board: b.category, studentId: sole.studentId, name: sole.name,
+        from: now, to: null, sp: sole.sp, peakSp: sole.sp
+      });
+      changes += 1;
     }
   }
 

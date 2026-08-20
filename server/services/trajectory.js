@@ -83,11 +83,13 @@ export async function computeAndStoreTrajectories(now = new Date()) {
 // Student-facing payload: their own weekly line + the two cached reference lines.
 export async function buildTrajectoryState(student) {
   const joinMs = student.internshipStartDate ? new Date(student.internshipStartDate).getTime() : null;
-  const txns = joinMs
-    ? await SPTransaction.find({ email: student.email }).select('dateTime balanceAfter').sort({ dateTime: 1 }).lean()
-    : [];
+  const [txns, snap] = await Promise.all([
+    joinMs
+      ? SPTransaction.find({ email: student.email }).select('dateTime balanceAfter').sort({ dateTime: 1 }).lean()
+      : [],
+    TrajectorySnapshot.findOne({ key: 'latest' }).lean()
+  ]);
   const you = joinMs ? weeklySeries(txns, joinMs, Date.now()) : [];
-  const snap = await TrajectorySnapshot.findOne({ key: 'latest' }).lean();
   const gk = student.internshipStartDate ? leaderboardGroup(student.internshipStartDate) : null;
   return {
     weeks: snap?.weeks || WEEKS,

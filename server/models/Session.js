@@ -6,9 +6,7 @@ const sessionSchema = new mongoose.Schema({
   startDateTime: { type: Date, default: null },
   endDateTime: { type: Date, required: true, index: true },
   totalMinutes: { type: Number, required: true },
-  type: { type: String, default: '' },
-  attendanceFile: { type: String, default: '' },
-  pollFile: { type: String, default: '' }
+  type: { type: String, default: '' }
 }, { timestamps: true });
 
 export default mongoose.model('Session', sessionSchema);

@@ -86,9 +86,14 @@ const CUTOFF = process.env.SPANDAN_CUTOFF || '2026-07-16';
       attemptedQuestions = spd.attempted; totalQuestions = spd.total; viaSpandan++;
     } else {
       const m = POLL_RE.exec(tx.reason || '');
-      attemptedQuestions = m ? Number(m[1]) : 0;
-      totalQuestions = m ? Number(m[2]) : 0;
-      if (m) viaReason++; else noSource++;
+      if (m) { attemptedQuestions = Number(m[1]); totalQuestions = Number(m[2]); }
+      else {
+        // Fallback: try to extract "N of M" from reason string for any format variant.
+        fallM = tx.reason && tx.reason.match(/(\d+)\s+of\s+(\d+)/i);
+        if (fallM) { attemptedQuestions = Number(fallM[1]); totalQuestions = Number(fallM[2]); }
+      }
+      if (m || fallM) { viaReason++; }
+      else { noSource++; continue; }
     }
     const studentId = studentById.get(email) || null;
 

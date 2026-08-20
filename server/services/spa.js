@@ -40,8 +40,10 @@ export function computeSpaSp(prog) {
 // credited by the pipeline rubric (sp-rubric-build-mirror.cjs, Pattern A), which
 // also writes the `spaprogresses` summary this reads. The web app never writes SP.
 export async function buildSpaState(student) {
-  const prog = await SpaProgress.findOne({ email: student.email }).lean();
-  const stu = await Student.findOne({ email: student.email }).lean();
+  const [prog, stu] = await Promise.all([
+    SpaProgress.findOne({ email: student.email }).lean(),
+    Student.findOne({ email: student.email }).lean()
+  ]);
   if (!prog) {
     return { eligible: true, name: student.name, totalSp: stu?.totalSp || 0,
       activity: 'Activity 1: Linear Algebra', hasActivity: false, config: CONFIG, maxSp: MAX_SPA_SP };

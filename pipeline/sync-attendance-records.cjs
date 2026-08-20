@@ -67,7 +67,7 @@ const REASON_RE = /present (\d+) of (\d+) min \(([\d.]+)%\)/;
     const qualified = (tx.appliedDelta || 0) > 0;
     const m = REASON_RE.exec(tx.reason || '');
     const attendedMinutes = m ? Number(m[1]) : 0;
-    const totalSessionMinutes = m ? Number(m[2]) : 1;
+    const totalSessionMinutes = m ? Number(m[2]) : 0;
     const attendancePercentage = m ? Number(m[3]) : 0;
     const studentId = studentById.get(email) || null;
 

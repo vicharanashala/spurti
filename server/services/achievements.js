@@ -7,6 +7,7 @@ import { levelFor } from './levels.js';
 // persisted, which is what gives each one a verifyId the shared card can point at.
 const LEVEL_MILESTONES = [25, 20, 15, 10, 5];
 const ATTENDANCE_GOAL_MIN = 3600;
+const PLACE_ICON = { 1: '🥇', 2: '🥈', 3: '🥉' };
 
 export const BOARD_META = {
   total: { label: 'Overall SP', icon: '🏆' },
@@ -49,7 +50,8 @@ function milestoneSpecs(student, mins) {
       achId: `ms:level:${reached}`, icon: '⭐', title: `Reached Level ${reached}`,
       period: 'All-time', earned: true, detail: `${reached * 100}+ Spurti Points`
     });
-  } else if (next) {
+  }
+  if (next && (!reached || next !== reached)) {
     specs.push({
       achId: `ms:level:${next}`, icon: '⭐', title: `Reach Level ${next}`, period: 'All-time',
       earned: false, detail: `${next * 100} Spurti Points`, remaining: `${next * 100 - hi} SP to go`
@@ -110,7 +112,10 @@ export async function buildAchievementState(student) {
       };
       groups.set(key, g);
     }
-    if (a.kind === 'rank' && a.place < g.bestPlace) g.bestPlace = a.place;
+    if (a.kind === 'rank' && a.place < g.bestPlace) {
+      g.bestPlace = a.place;
+      if (PLACE_ICON[a.place]) g.icon = PLACE_ICON[a.place];
+    }
     g.items.push(card(a));
   }
 

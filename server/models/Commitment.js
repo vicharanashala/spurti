@@ -11,8 +11,8 @@ const commitmentSchema = new mongoose.Schema({
   type: { type: String, enum: ['vibe', 'standup'], required: true, index: true },
 
   // shared economics
-  stake: { type: Number, required: true },            // 20 / 50 (standup tiers) or 50–200 (vibe)
-  multiplier: { type: Number, required: true },       // 2 | 3 | 4
+  stake: { type: Number, required: true, min: 0 },            // 20 / 50 (standup tiers) or 50–200 (vibe)
+  multiplier: { type: Number, required: true, enum: [2, 3, 4] },       // 2 | 3 | 4
   potentialWin: { type: Number, required: true },     // stake * multiplier
   potentialLoss: { type: Number, required: true },    // 0.5 * stake * multiplier
   reserved: { type: Number, default: 0 },             // SP reserved while active (vibe = loss; standup = 0)

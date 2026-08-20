@@ -400,14 +400,6 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
         rows.push({ date: d, order: 3, cat: 'spa', delta, reason: `SPA (${ddmon(d)}): ${parts.join(' + ')} (validated) -> +${delta} SP.` });
       }
     }
-    // Integrity penalty: one-time -% of current total SP (fraud takes precedence).
-    const penRate = flags.fraud ? SPA_FRAUD_RATE : (flags.auditFail ? SPA_AUDIT_RATE : 0);
-    let spaPenalty = 0;
-    if (penRate > 0) {
-      spaPenalty = Math.round(rows.reduce((a, r) => a + r.delta, 0) * penRate);
-      if (spaPenalty > 0) rows.push({ date: TODAY, order: 9, cat: 'spa', delta: -spaPenalty,
-        reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.` });
-    }
     // Query-answer rows: +5 per distinct peer query answered, one 'query' row per
     // day, oldest-first, capped at QUERY_CAP SP per student (excess days truncated).
     const qDates = queryByCanon.get(cand);
@@ -427,7 +419,23 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       }
     }
     // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
-    for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
+    // Only add if no rubric row already exists for this date+cat (prevents double-counting).
+    const existingKeys = new Set(rows.map(r => r.date + '|' + r.cat));
+    for (const p of (preservedByCanon.get(cand) || [])) {
+      const key = p.date + '|' + p.cat;
+      if (existingKeys.has(key)) continue;          // skip — rubric row already counts this date
+      existingKeys.add(key);
+      rows.push(p);
+    }
+    // Integrity penalty: one-time -% of current total SP (fraud takes precedence).
+    // Computed AFTER query + preserved rows so the base includes all SP sources.
+    const penRate = flags.fraud ? SPA_FRAUD_RATE : (flags.auditFail ? SPA_AUDIT_RATE : 0);
+    let spaPenalty = 0;
+    if (penRate > 0) {
+      spaPenalty = Math.round(rows.reduce((a, r) => a + r.delta, 0) * penRate);
+      if (spaPenalty > 0) rows.push({ date: TODAY, order: 9, cat: 'spa', delta: -spaPenalty,
+        reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.` });
+    }
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
     finalBal.set(cand, bal); nameByCanon.set(cand, info.name);
