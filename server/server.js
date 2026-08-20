@@ -343,7 +343,7 @@ api.get('/me', async (req, res) => {
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
 async function vibeStudent(req) {
-  const email = normalizeEmail(req.body?.email || req.query.email) || await studentEmailFromRequest(req);
+  const email = await studentEmailFromRequest(req);
   if (!email) return null;
   return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
 }
@@ -498,10 +498,12 @@ api.get('/leaderboard/board', async (req, res) => {
   if (!board) return res.json({ window, category, scope: wantCohort ? 'cohort' : 'all', weekLabel: '', builtAt: null, rows: [], me: null });
   const meId = student ? String(student._id) : null;
   const meRow = meId ? board.rows.find((r) => r.studentId === meId) : null;
+  const publicRow = ({ studentId, ...rest }) =>
+    studentId === meId ? { ...rest, isMe: true } : rest;
   res.json({
     window: board.window, category: board.category, scope: wantCohort ? 'cohort' : 'all',
     weekLabel: board.weekLabel, builtAt: board.builtAt, total: board.rows.length,
-    rows: board.rows.slice(0, 50),
+    rows: board.rows.slice(0, 50).map(publicRow),
     me: meRow ? { rank: meRow.rank, sp: meRow.sp } : null
   });
 });
@@ -624,19 +626,26 @@ api.post('/share/track', async (req, res) => {
 });
 
 api.post('/ping', async (req, res) => {
-  const { email, name, page } = req.body || {};
-  const normalized = normalizeEmail(email);
-  if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
+  // Resolve identity from a verified session: Samagama cookie for students,
+  // admin headers for the admin dashboard. Body email is rejected — it was
+  // unverified and allowed any caller to write analytics as any user.
+  let email = await studentEmailFromRequest(req);
+  if (!email && isAdmin(req)) email = normalizeEmail(req.headers['x-admin-email']);
+  if (!email) return res.status(401).json({ error: 'Not authenticated' });
+  const { name, page } = req.body || {};
+  if (!name || !page) return res.status(400).json({ error: 'name and page required' });
   // Telemetry is best-effort: an unknown page value (e.g. a new admin sub-page
   // not yet in the enum) must never crash the request or leak an unhandled
   // rejection. Drop the write and carry on.
   try {
-    await SessionEvent.create({ email: normalized, name, event: 'page_view', page });
+    await SessionEvent.create({ email, name, event: 'page_view', page });
   } catch (err) {
     if (err?.name !== 'ValidationError') console.error('ping log failed:', err?.message);
   }
   if (page === 'record' || page.startsWith('admin')) {
-    liveViewers.set(normalized, { name, page, lastSeen: new Date() });
+    const cutoff = Date.now() - 60_000;
+    for (const [k, v] of liveViewers) if (v.lastSeen.getTime() < cutoff) liveViewers.delete(k);
+    liveViewers.set(email, { name, page, lastSeen: new Date() });
   }
   res.json({ ok: true });
 });
