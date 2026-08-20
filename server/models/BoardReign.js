@@ -26,5 +26,6 @@ const boardReignSchema = new mongoose.Schema({
 
 // Finding the open reign for a board is the hot path on every build.
 boardReignSchema.index({ board: 1, to: 1 });
+boardReignSchema.index({ board: 1 }, { unique: true, partialFilterExpression: { to: null } });
 
 export default mongoose.model('BoardReign', boardReignSchema);

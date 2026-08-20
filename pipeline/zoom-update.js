@@ -37,8 +37,8 @@ const API_BASE  = 'https://api.zoom.us/v2';
 const { ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET } = process.env;
 
 // zoom_data lives on the same mongod; derive its URI from MONGO_URI.
-const ZOOM_DB_URI = (process.env.MONGO_URI || '')
-  .replace(/\/chatengine(\?|$)/, '/zoom_data$1');
+const BASE_URI = (process.env.MONGO_URI || '').replace(/\/[^/?]*(\?.*)?$/, '');
+const ZOOM_DB_URI = BASE_URI ? BASE_URI + '/zoom_data' : '';
 
 const DEFAULT_HOST = 'dled@iitrpr.ac.in';
 const IST_OFFSET_MS = 5.5 * 3600 * 1000;

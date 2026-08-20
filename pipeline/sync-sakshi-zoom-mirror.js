@@ -21,10 +21,10 @@
  * — see /etc/cron.d/sakshi-zoom and cron-sakshi-zoom.sh.
  */
 const { MongoClient } = require('mongodb');
-require('dotenv').config({ path: '/var/samagama/server/.env' });
+require('dotenv').config();
 
-// Derive host+creds base from MONGO_URI (strip trailing /db?query) so the admin
-// password lives ONLY in .env — never hardcoded. Same idiom as the collab mirror.
+// Derive host+creds base from MONGO_URI (strip trailing /db?query) so the
+// admin password lives ONLY in .env — never hardcoded. Same idiom as the collab mirror.
 const BASE = (process.env.MONGO_URI || '').replace(/\/[^/?]*(\?.*)?$/, '');
 if (!BASE) { console.error('Missing MONGO_URI in .env'); process.exit(1); }
 const DRY_RUN = process.env.DRY_RUN === '1';

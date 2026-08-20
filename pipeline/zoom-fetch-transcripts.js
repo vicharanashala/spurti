@@ -27,7 +27,7 @@
  *   node zoom-fetch-transcripts.js --force      # re-fetch even already-stored
  */
 
-require('dotenv').config({ path: '/var/samagama/server/.env' });
+require('dotenv').config();
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
 
@@ -35,8 +35,8 @@ const OAUTH_URL = 'https://zoom.us/oauth/token';
 const API_BASE  = 'https://api.zoom.us/v2';
 const { ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET } = process.env;
 
-const ZOOM_DB_URI = (process.env.MONGO_URI || '')
-  .replace(/\/chatengine(\?|$)/, '/zoom_data$1');
+const BASE_URI = (process.env.MONGO_URI || '').replace(/\/[^/?]*(\?.*)?$/, '');
+const ZOOM_DB_URI = BASE_URI ? BASE_URI + '/zoom_data' : '';
 
 const IST_OFFSET_MS = 5.5 * 3600 * 1000;
 function istDate(d) { return new Date(new Date(d).getTime() + IST_OFFSET_MS).toISOString().slice(0, 10); }

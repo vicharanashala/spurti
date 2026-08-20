@@ -238,7 +238,8 @@ export async function computeAndStoreLeaderboards() {
     const already = await Achievement.find(
       { achId: { $regex: `^rank:[^:]+:week:${wk}:` } }, { achId: 1 }
     ).lean();
-    const settled = new Set(already.map((a) => a.achId));
+    const validAchId = (id) => /^rank:(attendance|poll|spa|query|total):week?/.test(id);
+    const settled = new Set(already.map((a) => a.achId).filter(validAchId));
 
     const period = `Week of ${prevLabel}`;
     const awardable = [['total', pTotal], ...CATS.map((c) => [c, pCat(c)])]
@@ -319,14 +320,13 @@ async function trackReigns(boards, now) {
       open.sp = me.sp;
       open.peakSp = Math.max(open.peakSp || 0, me.sp);
       await open.save();
-    } else {
-      for (const r of leaders) {
-        await BoardReign.create({
-          board: b.category, studentId: r.studentId, name: r.name,
-          from: now, to: null, sp: r.sp, peakSp: r.sp
-        });
-        changes += 1;
-      }
+    } else if (leaders.length) {
+      const sole = leaders[0];
+      await BoardReign.create({
+        board: b.category, studentId: sole.studentId, name: sole.name,
+        from: now, to: null, sp: sole.sp, peakSp: sole.sp
+      });
+      changes += 1;
     }
   }
 

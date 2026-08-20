@@ -11,8 +11,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Catchup AI summary fetch at 13:00 IST (07:30 UTC) daily.
 # Gives Zoom ~2 hours after the 09:05-11:00 IST mandatory session to finish
 # processing the AI summary before we pull it.
-30 7 * * * samagama /usr/bin/node /var/samagama/server/zoom-fetch-transcripts.js >> /var/samagama/server/logs/zoom-transcripts.log 2>&1
+30 7 * * * samagama /usr/bin/node /var/samagama/server/pipeline/zoom-fetch-transcripts.js >> /var/samagama/server/logs/zoom-transcripts.log 2>&1
 # Catchup verbatim transcript fetch at 13:00 IST (07:30 UTC) daily.
 # Same 2-hour buffer for Zoom to finish processing the AI Companion VTT transcript.
 # Uses --days 2 to also catch any session that missed the 11:15 IST pipeline run.
-31 7 * * * samagama /usr/bin/node /var/samagama/server/zoom-ingest-all-transcripts.js --days 2 >> /var/samagama/server/logs/zoom-transcripts.log 2>&1
+31 7 * * * samagama /usr/bin/node /var/samagama/server/pipeline/zoom-ingest-all-transcripts.js --days 2 >> /var/samagama/server/logs/zoom-transcripts.log 2>&1

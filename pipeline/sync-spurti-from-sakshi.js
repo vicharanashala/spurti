@@ -21,9 +21,9 @@
  *
  * Cron: minute 30 of every even UTC hour (= every even IST hour, 00,02,...,22).
  */
-require('/var/samagama/server/node_modules/dotenv').config({ path: '/var/samagama/server/.env' });
-const { MongoClient } = require('/var/samagama/server/node_modules/mongodb');
-const mongoose = require('/var/samagama/server/node_modules/mongoose');
+require('dotenv').config();
+const { MongoClient } = require('mongodb');
+const mongoose = require('mongoose');
 
 const BASE = (process.env.MONGO_URI || '').replace(/\/[^/?]*(\?.*)?$/, '');
 const DRY = process.env.DRY_RUN === '1';
@@ -34,7 +34,6 @@ const normSp = (n) => { const v = parseInt(n, 10); return isNaN(v) ? null : (v >
   if (!BASE) throw new Error('no MONGO_URI');
   await mongoose.connect(process.env.MONGO_URI);
   const spledgers = mongoose.connection.db.collection('spledgers');
-  const User = require('/var/samagama/server/models/User');
   const sak = await MongoClient.connect(`${BASE}/sakshi_spurti?authSource=admin`);
   const sptx = sak.db().collection('sptransactions');
 
@@ -61,8 +60,9 @@ const normSp = (n) => { const v = parseInt(n, 10); return isNaN(v) ? null : (v >
   // spPoints preview
   console.log('spPoints (sum of her deltas) sample:');
   for (const [e, sum] of [...totals.entries()].slice(0, 4)) {
-    const u = await User.findOne({ email: e }, { spPoints: 1 }).lean();
-    console.log(`  ${e.padEnd(36)} current=${u ? u.spPoints : '(no user)'} -> ${sum}`);
+    const userDoc = await mongoose.connection.db.collection('users').findOne({ email: e }, { projection: { spPoints: 1 } });
+    const uSp = userDoc ? userDoc.spPoints : null;
+    console.log(`  ${e.padEnd(36)} current=${userDoc ? userDoc.spPoints : '(no user)'} -> ${sum}`);
   }
 
   if (DRY) { console.log(`\nDRY_RUN — would wipe ${ourCount} rows, insert ${rows.length}, recompute spPoints for ${totals.size} emails.`); await mongoose.disconnect(); await sak.close(); return; }
@@ -73,7 +73,7 @@ const normSp = (n) => { const v = parseInt(n, 10); return isNaN(v) ? null : (v >
   for (let i = 0; i < rows.length; i += 2000) await spledgers.insertMany(rows.slice(i, i + 2000), { ordered: false });
   console.log(`inserted ${rows.length} rows from her ledger`);
   let upd = 0;
-  for (const [email, sum] of totals) { const r = await User.updateOne({ email }, { $set: { spPoints: sum, spPointsUpdated: new Date() } }); if (r.matchedCount) upd++; }
+  for (const [email, sum] of totals) { const r = await mongoose.connection.db.collection('users').updateOne({ email }, { $set: { spPoints: sum, spPointsUpdated: new Date() } }); if (r.matchedCount) upd++; }
   console.log(`recomputed spPoints for ${upd} matched users (of ${totals.size})`);
   await mongoose.disconnect(); await sak.close();
 })().catch((e) => { console.error('FATAL', e.message); process.exit(1); });

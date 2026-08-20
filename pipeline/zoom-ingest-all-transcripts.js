@@ -18,7 +18,7 @@
  *   node zoom-ingest-all-transcripts.js --dry-run  # print only, no write
  */
 
-require('dotenv').config({ path: '/var/samagama/server/.env' });
+require('dotenv').config();
 const axios  = require('axios');
 const { MongoClient } = require('mongodb');
 
@@ -27,7 +27,8 @@ const FORCE   = ARGS.includes('--force');
 const DRY_RUN = ARGS.includes('--dry-run');
 
 const { ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET } = process.env;
-const ZOOM_DB_URI = (process.env.MONGO_URI || '').replace(/\/chatengine(\?|$)/, '/zoom_data$1');
+const BASE_URI = (process.env.MONGO_URI || '').replace(/\/[^/?]*(\?.*)?$/, '');
+const ZOOM_DB_URI = BASE_URI ? BASE_URI + '/zoom_data' : '';
 
 // ── Zoom auth ────────────────────────────────────────────────────────────────
 let _tok = null, _exp = 0;

@@ -22,7 +22,7 @@
  * Scheduled nightly at a random minute in 00:00–01:00 IST (18:30 UTC + jitter).
  */
 const { MongoClient } = require('mongodb');
-require('dotenv').config({ path: '/var/samagama/server/.env' });
+require('dotenv').config();
 
 // Derive the host+creds base from MONGO_URI (strip the trailing /db?query) so the
 // admin password lives ONLY in .env — never hardcoded here.
@@ -115,6 +115,8 @@ function deriveStatus(u, fr) {
     return;
   }
 
+  const currentEmails = new Set(rows.map(r => r.email));
+
   for (const dbName of TARGETS) {
     const conn = await MongoClient.connect(`${BASE}/${dbName}?authSource=admin`);
     const coll = conn.db().collection('candidates');
@@ -123,7 +125,9 @@ function deriveStatus(u, fr) {
       updateOne: { filter: { email: r.email }, update: { $set: r }, upsert: true },
     }));
     const res = await coll.bulkWrite(ops, { ordered: false });
-    console.log(`${dbName}.candidates  upserted=${res.upsertedCount} modified=${res.modifiedCount} matched=${res.matchedCount}`);
+    // Remove candidates for students no longer in the source (soft-deleted, rejected, etc.)
+    const stale = await coll.deleteMany({ email: { $nin: [...currentEmails] } });
+    console.log(`${dbName}.candidates  upserted=${res.upsertedCount} modified=${res.modifiedCount} matched=${res.matchedCount} staleRemoved=${stale.deletedCount}`);
     await conn.close();
   }
 

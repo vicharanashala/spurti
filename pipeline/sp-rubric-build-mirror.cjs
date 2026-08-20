@@ -222,7 +222,7 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     const top = sp.topPoints || (sp.students || []).reduce((mx, x) => Math.max(mx, x.pointsEarned || 0), 0);
     for (const x of sp.students || []) {
       const e = String(x.email || '').toLowerCase().trim(); if (!e) continue;
-      const pct = top ? Math.round((x.pointsEarned || 0) / top * 1000) / 10 : 0;
+      const pct = top ? Math.round((x.pointsEarned || 0) / top * 100) : 0;
       const d = tier(pct);
       // Short bank message: conveys correctness-based + relative-to-day-top in one line.
       touch(e).rows.push({ date: sp.date, order: 2, cat: 'poll', delta: d,
@@ -427,7 +427,14 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       }
     }
     // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
-    for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
+    // Only add if no rubric row already exists for this date+cat (prevents double-counting).
+    const existingKeys = new Set(rows.map(r => r.date + '|' + r.cat));
+    for (const p of (preservedByCanon.get(cand) || [])) {
+      const key = p.date + '|' + p.cat;
+      if (existingKeys.has(key)) continue;          // skip — rubric row already counts this date
+      existingKeys.add(key);
+      rows.push(p);
+    }
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
     finalBal.set(cand, bal); nameByCanon.set(cand, info.name);
@@ -454,6 +461,15 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
 
   if (!APPLY) { console.log('\nDRY RUN — no DB write. Set APPLY=1 to replace sakshi_spurti points.'); await conn.close(); return; }
 
+  // Safety floor: an empty/stale mirror (sync-collaborator-mirrors.js failed) would
+  // wipe everyone's SP on APPLY. Abort if the new ledger is implausibly small.
+  const MIN_STUDENTS = 2000;
+  if (finalBal.size < MIN_STUDENTS) {
+    console.error(`ABORT: new ledger has only ${finalBal.size} students (floor ${MIN_STUDENTS}). Mirror data is likely stale or empty.`);
+    await conn.close();
+    process.exit(1);
+  }
+
   // 6. APPLY: replace sakshi_spurti points (backs up sptransactions + students first)
   const backupDir = path.join(OUT_DIR, `sp_backup_mirror_${ts}`); fs.mkdirSync(backupDir, { recursive: true });
   for (const coll of ['sptransactions', 'students']) fs.writeFileSync(path.join(backupDir, `${coll}.json`), JSON.stringify(await sak.collection(coll).find({}).toArray()));
@@ -478,7 +494,7 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   // SPA summary for the web-app SPA tab (display only; SP itself is in the ledger above).
   const Spa = sak.collection('spaprogresses');
   const spaOps = spaSummary.map((s) => ({ updateOne: { filter: { email: s.email },
-    update: { $set: { ...s, activity: 'Activity 1: Linear Algebra', updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, upsert: true } }));
+    update: { $set: { ...s, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, upsert: true } }));
   for (let i = 0; i < spaOps.length; i += 1000) await Spa.bulkWrite(spaOps.slice(i, i + 1000), { ordered: false });
   console.log(`SPA -> spaprogresses upserted ${spaOps.length}`);
   // RECONCILE: the new ledger is the COMPLETE source of truth — all current SP is

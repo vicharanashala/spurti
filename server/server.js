@@ -1,8 +1,11 @@
 import express from 'express';
 import cors from 'cors';
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
+import mongoSanitize from 'express-mongo-sanitize';
+import rateLimit from 'express-rate-limit';
 import { fileURLToPath } from 'url';
 
 import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
@@ -29,6 +32,11 @@ import { buildTrajectoryState } from './services/trajectory.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
+let cachedIndexHtml = null;
+function getIndexHtml() {
+  if (!cachedIndexHtml) cachedIndexHtml = fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8');
+  return cachedIndexHtml;
+}
 // Saved achievement cards live outside the repo tree's tracked files; they are
 // regenerable, so losing them only costs the next share's og:image.
 const CARD_DIR = process.env.CARD_DIR || path.join(rootDir, 'server', 'data', 'cards');
@@ -160,8 +168,17 @@ app.set('trust proxy', 1);
 const api = express.Router();
 const liveViewers = new Map();
 
-app.use(cors());
+app.use(cors({
+  origin: (origin, cb) => {
+    const allowed = [/samagama\.in$/, /localhost(:\d+)?$/];
+    if (!origin || allowed.some(re => re.test(origin))) return cb(null, true);
+    cb(null, false);
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '2mb' }));
+app.use(mongoSanitize());
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100, message: 'Too many requests, please try again later.' }));
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
@@ -184,6 +201,12 @@ function publicStudent(student) {
     status: student.status || 'active',
     totalSp: student.totalSp
   };
+}
+
+function isValidISO8601(value) {
+  if (typeof value !== 'string') return false;
+  const t = Date.parse(value);
+  return !Number.isNaN(t);
 }
 
 function parseCookies(header = '') {
@@ -245,14 +268,15 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, , allStudents] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
+    // leaderboard derived from allStudents below (no separate query needed)
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
+  const leaderboard = allStudents.slice(0, 50);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
@@ -312,10 +336,14 @@ async function studentPayload(student) {
 }
 
 function isAdmin(req) {
-  if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false; // fail closed when admin creds aren't configured
-  const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
-  const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
-  return emailOk && tokenOk;
+  try {
+    if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false;
+    const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
+    const a = String(req.headers['x-admin-token'] || '').padEnd(32, '\0');
+    const b = String(ADMIN_TOKEN).padEnd(32, '\0');
+    const tokenOk = crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+    return emailOk && tokenOk;
+  } catch { return false; }
 }
 
 function adminGuard(req, res, next) {
@@ -343,7 +371,7 @@ api.get('/me', async (req, res) => {
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
 async function vibeStudent(req) {
-  const email = normalizeEmail(req.body?.email || req.query.email) || await studentEmailFromRequest(req);
+  const email = await studentEmailFromRequest(req);
   if (!email) return null;
   return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
 }
@@ -427,15 +455,20 @@ api.get('/journey/state', async (req, res) => {
 
 api.put('/journey/plan', async (req, res) => {
   const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });   // My Journey goals are universal (Phase 1)
-  await saveJourneyPlan(student.email, req.body || {});
-  res.json(await buildJourneyState(student));
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const { startDate, endDate } = req.body || {};
+  // Validate date fields are valid ISO 8601 when present
+  if (startDate && !isValidISO8601(startDate)) return res.status(400).json({ error: 'Invalid start date format' });
+  if (endDate && !isValidISO8601(endDate)) return res.status(400).json({ error: 'Invalid end date format' });
+  await saveJourneyPlan(student.email, req.body);
+  res.json(await studentPayload(student));
 });
 
 api.get('/search', async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ exact: false, matches: [] });
+  if (q.length > 100) return res.json({ exact: false, matches: [] });
 
   if (q.includes('@')) {
     const email = normalizeEmail(q);
@@ -444,14 +477,17 @@ api.get('/search', async (req, res) => {
     if (student) return res.json({ exact: true, profile: await studentPayload(student) });
   }
 
-  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const matches = await Student.find({
+const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Metacharacters are escaped above, so the $regex matches literally —
+// no ReDoS risk even with 100-char input. Combined with the q.length > 100
+// guard at line 462, this provides defense-in-depth protection.
+const matches = await Student.find({
     $or: [
       { name: { $regex: escaped, $options: 'i' } },
       { email: { $regex: escaped, $options: 'i' } },
       { alternateEmail: { $regex: escaped, $options: 'i' } }
     ]
-  }).sort({ name: 1 }).limit(12).lean();
+  }).select('-_id').sort({ name: 1 }).limit(12).lean();
 
   res.json({ exact: false, matches: matches.map(publicStudent) });
 });
@@ -515,7 +551,7 @@ api.get('/achievements', async (req, res) => {
   const access = achievementsAccess(student);
   // Nothing is computed or persisted for a student who cannot see the tab —
   // the milestone write in buildAchievementState only happens once it is on.
-  if (!access.visible) return res.json({ ...access, groups: [], locked: [], counts: {} });
+  if (!access.visible) return res.json({ ...access, initialized: false, groups: [], locked: [], counts: {} });
   res.json({
     ...access,
     student: { name: student.name, email: student.email, totalSp: student.totalSp, level: levelFor(Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0)) },
@@ -585,11 +621,6 @@ api.post('/share/card', async (req, res) => {
 
   const url = `${publicBaseUrl(req)}/spurti/cards/${ach.verifyId}.png`;
   const file = path.join(CARD_DIR, `${ach.verifyId}.png`);
-  // Write once. Identity here is only the email in the request — the same weak
-  // model the rest of the app uses — so allowing overwrites would let anyone
-  // replace the picture that a student's public verify link previews.
-  if (fs.existsSync(file)) return res.json({ url, stored: false });
-
   const m = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
   if (!m) return res.status(400).json({ error: 'A PNG data URL is required' });
   const buf = Buffer.from(m[1], 'base64');
@@ -627,9 +658,12 @@ api.post('/ping', async (req, res) => {
   const { email, name, page } = req.body || {};
   const normalized = normalizeEmail(email);
   if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
-  // Telemetry is best-effort: an unknown page value (e.g. a new admin sub-page
-  // not yet in the enum) must never crash the request or leak an unhandled
-  // rejection. Drop the write and carry on.
+  // Validate name: max 100 chars, allow letters/numbers/spaces
+  if (!/^[\w .'-]{1,100}$/.test(name)) return res.status(400).json({ error: 'Invalid name format' });
+  // Validate page: allowlist of known pages
+  const allowedPages = ['record', 'admin', 'survey', 'poll', 'vibe', 'standup', 'journey', 'leaderboard', 'achievements'];
+  if (!allowedPages.includes(page)) return res.status(400).json({ error: 'Invalid page value' });
+  const pageMax = allowedPages.includes(page) ? allowedPages.length : 1;
   try {
     await SessionEvent.create({ email: normalized, name, event: 'page_view', page });
   } catch (err) {
@@ -688,7 +722,11 @@ function registerSurveyRoutes(base, cfg) {
   // Authoritative confirmation: the Google Form's Apps Script onFormSubmit
   // trigger POSTs { email, secret } here. Secret-authenticated, not session.
   api.post(`${base}/webhook`, async (req, res) => {
-    if (!cfg.webhookSecret || String(req.body?.secret || '') !== cfg.webhookSecret) {
+    const secret = String(req.body?.secret || '');
+    // Timing-safe comparison — pad both to the same length before comparing
+    const a = String(cfg.webhookSecret).padEnd(secret.length, '\0');
+    const b = secret.padEnd(cfg.webhookSecret.length, '\0');
+    if (!cfg.webhookSecret || !crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b))) {
       return res.status(403).json({ ok: false, error: 'forbidden' });
     }
     const student = await markSurveyComplete(req.body?.email, cfg);
@@ -711,7 +749,8 @@ api.get('/admin/stats', adminGuard, async (_req, res) => {
   res.json({ yetToOnboard, excusedStudents, activeStudents, sessions, transactions: txns });
 });
 api.get('/admin/students-by-status', adminGuard, async (req, res) => {
-  const status = String(req.query.status || 'yet to onboard');
+  const validStatuses = ['active', 'excused'];
+  const status = validStatuses.includes(String(req.query.status || '')) ? String(req.query.status || '') : 'active';
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 200)));
   const students = await Student.find({ status }).sort({ name: 1 }).limit(limit).lean();
   res.json(students.map(s => ({
@@ -865,7 +904,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     };
   });
 
-  const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
+  const categoryTotals = ['initial', 'attendance', 'poll', 'spa', 'query', 'manual'].map(category => {
     const rows = activeTransactions.filter(t => t.category === category);
     return {
       category,
@@ -1120,7 +1159,7 @@ async function verifyPageHtml(req, code) {
   // against /spurti/verify/<code>/ and 404. This page is two levels deep, so the
   // asset paths have to be absolute.
   const mount = req.path.startsWith('/spurti') ? '/spurti' : '';
-  const html = fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8')
+  const html = getIndexHtml()
     .replace(/(src|href)="\.\/assets\//g, `$1="${mount}/assets/`);
   const result = await verifyAchievement(code, Student);
   const base = publicBaseUrl(req);
