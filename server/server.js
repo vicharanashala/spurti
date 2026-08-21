@@ -1,8 +1,11 @@
 import express from 'express';
 import cors from 'cors';
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
+import mongoSanitize from 'express-mongo-sanitize';
+import rateLimit from 'express-rate-limit';
 import { fileURLToPath } from 'url';
 
 import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
@@ -39,8 +42,7 @@ const CARD_DIR = process.env.CARD_DIR || path.join(rootDir, 'server', 'data', 'c
 // headers nginx sets, since the app itself only ever sees http on a local port.
 function publicBaseUrl(req) {
   if (process.env.PUBLIC_BASE_URL) return String(process.env.PUBLIC_BASE_URL).replace(/\/+$/, '');
-  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-  return `${String(proto).split(',')[0]}://${req.get('host')}`;
+  return 'https://samagama.in';
 }
 // Achievements ship dark: the tab is off for the cohort until ACHIEVEMENTS_ENABLED
 // flips, while ACHIEVEMENTS_EMAILS lets named accounts preview it on the live site
@@ -162,11 +164,25 @@ app.set('trust proxy', 1);
 const api = express.Router();
 const liveViewers = new Map();
 
-app.use(cors());
+app.use(cors({
+  origin: (origin, cb) => {
+    const allowed = [/^https?:\/\/([a-z0-9-]+\.)*samagama\.in$/, /^https?:\/\/localhost(:\d+)?$/];
+    if (!origin || allowed.some(re => re.test(origin))) return cb(null, true);
+    cb(null, false);
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '2mb' }));
+app.use(mongoSanitize());
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100, message: 'Too many requests, please try again later.' }));
+const pingLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, message: 'Too many pings, please try again later.' });
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function wrapAsync(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
 
 function maskEmail(email) {
@@ -192,7 +208,9 @@ function parseCookies(header = '') {
   return Object.fromEntries(String(header).split(';').map(part => {
     const index = part.indexOf('=');
     if (index < 0) return null;
-    return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())];
+    try {
+      return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())];
+    } catch { return [part.slice(0, index).trim(), part.slice(index + 1).trim()]; }
   }).filter(Boolean));
 }
 
@@ -334,14 +352,14 @@ api.get('/config', (_req, res) => res.json({
   poll3: surveyPublic(POLL3)
 }));
 
-api.get('/me', async (req, res) => {
+api.get('/me', wrapAsync(async (req, res) => {
   const email = await studentEmailFromRequest(req);
   if (!email) return res.status(401).json({ authenticated: false });
   const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
   res.json({ authenticated: true, profile: await studentPayload(student) });
-});
+}));
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
 async function vibeStudent(req) {
@@ -350,27 +368,27 @@ async function vibeStudent(req) {
   return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
 }
 
-api.get('/vibe/state', async (req, res) => {
+api.get('/vibe/state', wrapAsync(async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   if (!isVibeEligible(student)) return res.json({ eligible: false });
   res.json(await buildVibeState(student));
-});
+}));
 
-api.post('/vibe/bet', async (_req, res) => {
+api.post('/vibe/bet', wrapAsync(async (_req, res) => {
   // ON HOLD: ViBe commitments are paused — the ViBe completion feed (leaderboard API)
   // is unavailable, so bets can't be verified or settled. No new bets can be placed
   // (nothing is staked/debited) until the feed is restored.
   return res.status(403).json({ error: 'ViBe commitments are on hold and will be back up soon.' });
-});
+}));
 
-api.put('/vibe/bet/:id', async (_req, res) => {
+api.put('/vibe/bet/:id', wrapAsync(async (_req, res) => {
   // ON HOLD: see POST /vibe/bet.
   return res.status(403).json({ error: 'ViBe commitments are on hold and will be back up soon.' });
-});
+}));
 
 // DEMO: resolve a bet (no live settlement cron locally). result = 'won' | 'lost'.
-api.post('/vibe/bet/:id/settle', async (_req, res) => {
+api.post('/vibe/bet/:id/settle', wrapAsync(async (_req, res) => {
   // LOCKED DOWN (security): client-controlled self-settlement is removed. This route
   // trusted req.body.result (defaulting to "won") and granted SP with NO check against
   // real ViBe course completion — students could place a bet and instantly self-declare
@@ -378,63 +396,69 @@ api.post('/vibe/bet/:id/settle', async (_req, res) => {
   // settleBetDemo itself), so settlement cannot be verified yet; disabled until a
   // server-side/automatic settlement against real completion data is built.
   return res.status(403).json({ error: 'Bets are settled automatically, not on request. Self-settlement is disabled.' });
-});
+}));
 
 // ---- SPA → SP (peer-teaching endorsement points; ALL cohorts) ----------------
 // DISPLAY ONLY: SP is scored + credited by the pipeline rubric; this just reads
 // the `spaprogresses` summary + student total. Universal, no cohort gate.
-api.get('/spa/state', async (req, res) => {
+api.get('/spa/state', wrapAsync(async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await buildSpaState(student));
-});
+}));
 
 // ---- SP trajectory (You vs cohort vs onboarding-group; open to all students) --
 // The student's own weekly line is built live from their ledger; the cohort/group
 // reference lines come from the cached TrajectorySnapshot (buildTrajectories.js).
-api.get('/trajectory/state', async (req, res) => {
+api.get('/trajectory/state', wrapAsync(async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await buildTrajectoryState(student));
-});
+}));
 
 // ---- Standup commitments (weekly, attendance-only; keep-the-stake) -----------
-api.get('/standup/state', async (req, res) => {
+api.get('/standup/state', wrapAsync(async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   if (!isVibeEligible(student)) return res.json({ eligible: false });
   res.json(await buildStandupState(student));
-});
+}));
 
-api.post('/standup/commit', async (_req, res) => {
+api.post('/standup/commit', wrapAsync(async (_req, res) => {
   // PAUSED: standups moved to YouTube Live and the attendance module is being
   // reworked — no new standup commitments until the new attendance tracking lands.
   return res.status(403).json({ error: 'Standup commitments are paused while attendance is reworked for YouTube Live.' });
-});
+}));
 
 // DEMO: resolve a standup commitment (no live weekly settlement cron yet).
-api.post('/standup/commit/:id/settle', async (_req, res) => {
+api.post('/standup/commit/:id/settle', wrapAsync(async (_req, res) => {
   // LOCKED DOWN (security): same self-settlement exploit as /vibe/bet/:id/settle —
   // client-declared "won" minted SP with no verification. Disabled until server-side
   // settlement against real attendance/completion is built.
   return res.status(403).json({ error: 'Commitments are settled automatically, not on request. Self-settlement is disabled.' });
-});
+}));
 
 // ---- My Journey (phase-by-phase progress + SP; 16 July cohort onward) ---------
-api.get('/journey/state', async (req, res) => {
+api.get('/journey/state', wrapAsync(async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await buildJourneyState(student));   // My Journey is universal (Phase 1); Commitments stays gated
-});
+}));
 
-api.put('/journey/plan', async (req, res) => {
+api.put('/journey/plan', wrapAsync(async (req, res) => {
   const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });   // My Journey goals are universal (Phase 1)
-  await saveJourneyPlan(student.email, req.body || {});
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const { standupBy, vibeBy, spaBy, projectBy } = req.body || {};
+  const plan = {};
+  if (standupBy !== undefined) plan.standupBy = standupBy ? new Date(standupBy) : null;
+  if (vibeBy !== undefined) plan.vibeBy = vibeBy ? new Date(vibeBy) : null;
+  if (spaBy !== undefined) plan.spaBy = spaBy ? new Date(spaBy) : null;
+  if (projectBy !== undefined) plan.projectBy = projectBy ? new Date(projectBy) : null;
+  await saveJourneyPlan(student.email, plan);
   res.json(await buildJourneyState(student));
-});
+}));
 
-api.get('/search', async (req, res) => {
+api.get('/search', wrapAsync(async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ exact: false, matches: [] });
@@ -456,9 +480,9 @@ api.get('/search', async (req, res) => {
   }).sort({ name: 1 }).limit(12).lean();
 
   res.json({ exact: false, matches: matches.map(publicStudent) });
-});
+}));
 
-api.post('/confirm', async (req, res) => {
+api.post('/confirm', wrapAsync(async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const { studentId, email } = req.body || {};
   const typed = normalizeEmail(email);
@@ -469,9 +493,9 @@ api.post('/confirm', async (req, res) => {
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
   res.json(await studentPayload(student));
-});
+}));
 
-api.get('/leaderboard', async (req, res) => {
+api.get('/leaderboard', wrapAsync(async (req, res) => {
   const type = String(req.query.leaderboardType || 'overall');
   const filter = { status: { $ne: 'excused' } };
   if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
@@ -484,12 +508,12 @@ api.get('/leaderboard', async (req, res) => {
     level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
     trophyLeague: leagueBand(s.totalSp)
   })));
-});
+}));
 
 // Cached weekly/all-time/category/cohort boards (built by buildLeaderboards.js).
 // window=week|all, category=total|attendance|poll|spa|query, scope=all|cohort.
 // Returns the top 50 + the requesting student's own rank/SP (even if outside it).
-api.get('/leaderboard/board', async (req, res) => {
+api.get('/leaderboard/board', wrapAsync(async (req, res) => {
   const student = await vibeStudent(req);
   const window = ['week', 'all'].includes(req.query.window) ? req.query.window : 'week';
   const category = ['total', 'attendance', 'poll', 'spa', 'query'].includes(req.query.category) ? req.query.category : 'total';
@@ -506,7 +530,7 @@ api.get('/leaderboard/board', async (req, res) => {
     rows: board.rows.slice(0, 50),
     me: meRow ? { rank: meRow.rank, sp: meRow.sp } : null
   });
-});
+}));
 
 // A student's achievements, grouped one tile per board (plus milestones and the
 // nearest locked one). Podium places are awarded by the leaderboard build;
@@ -522,7 +546,7 @@ function announcementVisibleTo(ann, student) {
   return ann.audience.some(a => mine.has(normalizeEmail(a)));
 }
 
-api.get('/announcements', async (req, res) => {
+api.get('/announcements', wrapAsync(async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   const email = normalizeEmail(student.email);
@@ -537,9 +561,9 @@ api.get('/announcements', async (req, res) => {
     })),
     unread: list.filter(a => !acked.has(String(a._id))).length
   });
-});
+}));
 
-api.post('/announcements/:id/ack', async (req, res) => {
+api.post('/announcements/:id/ack', wrapAsync(async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   const ann = await Announcement.findOne({ _id: req.params.id, active: true }).lean();
@@ -550,10 +574,10 @@ api.post('/announcements/:id/ack', async (req, res) => {
     { $setOnInsert: { ackedAt: new Date() } },
     { upsert: true });
   res.json({ ok: true });
-});
+}));
 
 // Admin: post a notice / toggle one / read the read-rates.
-api.post('/admin/announcements', adminGuard, async (req, res) => {
+api.post('/admin/announcements', adminGuard, wrapAsync(async (req, res) => {
   const title = String(req.body?.title || '').trim();
   const body = String(req.body?.body || '').trim();
   if (!title || !body) return res.status(400).json({ error: 'title and body are required' });
@@ -562,16 +586,16 @@ api.post('/admin/announcements', adminGuard, async (req, res) => {
     ? [...new Set(req.body.audience.map(normalizeEmail).filter(Boolean))] : [];
   const ann = await Announcement.create({ title, body, audience });
   res.json({ ok: true, id: String(ann._id), audienceSize: audience.length || 'broadcast' });
-});
+}));
 
-api.post('/admin/announcements/:id', adminGuard, async (req, res) => {
+api.post('/admin/announcements/:id', adminGuard, wrapAsync(async (req, res) => {
   const ann = await Announcement.findByIdAndUpdate(req.params.id,
     { $set: { active: !!req.body?.active } }, { new: true }).lean();
   if (!ann) return res.status(404).json({ error: 'Announcement not found' });
   res.json({ ok: true, active: ann.active });
-});
+}));
 
-api.get('/admin/announcements', adminGuard, async (_req, res) => {
+api.get('/admin/announcements', adminGuard, wrapAsync(async (_req, res) => {
   const [list, activeStudents, ackCounts] = await Promise.all([
     Announcement.find({}).sort({ postedAt: -1 }).lean(),
     Student.countDocuments({ status: 'active' }),
@@ -591,9 +615,9 @@ api.get('/admin/announcements', adminGuard, async (_req, res) => {
       };
     })
   });
-});
+}));
 
-api.get('/achievements', async (req, res) => {
+api.get('/achievements', wrapAsync(async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   const access = achievementsAccess(student);
@@ -605,26 +629,26 @@ api.get('/achievements', async (req, res) => {
     student: { name: student.name, email: student.email, totalSp: student.totalSp, level: levelFor(Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0)) },
     ...(await buildAchievementState(student))
   });
-});
+}));
 
 // Marks the tab as read. Deliberately NOT folded into GET /achievements: that
 // fires on every dashboard load, whatever tab is showing, so letting it stamp
 // would mean nothing was ever unseen and the badge could never appear.
-api.post('/achievements/seen', async (req, res) => {
+api.post('/achievements/seen', wrapAsync(async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   if (!achievementsAccess(student).visible) return res.status(403).json({ error: 'Achievements are off' });
   await Student.updateOne({ _id: student._id }, { $set: { achievementsSeenAt: new Date() } });
   res.json({ ok: true });
-});
+}));
 
 // Public — this is what the QR on a shared card opens. No login, no PII beyond
 // the recipient's name and what they won.
-api.get('/verify/:code', async (req, res) => {
+api.get('/verify/:code', wrapAsync(async (req, res) => {
   const result = await verifyAchievement(req.params.code, Student);
   if (!result) return res.status(404).json({ valid: false });
   res.json(result);
-});
+}));
 
 // Records that a card was looked at. Fire-and-forget: a credential page must
 // never fail, or be slowed down, because analytics did.
@@ -670,7 +694,7 @@ function logAchievementView(req, code, result) {
 // client hands it over. It's stored once per achievement purely so the verify
 // page has an og:image — that's what makes a posted link show the card without
 // the student uploading anything.
-api.post('/share/card', async (req, res) => {
+api.post('/share/card', wrapAsync(async (req, res) => {
   const { achId, dataUrl } = req.body || {};
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
@@ -693,11 +717,11 @@ api.post('/share/card', async (req, res) => {
   fs.mkdirSync(CARD_DIR, { recursive: true });
   fs.writeFileSync(file, buf);
   res.json({ url, stored: true });
-});
+}));
 
 // Every share and download is logged so the admin can see who posts, how often,
 // and which achievements are actually worth posting.
-api.post('/share/track', async (req, res) => {
+api.post('/share/track', wrapAsync(async (req, res) => {
   const { achId, platform, captionEdited, captionChars } = req.body || {};
   if (!achId || !['linkedin', 'whatsapp', 'download', 'copy', 'native'].includes(platform)) {
     return res.status(400).json({ error: 'achId and a valid platform required' });
@@ -716,9 +740,9 @@ api.post('/share/track', async (req, res) => {
     platform
   });
   res.json({ ok: true });
-});
+}));
 
-api.post('/ping', async (req, res) => {
+api.post('/ping', pingLimiter, wrapAsync(async (req, res) => {
   const { email, name, page } = req.body || {};
   const normalized = normalizeEmail(email);
   if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
@@ -734,7 +758,7 @@ api.post('/ping', async (req, res) => {
     liveViewers.set(normalized, { name, page, lastSeen: new Date() });
   }
   res.json({ ok: true });
-});
+}));
 
 // --- Survey triangulation (mandatory perception follow-up) ---------------
 // Mark a student's survey as completed for the given survey config. Idempotent;
@@ -762,7 +786,7 @@ async function markSurveyComplete(email, cfg) {
 function registerSurveyRoutes(base, cfg) {
   // Completion check the modal polls and verifies on the "I've submitted" button.
   // Session-authenticated; reflects only server-set (webhook/sync) completion.
-  api.get(`${base}/status`, async (req, res) => {
+  api.get(`${base}/status`, wrapAsync(async (req, res) => {
     const email = await studentEmailFromRequest(req);
     if (!email) return res.json({ completed: false });
     const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
@@ -778,24 +802,24 @@ function registerSurveyRoutes(base, cfg) {
       }
     }
     res.json({ completed: false });
-  });
+  }));
 
   // Authoritative confirmation: the Google Form's Apps Script onFormSubmit
   // trigger POSTs { email, secret } here. Secret-authenticated, not session.
-  api.post(`${base}/webhook`, async (req, res) => {
+  api.post(`${base}/webhook`, wrapAsync(async (req, res) => {
     if (!cfg.webhookSecret || String(req.body?.secret || '') !== cfg.webhookSecret) {
       return res.status(403).json({ ok: false, error: 'forbidden' });
     }
     const student = await markSurveyComplete(req.body?.email, cfg);
     if (!student) return res.status(404).json({ ok: false, error: 'no match', email: normalizeEmail(req.body?.email) });
     res.json({ ok: true, email: student.email });
-  });
+  }));
 }
 registerSurveyRoutes('/survey', SURVEY);
 registerSurveyRoutes('/poll2', POLL2);
 registerSurveyRoutes('/poll3', POLL3);
 
-api.get('/admin/stats', adminGuard, async (_req, res) => {
+api.get('/admin/stats', adminGuard, wrapAsync(async (_req, res) => {
   const [yetToOnboard, excusedStudents, sessions, txns, activeStudents] = await Promise.all([
     Student.countDocuments({ status: 'yet to onboard' }),
     Student.countDocuments({ status: 'excused' }),
@@ -804,8 +828,8 @@ api.get('/admin/stats', adminGuard, async (_req, res) => {
     Student.countDocuments({ status: 'active' })
   ]);
   res.json({ yetToOnboard, excusedStudents, activeStudents, sessions, transactions: txns });
-});
-api.get('/admin/students-by-status', adminGuard, async (req, res) => {
+}));
+api.get('/admin/students-by-status', adminGuard, wrapAsync(async (req, res) => {
   const status = String(req.query.status || 'yet to onboard');
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 200)));
   const students = await Student.find({ status }).sort({ name: 1 }).limit(limit).lean();
@@ -816,10 +840,10 @@ api.get('/admin/students-by-status', adminGuard, async (req, res) => {
     totalSp: s.totalSp,
     internshipStartDate: s.internshipStartDate
   })));
-});
+}));
 
 
-api.get('/admin/leaderboard', adminGuard, async (req, res) => {
+api.get('/admin/leaderboard', adminGuard, wrapAsync(async (req, res) => {
   const limit = Math.min(500, Math.max(1, Number(req.query.limit || 50)));
   const students = await Student.find({ status: 'active' }).sort({ totalSp: -1, name: 1 }).limit(limit).lean();
   res.json(students.map((s, i) => ({
@@ -829,9 +853,9 @@ api.get('/admin/leaderboard', adminGuard, async (req, res) => {
     email: s.email,
     totalSp: s.totalSp
   })));
-});
+}));
 
-api.get('/admin/attendance', adminGuard, async (_req, res) => {
+api.get('/admin/attendance', adminGuard, wrapAsync(async (_req, res) => {
   const [sessions, students, records] = await Promise.all([
     Session.find().sort({ endDateTime: 1 }).lean(),
     Student.find({ status: 'active' }).sort({ name: 1 }).lean(),
@@ -857,13 +881,13 @@ api.get('/admin/attendance', adminGuard, async (_req, res) => {
       }))
     }))
   });
-});
+}));
 
-api.get('/admin/student/:id', adminGuard, async (req, res) => {
+api.get('/admin/student/:id', adminGuard, wrapAsync(async (req, res) => {
   const student = await Student.findById(req.params.id).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await studentPayload(student));
-});
+}));
 
 api.get('/admin/active', adminGuard, (_req, res) => {
   const now = new Date();
@@ -883,7 +907,7 @@ api.get('/admin/active', adminGuard, (_req, res) => {
   res.json(viewers);
 });
 
-api.get('/admin/analytics', adminGuard, async (_req, res) => {
+api.get('/admin/analytics', adminGuard, wrapAsync(async (_req, res) => {
   const now = new Date();
   const lastHour = new Date(now.getTime() - 60 * 60 * 1000);
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -960,7 +984,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     };
   });
 
-  const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
+  const categoryTotals = ['initial', 'attendance', 'poll', 'manual', 'spa', 'query'].map(category => {
     const rows = activeTransactions.filter(t => t.category === category);
     return {
       category,
@@ -1017,7 +1041,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     reigns: reignSummary(reigns),
     pipeline: pipelineHealth()
   });
-});
+}));
 
 const BOARD_LABEL = {
   total: 'Overall SP', attendance: 'Attendance', poll: 'Polls',
@@ -1201,10 +1225,15 @@ function last24Hours(now) {
 app.use('/api', api);
 app.use('/spurti/api', api);
 
+app.use((err, _req, res, _next) => {
+  console.error('[error]', err?.message, err?.stack);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
 // Saved achievement cards, served as plain files so LinkedIn's crawler can
 // fetch the og:image without a login.
-app.use('/spurti/cards', express.static(CARD_DIR, { maxAge: '30d' }));
-app.use('/cards', express.static(CARD_DIR, { maxAge: '30d' }));
+app.use('/spurti/cards', (req, res, next) => { res.setHeader('X-Content-Type-Options', 'nosniff'); next(); }, express.static(CARD_DIR, { maxAge: '30d' }));
+app.use('/cards', (req, res, next) => { res.setHeader('X-Content-Type-Options', 'nosniff'); next(); }, express.static(CARD_DIR, { maxAge: '30d' }));
 
 // The verify page is server-rendered ONLY to the extent of its meta tags: when a
 // student posts the link, LinkedIn/WhatsApp fetch it, read og:image, and show
@@ -1264,6 +1293,10 @@ if (fs.existsSync(clientDist)) {
 } else {
   app.get('*', (_req, res) => res.status(404).send('Build the client first with npm run build.'));
 }
+
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err?.message || err);
+});
 
 mongoose.connect(MONGO_URI).then(() => {
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));

@@ -2,11 +2,11 @@ import mongoose from 'mongoose';
 
 const studentSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, index: true },
-  email: { type: String, required: true, lowercase: true, trim: true, unique: true, index: true },
+  email: { type: String, required: true, lowercase: true, trim: true, unique: true },
   alternateEmail: { type: String, lowercase: true, trim: true, default: '', index: true },
   internshipStartDate: { type: Date, required: true, index: true },
   internshipEndDate: { type: Date, default: null },
-  status: { type: String, enum: ['active', 'excused'], default: 'active', index: true },
+  status: { type: String, enum: ['active', 'excused', 'yet to onboard'], default: 'active', index: true },
   excusedAt: { type: Date, default: null },
   excusedReason: { type: String, default: '' },
   totalSp: { type: Number, default: 100, index: true },
@@ -34,6 +34,9 @@ const studentSchema = new mongoose.Schema({
   achievementsSeenAt: { type: Date, default: null }
 }, { timestamps: true });
 
-studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });
+studentSchema.index(
+  { alternateEmail: 1 },
+  { unique: true, partialFilterExpression: { alternateEmail: { $gt: '' } } }
+);
 
 export default mongoose.model('Student', studentSchema);

@@ -36,7 +36,7 @@ function weeklySeries(txns, joinMs, nowMs) {
 // few learners reach the last weeks). Keep weeks with n >= max(15, 10% of week-1's count).
 function toSeries(acc) {
   const first = acc.find(x => x.n > 0);
-  const floor = first ? Math.max(15, Math.round(first.n * 0.1)) : 15;
+  const floor = first ? Math.max(3, Math.round(first.n * 0.1)) : 3;
   return acc
     .map((x, i) => ({ week: i + 1, sp: x.n ? Math.round(x.sum / x.n) : null, n: x.n }))
     .filter(p => p.sp !== null && p.n >= floor);

@@ -301,32 +301,37 @@ async function trackReigns(boards, now) {
     // one board. When the top is that crowded nobody reigns: any open reign
     // closes and none is opened.
     const leaders = tiedTop.length > TIE_MAX ? [] : tiedTop;
-    const open = await BoardReign.findOne({ board: b.category, to: null });
+    const leaderIds = new Set(leaders.map(r => r.studentId));
+    const openReigns = await BoardReign.find({ board: b.category, to: null });
 
-    // A tie keeps the sitting holder if they are still among the leaders —
-    // being caught up with is not the same as being overtaken.
-    const stillLeading = open && leaders.some((r) => r.studentId === open.studentId);
-
-    if (open && !stillLeading) {
+    // Close all open reigns for leaders no longer at the top.
+    for (const open of openReigns) {
+      if (leaderIds.has(open.studentId)) continue;
       open.to = now;
       await open.save();
       if (open.awarded) closedAwarded.push(open);
       changes += 1;
     }
 
-    if (stillLeading) {
-      const me = leaders.find((r) => r.studentId === open.studentId);
-      open.sp = me.sp;
-      open.peakSp = Math.max(open.peakSp || 0, me.sp);
-      await open.save();
-    } else {
-      for (const r of leaders) {
-        await BoardReign.create({
-          board: b.category, studentId: r.studentId, name: r.name,
-          from: now, to: null, sp: r.sp, peakSp: r.sp
-        });
-        changes += 1;
+    // Update SP for leaders who already have an open reign.
+    const openIds = new Set(openReigns.map(r => r.studentId));
+    for (const r of leaders) {
+      if (openIds.has(r.studentId)) {
+        const existing = openReigns.find(o => o.studentId === r.studentId);
+        existing.sp = r.sp;
+        existing.peakSp = Math.max(existing.peakSp || 0, r.sp);
+        await existing.save();
       }
+    }
+
+    // Open new reigns for leaders who don't have one yet.
+    for (const r of leaders) {
+      if (openIds.has(r.studentId)) continue;
+      await BoardReign.create({
+        board: b.category, studentId: r.studentId, name: r.name,
+        from: now, to: null, sp: r.sp, peakSp: r.sp
+      });
+      changes += 1;
     }
   }
 
@@ -335,13 +340,14 @@ async function trackReigns(boards, now) {
   for (const rg of ripe) {
     const held = (rg.to ? rg.to.getTime() : now.getTime()) - rg.from.getTime();
     if (held < MIN_REIGN_MS) continue;
-    const achId = `rank:${rg.board}:reign:${weekKey(rg.from)}:1`;
+    const reignDate = new Date(rg.from.getTime() + IST_MS).toISOString().slice(0, 10);
+    const achId = `rank:${rg.board}:reign:${reignDate}:1`;
     ops.push({
       filter: { studentId: rg.studentId, achId },
       doc: {
         studentId: rg.studentId, achId, kind: 'rank', board: rg.board, place: 1,
         icon: PLACE_ICON[1], title: ACH_TITLE[rg.board],
-        period: reignPeriod(rg.from, rg.to), periodKey: weekKey(rg.from),
+        period: reignPeriod(rg.from, rg.to), periodKey: reignDate,
         detail: `${rg.peakSp || rg.sp} SP`, earnedAt: rg.from
       }
     });
