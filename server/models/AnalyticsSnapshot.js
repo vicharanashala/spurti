@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 const analyticsSnapshotSchema = new mongoose.Schema({
-  timestamp: { type: Date, required: true, unique: true, index: true },
+  timestamp: { type: Date, required: true, unique: true },
   activeStudents: { type: Number, default: 0 },
   yetToOnboard: { type: Number, default: 0 },
   excused: { type: Number, default: 0 },
@@ -46,6 +46,4 @@ const analyticsSnapshotSchema = new mongoose.Schema({
   redZoneCount: { type: Number, default: 0 },
   snapshotType: { type: String, enum: ['scheduled', 'manual'], default: 'scheduled' }
 }, { timestamps: true });
-
-analyticsSnapshotSchema.index({ timestamp: -1 });
 export default mongoose.model('AnalyticsSnapshot', analyticsSnapshotSchema);

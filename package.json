@@ -20,6 +20,8 @@
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
+    "express-mongo-sanitize": "^2.2.0",
+    "express-rate-limit": "^7.4.1",
     "mongoose": "^8.8.4"
   }
 }

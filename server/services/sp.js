@@ -62,7 +62,7 @@ export function withSp(studentDoc) {
 
   // Poll SP from transaction log
   const pollTxns = (raw._txns || []).filter(t => t.category === 'poll');
-  const pollSp = pollTxns.reduce((sum, t) => sum + Number(t.delta || 0), 0);
+  const pollSp = pollTxns.reduce((sum, t) => sum + Number(t.appliedDelta || 0), 0);
 
   const activitySp = 0;
 

@@ -6,7 +6,7 @@ import mongoose from 'mongoose';
 // "the dashboard rendered it" from "the student says they read it".
 const announcementAckSchema = new mongoose.Schema({
   announcementId: { type: mongoose.Schema.Types.ObjectId, ref: 'Announcement', required: true },
-  email: { type: String, required: true },
+  email: { type: String, required: true, lowercase: true, trim: true },
   ackedAt: { type: Date, default: Date.now }
 });
 
