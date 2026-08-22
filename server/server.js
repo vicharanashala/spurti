@@ -362,8 +362,12 @@ api.get('/me', wrapAsync(async (req, res) => {
 }));
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
+// Identity ALWAYS comes from the cookie (Samagama session). The client must
+// never be allowed to supply the email in the body or query — that would let
+// any logged-in student impersonate any other student on all vibe/standup/spa/
+// share/announcements/achievements endpoints (IDOR).
 async function vibeStudent(req) {
-  const email = normalizeEmail(req.body?.email || req.query.email) || await studentEmailFromRequest(req);
+  const email = await studentEmailFromRequest(req);
   if (!email) return null;
   return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
 }
@@ -721,6 +725,9 @@ api.post('/share/card', wrapAsync(async (req, res) => {
 
 // Every share and download is logged so the admin can see who posts, how often,
 // and which achievements are actually worth posting.
+// Dedup: at most one event per (student, achievement, platform) per 60s to
+// prevent rapid-fire metric inflation via repeated API calls.
+const SHARE_COOLDOWN_MS = 60_000;
 api.post('/share/track', wrapAsync(async (req, res) => {
   const { achId, platform, captionEdited, captionChars } = req.body || {};
   if (!achId || !['linkedin', 'whatsapp', 'download', 'copy', 'native'].includes(platform)) {
@@ -731,6 +738,11 @@ api.post('/share/track', wrapAsync(async (req, res) => {
   if (!achievementsAccess(student).sharing) return res.status(403).json({ error: 'Sharing is off' });
   const ach = await Achievement.findOne({ studentId: String(student._id), achId }).lean();
   if (!ach) return res.status(404).json({ error: 'Achievement not found' });
+  const recentDuplicate = await ShareEvent.findOne({
+    studentId: String(student._id), achId, platform,
+    at: { $gte: new Date(Date.now() - SHARE_COOLDOWN_MS) }
+  }).lean();
+  if (recentDuplicate) return res.json({ ok: true, dedup: true });
   await ShareEvent.create({
     studentId: String(student._id), email: student.email, name: student.name,
     achId, verifyId: ach.verifyId || '', title: ach.title,
