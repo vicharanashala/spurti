@@ -54,7 +54,8 @@ export async function buildSpaState(student) {
     activity: prog.activity,
     hasActivity: (prog.learnValidated || 0) + (prog.teachValidated || 0) > 0,
     ...calc,
-    creditedSp: calc.learn.credited * CONFIG.learnUnit + calc.teach.credited * CONFIG.teachUnit,
+    creditedSp: Math.min(calc.learn.credited, CONFIG.learnCap) * CONFIG.learnUnit
+      + Math.min(calc.teach.credited, CONFIG.teachCap) * CONFIG.teachUnit,
     maxSp: MAX_SPA_SP,
     config: CONFIG
   };
