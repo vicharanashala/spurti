@@ -107,7 +107,7 @@ const QUERY_UNIT = 5;
 // the delete-and-rebuild (else the wipe erases them every run). 'manual' = ViBe/
 // standup commitment SP (stake debits + wins) AND admin manual awards; 'peer_faq' =
 // peer-review FAQ awards. We fold their deltas back into each student's balance.
-const PRESERVED_CATS = ['manual', 'peer_faq'];
+const PRESERVED_CATS = ['manual', 'peer_faq', 'reflection'];
 
 const isMandatory = (t) => /stand|orientation/i.test(t) && !/breakout|weekend|nptel|special|support|non[- ]?mandatory/i.test(t);
 const tier = (pct) => { pct = Math.min(100, pct); return pct >= 90 ? 10 : pct >= 75 ? 5 : pct >= 50 ? 3 : 0; };

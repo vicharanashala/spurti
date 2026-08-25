@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
-import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
+import { ALLOW_STUDENT_SEARCH, DEV_AUTH_ENABLED, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
@@ -19,6 +19,16 @@ import { buildStandupState, placeStandup, settleStandupDemo } from './services/s
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 import { buildSpaState } from './services/spa.js';
 import { buildTrajectoryState } from './services/trajectory.js';
+import {
+  getReflectionWeekStatus,
+  getMyReflection,
+  listReflections,
+  submitReflection,
+  voteReflection,
+  toggleAppreciation
+} from './services/reflectionService.js';
+import ReflectionVote from './models/ReflectionVote.js';
+import Reflection from './models/Reflection.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -147,6 +157,15 @@ function parseCookies(header = '') {
   }).filter(Boolean));
 }
 
+async function studentEmailFromDevAuth(req) {
+  if (!DEV_AUTH_ENABLED) return null;
+  const cookies = parseCookies(req.headers.cookie || '');
+  const devStudentId = String(cookies.dev_student_id || '').trim();
+  if (!mongoose.isValidObjectId(devStudentId)) return null;
+  const student = await Student.findOne({ _id: devStudentId, status: 'active', email: /@dummy\.test$/i }).lean();
+  return student ? normalizeEmail(student.email) : null;
+}
+
 // Validate the student's Samagama session by forwarding their chatengine_token
 // cookie to Samagama's internal auth endpoint. Returns the email on success.
 async function getSamagamaUser(chatengineToken) {
@@ -164,6 +183,10 @@ async function getSamagamaUser(chatengineToken) {
 }
 
 async function studentEmailFromRequest(req) {
+  if (DEV_AUTH_ENABLED) {
+    const devEmail = await studentEmailFromDevAuth(req);
+    if (devEmail) return devEmail;
+  }
   const cookies = parseCookies(req.headers.cookie || '');
   const data = await getSamagamaUser(cookies.chatengine_token);
   // Samagama's /api/auth/me nests the user as { user: { email, ... } };
@@ -280,10 +303,36 @@ api.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 api.get('/config', (_req, res) => res.json({
   allowStudentSearch: ALLOW_STUDENT_SEARCH,
+  devAuthEnabled: DEV_AUTH_ENABLED,
   survey: surveyPublic(SURVEY),
   poll2: surveyPublic(POLL2),
   poll3: surveyPublic(POLL3)
 }));
+
+api.get('/dev-auth/students', async (req, res) => {
+  if (!DEV_AUTH_ENABLED) return res.status(404).json({ error: 'Not found' });
+  const students = await Student.find({ status: 'active', email: /@dummy\.test$/i })
+    .sort({ name: 1 })
+    .lean()
+    .select('name email');
+  res.json({ students: students.map(s => ({ id: String(s._id), name: s.name, email: s.email })) });
+});
+
+api.post('/dev-auth/select', async (req, res) => {
+  if (!DEV_AUTH_ENABLED) return res.status(404).json({ error: 'Not found' });
+  const studentId = String(req.body?.studentId || '').trim();
+  if (!mongoose.isValidObjectId(studentId)) return res.status(400).json({ error: 'Invalid studentId' });
+  const student = await Student.findOne({ _id: studentId, status: 'active', email: /@dummy\.test$/i }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  res.cookie('dev_student_id', String(student._id), { httpOnly: true, sameSite: 'lax', path: '/' });
+  res.json({ ok: true });
+});
+
+api.post('/dev-auth/logout', async (req, res) => {
+  if (!DEV_AUTH_ENABLED) return res.status(404).json({ error: 'Not found' });
+  res.clearCookie('dev_student_id', { path: '/' });
+  res.json({ ok: true });
+});
 
 api.get('/me', async (req, res) => {
   const email = await studentEmailFromRequest(req);
@@ -292,6 +341,98 @@ api.get('/me', async (req, res) => {
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
   res.json({ authenticated: true, profile: await studentPayload(student) });
+});
+
+api.get('/reflection/week', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  res.json(await getReflectionWeekStatus());
+});
+
+api.get('/reflection/me', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  const reflection = await getMyReflection(email);
+  if (!reflection) return res.json({ reflection: null });
+  res.json({ reflection });
+});
+
+api.post('/reflection/submit', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const reflection = await submitReflection(email, req.body || {});
+    res.json({ reflection });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+api.get('/reflection/list', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const reflections = await listReflections();
+    const weekStatus = await getReflectionWeekStatus();
+    const weekLabel = weekStatus.weekLabel;
+    let voted = [];
+    if (weekLabel) {
+      const votes = await ReflectionVote.find({ voterEmail: email, weekLabel }).lean();
+      voted = votes.map(v => String(v.reflectionId));
+    }
+    res.json({ reflections, voted });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+api.post('/reflection/vote', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const result = await toggleAppreciation(email, req.body?.reflectionId);
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+// GET finalized reflection results (winners). Returns winners only for
+// weeks that have status === 'finalized'. Identities are NOT exposed until
+// the week is finalized — enforced server-side.
+api.get('/reflection/results', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const weekStatus = await getReflectionWeekStatus();
+    if (!weekStatus.weekLabel || weekStatus.phase !== 'finalized') {
+      return res.json({ available: false, message: 'Results are not available until the week is finalized.' });
+    }
+    const weekLabel = weekStatus.weekLabel;
+    // reuse the same selection logic as finalizer: published reflections with at least 1 appreciation
+    const topReflections = await Reflection.find({ weekLabel, moderationStatus: 'published', appreciationCount: { $gte: 1 } })
+      .sort({ appreciationCount: -1, submittedAt: 1 }).limit(5).lean();
+
+    // map reflections to safe public payload, resolving student names
+    const winners = [];
+    for (const r of topReflections) {
+      // find student record for public name (match email or alternateEmail)
+      const student = await Student.findOne({ $or: [{ email: r.email }, { alternateEmail: r.email }] }).lean();
+      const publicInfo = student ? publicStudent(student) : { name: 'Unknown Student' };
+      winners.push({
+        id: String(r._id),
+        learnedText: r.learnedText,
+        challengedText: r.challengedText,
+        improvementText: r.improvementText,
+        appreciationCount: Number(r.appreciationCount || 0),
+        student: publicInfo
+      });
+    }
+
+    res.json({ available: true, weekLabel, winners });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Internal server error' });
+  }
 });
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
