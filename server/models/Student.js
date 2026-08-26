@@ -27,7 +27,11 @@ const studentSchema = new mongoose.Schema({
   poll2CompletedAt: { type: Date, default: null },
   // Third pop-up ("poll3") — dashboard usability survey. Same mechanism, own flag.
   poll3Completed: { type: Boolean, default: false, index: true },
-  poll3CompletedAt: { type: Date, default: null }
+  poll3CompletedAt: { type: Date, default: null },
+  // The last time the student actually OPENED the Achievements tab. Anything
+  // earned after this is still new to them, which is what the tab badge counts.
+  // Null means never opened, so everything they hold is unseen.
+  achievementsSeenAt: { type: Date, default: null }
 }, { timestamps: true });
 
 studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });

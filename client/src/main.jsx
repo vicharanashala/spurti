@@ -6,7 +6,16 @@ import './styles.css';
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
 
+// /spurti/verify/SPRT-XXXX-XXXX is a public page — the QR on a shared card
+// resolves here, and it must render for someone who has never logged in.
+const VERIFY_CODE = (window.location.pathname.match(/\/verify\/([A-Za-z0-9-]+)\/?$/) || [])[1] || null;
+
 function App() {
+  if (VERIFY_CODE) return <VerifyView code={VERIFY_CODE.toUpperCase()} />;
+  return <AppShell />;
+}
+
+function AppShell() {
   const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('admin') === '1' ? 'admin-login' : 'landing');
   const [profile, setProfile] = useState(null);
   const [excused, setExcused] = useState(null);
@@ -381,6 +390,12 @@ function StudentView({ profile, onBack }) {
   const [commitPhase, setCommitPhase] = useState('vibe');
   const { student } = profile;
   const goToCommitment = ph => { setCommitPhase(ph); setTab('vibe'); };
+  // Fetched up here rather than inside the panel because the server decides who
+  // gets the tab at all — until it answers `visible`, the tab strip omits it.
+  const [ach, markAchievementsSeen] = useAchievements(student.email);
+  const unseenAchievements = ach?.counts?.unseen || 0;
+  // Opening the tab is what counts as seeing them, wherever it is opened from.
+  const selectTab = key => { setTab(key); if (key === 'achievements') markAchievementsSeen(); };
   return (
     <main className="page compact">
       <header className="topbar">
@@ -392,19 +407,29 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
+      <Announcements student={student} />
+      <StudentPulse
+        profile={profile}
+        newAchievements={unseenAchievements}
+        canShareAchievements={!!ach?.sharing}
+        onOpenAchievements={() => selectTab('achievements')}
+      />
+      <Tabs tab={tab} setTab={selectTab} tabs={[['bank','SP Bank'],
         ['journey','My Journey'],
         ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
         ['spa','SPA Points'],
         ['reflection','Reflection Wall'],
-        ['leaderboard','Leaderboard']]} />
+        ...(ach?.visible ? [['achievements','Achievements', unseenAchievements]] : []),
+        ['leaderboard','Leaderboard'],
+        ['faq','FAQ']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
       {tab === 'reflection' && <ReflectionWall />}
+      {tab === 'achievements' && ach?.visible && <AchievementsPanel student={student} data={ach} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'faq' && <FaqTab />}
     </main>
   );
 }
@@ -491,6 +516,32 @@ function SpaModule({ student }) {
   );
 }
 
+function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
+  const [type, setType] = useState('overall');
+  const rows = type === 'overall' ? overall : group;
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Leaderboard</h2>
+        <select value={type} onChange={e => setType(e.target.value)}>
+          <option value="overall">Overall Leaderboard</option>
+          <option value="my_onboarding_group">My Onboarding Group</option>
+        </select>
+      </div>
+      {type === 'my_onboarding_group' && groupLabel &&
+        <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
+      <table className="table">
+        <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
+        <tbody>{rows.map(row => (
+          <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
+            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </section>
+  );
+}
+
 function LevelStatus({ student }) {
   const tier = String(student.trophyLeague || 'Bronze').split(' ')[0].toLowerCase();
   return (
@@ -525,28 +576,405 @@ function LevelStatus({ student }) {
   );
 }
 
-function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
-  const [type, setType] = useState('overall');
-  const rows = type === 'overall' ? overall : group;
+// ---- Achievements -----------------------------------------------------------
+// One tile per board (plus milestones); opening a tile reveals every instance,
+// since a weekly win carries its week and is separately shareable. Locked
+// milestones show what's left to go so the tab is a goal list, not just a shelf.
+// `visible` and `canShare` come from the server's env switches — the client never
+// decides either, so pulling the feature back is a .env edit and a restart.
+function useAchievements(email) {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/achievements?email=${encodeURIComponent(email)}`)
+      .then(r => r.json())
+      .then(d => { if (live) setData(d); })
+      .catch(() => { if (live) setData({ visible: false, groups: [], locked: [], counts: {} }); });
+    return () => { live = false; };
+  }, [email]);
+  // Clearing the badge is optimistic: the student HAS looked, so it should go
+  // the moment they click rather than after a round trip. If the POST fails the
+  // count simply comes back on the next load — nothing is lost either way.
+  const markSeen = () => {
+    setData(d => (d?.counts?.unseen ? { ...d, counts: { ...d.counts, unseen: 0 } } : d));
+    fetch(`${API}/achievements/seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    }).catch(() => {});
+  };
+  return [data, markSeen];
+}
+
+function AchievementsPanel({ student, data }) {
+  const [openKey, setOpenKey] = useState(null);
+  const [sharing, setSharing] = useState(null);
+
+  if (!data) return <section className="panel">Loading your achievements…</section>;
+
+  const me = { name: student.name, totalSp: student.totalSp, level: student.level, ...(data.student || {}), email: student.email };
+  const canShare = !!data.sharing;
+  const groups = data.groups || [];
+  const locked = data.locked || [];
+
+  return (
+    <div className="ach">
+      <section className="panel ach-head">
+        <div className="ach-counts">
+          <div><strong>{data.counts?.earned || 0}</strong><span>earned</span></div>
+          <div><strong>{data.counts?.thisWeek || 0}</strong><span>this week</span></div>
+          <div><strong>{data.counts?.boards || 0}</strong><span>boards placed on</span></div>
+        </div>
+        <p className="muted">
+          Placing 1st, 2nd or 3rd on any leaderboard earns a permanent card — a new one each week you take it.
+          Open a tile to see every time you placed{canShare ? ', and share any of them' : ''}.
+        </p>
+        {/* Said plainly because the look of these cards HAS already changed once
+            and will again. What is permanent is the achievement and its verify
+            code, not the artwork — worth stating before someone assumes the
+            picture they downloaded is the record. */}
+        <p className="muted ach-note">
+          The look of the cards may change from time to time as we improve the design. Your achievements
+          and their verify links stay exactly as they are — only the artwork is refreshed.
+        </p>
+      </section>
+
+      {groups.length === 0 && locked.length === 0 && (
+        <section className="panel empty"><p className="muted">No achievements yet. Place on any leaderboard, or hit a milestone, and your first card lands here.</p></section>
+      )}
+
+      <div className="ach-grid">
+        {groups.map(g => (
+          <AchievementTile
+            key={g.key} group={g} me={me} canShare={canShare}
+            open={openKey === g.key}
+            onToggle={() => setOpenKey(openKey === g.key ? null : g.key)}
+            onShare={setSharing}
+          />
+        ))}
+        {locked.map(l => (
+          <div className="ach-tile locked" key={l.key}>
+            <div className="ach-medal">{l.icon}</div>
+            <div className="ach-body">
+              <h4>{l.title}</h4>
+              <span className="ach-when">Locked · {l.remaining}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {sharing && <ShareModal item={sharing} me={me} onClose={() => setSharing(null)} />}
+    </div>
+  );
+}
+
+const PLACE_WORD = { 1: '1st', 2: '2nd', 3: '3rd' };
+
+function AchievementTile({ group, me, open, onToggle, onShare, canShare }) {
+  const latest = group.items[0];
+  const isRank = group.kind === 'rank';
+  return (
+    <div className={`ach-tile${open ? ' open' : ''}`}>
+      <button className="ach-face" onClick={onToggle} aria-expanded={open}>
+        <div className="ach-medal">{group.icon}</div>
+        <div className="ach-body">
+          <h4>{group.title}</h4>
+          <span className="ach-when">
+            {isRank
+              ? `Best: ${PLACE_WORD[group.bestPlace] || '—'} · ${group.items.length} time${group.items.length === 1 ? '' : 's'}`
+              : latest.period}
+          </span>
+        </div>
+        <span className="ach-caret">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <ul className="ach-items">
+          {group.items.map(item => (
+            <li key={item.achId}>
+              <span className="ach-item-medal">{item.icon}</span>
+              <span className="ach-item-text">
+                <b>{item.period}</b>
+                {item.detail ? <em>{item.detail}</em> : null}
+              </span>
+              {canShare && <button className="ach-share" onClick={() => onShare(item)}>Share</button>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Renders the actual PNG the student posts, and hands them the two ways out:
+// LinkedIn, or just the file. Each one is logged. WhatsApp was dropped — the
+// point of these cards is a public, checkable post, and a forward to a chat
+// thread is neither.
+// navigator.clipboard is secure-context only (https or localhost), so on any
+// plain-http origin it is simply absent and a copy would fail silently. The
+// textarea trick still works everywhere.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
+  } catch { /* fall through */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch { return false; }
+}
+
+function ShareModal({ item, me, onClose }) {
+  const [png, setPng] = useState(null);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const verifyUrl = `${window.location.origin}${APP_BASE}/verify/${item.verifyId}`;
+  const [caption, setCaption] = useState('');
+  // Posting a card is a four-step job on LinkedIn and every step is easy to skip
+  // — most of all uploading the image, without which the post is a bare link.
+  // The tick is not paperwork: it is there to make the steps get read once.
+  const [readSteps, setReadSteps] = useState(false);
+
+  useEffect(() => {
+    import('./shareCard.js').then(m => {
+      const text = m.shareCaption(item, verifyUrl);
+      setCaption(text);
+      setGenerated(text);
+    });
+  }, [item.achId]);
+
+  useEffect(() => {
+    let live = true;
+    import('./shareCard.js')
+      .then(m => m.renderCard(item, me, verifyUrl))
+      .then(url => {
+        if (!live) return;
+        setPng(url);
+        // Hand the card to the server once, so the verify link carries it as a
+        // preview image. Best-effort: a failure here only costs the preview.
+        fetch(`${API}/share/card`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: me.email, achId: item.achId, dataUrl: url })
+        }).catch(() => {});
+      })
+      .catch(() => { if (live) setError('Could not draw the card. Try again.'); });
+    return () => { live = false; };
+  }, [item.achId]);
+
+  // `generated` is the caption as we wrote it; comparing against what's in the
+  // box at share time is the only way to know whether students take our framing
+  // or write their own.
+  const [generated, setGenerated] = useState('');
+  const track = (platform) => fetch(`${API}/share/track`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: me.email, achId: item.achId, platform,
+      captionEdited: !!generated && caption !== generated,
+      captionChars: caption.length
+    })
+  }).catch(() => {});
+
+  // Two ways to get the picture into the post without the student handling a file:
+  //  1. the share sheet, which takes the image itself — phones, and the better path
+  //  2. failing that, post the verify link and let the platform expand it into a
+  //     preview of the card (that's what the og:image on /verify/:code is for)
+  // Downloading is a fallback, not the route.
+  const share = async () => {
+    const { dataUrlToFile } = await import('./shareCard.js');
+    const file = png ? dataUrlToFile(png, `spurti-${item.achId.replace(/[:]/g, '-')}.png`) : null;
+
+    // Only phones get the share sheet. Desktop Chrome/Safari also advertise
+    // navigator.share, but there it opens the OS app picker (Mail, AirDrop…),
+    // which is not what someone pressing "Share on LinkedIn" is asking for.
+    const onPhone = navigator.userAgentData?.mobile ?? /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (onPhone && file && navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], text: caption, title: item.title });
+        track('native');
+        return;
+      } catch (err) {
+        if (err?.name === 'AbortError') return;   // they backed out; not a failure
+      }
+    }
+
+    track('linkedin');
+    // LinkedIn cannot be handed post text by URL — it opens an empty composer
+    // whatever you pass. Copying first is what makes the paste possible.
+    const ok = await copyText(caption);
+    setCopied(ok);
+    window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(verifyUrl)}`, '_blank', 'noopener');
+  };
+
+  const justDownload = async () => {
+    const { downloadDataUrl } = await import('./shareCard.js');
+    track('download');
+    if (png) downloadDataUrl(png, `spurti-${item.achId.replace(/[:]/g, '-')}.png`);
+  };
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <section className="modal share-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2>Share your card</h2>
+          <button className="icon" onClick={onClose}>x</button>
+        </div>
+        {error && <p className="muted">{error}</p>}
+        {!png && !error && <p className="muted">Drawing your card…</p>}
+        {png && <img className="share-preview" src={png} alt={`${item.title} — ${item.period}`} />}
+        <div className="caption-box">
+          <div className="caption-head">
+            <b>Your caption</b>
+            <button className="mini-copy" onClick={async () => { track('copy'); setCopied(await copyText(caption)); }}>
+              {copied ? 'Copied ✓' : 'Copy'}
+            </button>
+          </div>
+          <textarea value={caption} onChange={e => { setCaption(e.target.value); setCopied(false); }} rows={12} />
+          <p>LinkedIn always opens an empty box — paste this in with <b>Ctrl+V</b> (<b>Cmd+V</b> on Mac). Edit it first if you like.</p>
+        </div>
+
+        <div className="post-howto">
+          <b>How to post this — read before you click</b>
+          <ol>
+            <li><b>Download the card first.</b> LinkedIn will not pick the picture up on its own; you attach it yourself in a moment.</li>
+            <li>Click <b>Share on LinkedIn</b>. Your caption is copied for you and the composer opens with your verify link already attached.</li>
+            <li><b>Add the card image to the post</b> — the photo button in the composer, then the file you just downloaded. Skip this and your post is only a link.</li>
+            <li><b>Paste the caption</b> (Ctrl+V / Cmd+V).</li>
+            <li><b>Tag us, in this order</b> — the lab first, then Sudarshan sir, then Sakshi. Type
+            <b>@Vicharanashala</b> and pick the lab page, then <b>@Sudarshan Iyengar</b>, then <b>@Sakshi</b>.
+            Picking each one from the dropdown is what makes it a real tag — typed text alone doesn't reach
+            anyone. Tag any other mentors from the lab you worked with as well.
+            <span className="tag-links">
+              <a href="https://www.linkedin.com/company/vicharanashala/" target="_blank" rel="noopener">The lab page →</a>
+              <a href="https://www.linkedin.com/in/sudarshan-iyengar-3560b8145/" target="_blank" rel="noopener">Sudarshan sir's profile →</a>
+              <a href="https://www.linkedin.com/in/sakshivk/" target="_blank" rel="noopener">Sakshi's profile →</a>
+            </span></li>
+          </ol>
+          <label className="ack">
+            <input type="checkbox" checked={readSteps} onChange={e => setReadSteps(e.target.checked)} />
+            <span>I've read the steps — in particular that I add the image myself.</span>
+          </label>
+        </div>
+
+        <div className="share-actions">
+          <button className="secondary" disabled={!png} onClick={justDownload}>Download card</button>
+          <button className="primary" disabled={!png || !readSteps} onClick={share}>Share on LinkedIn</button>
+        </div>
+
+        <p className="muted share-note">
+          On a phone, Share hands the picture straight to LinkedIn and you can skip step 3 — but samagama.in isn't
+          built for small screens, so this is probably a job for a computer. Either way the verify link travels with
+          the post: anyone who clicks it lands on proof the achievement is real.
+        </p>
+      </section>
+    </div>
+  );
+}
+
+// Public credential check behind the QR — no login, and deliberately nothing
+// beyond the name, what was won, and when.
+function VerifyView({ code }) {
+  const [state, setState] = useState({ loading: true });
+  useEffect(() => {
+    fetch(`${API}/verify/${encodeURIComponent(code)}`)
+      .then(r => r.ok ? r.json() : { valid: false })
+      .then(d => setState({ loading: false, ...d }))
+      .catch(() => setState({ loading: false, valid: false }));
+  }, [code]);
+
+  return (
+    <main className="page verify-page">
+      <section className="panel verify-card">
+        {state.loading ? <p className="muted">Checking…</p> : state.valid ? (
+          <>
+            <span className="verify-ok">✓ Verified achievement</span>
+            <div className="verify-medal">{state.icon}</div>
+            <h1>{state.title}</h1>
+            <p className="verify-period">{state.period}</p>
+            <p className="verify-awarded">Awarded to</p>
+            <p className="verify-name">{state.name}</p>
+            <p className="muted">{state.programme}</p>
+            <p className="muted">Awarded {new Date(state.earnedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+            <p className="verify-code">{state.verifyId}</p>
+          </>
+        ) : (
+          <>
+            <span className="verify-bad">Not found</span>
+            <h1>We can't verify this card</h1>
+            <p className="muted">No achievement matches the code <b>{code}</b>. A genuine Spurti card carries a code issued by the system — if this one doesn't resolve, it wasn't issued here.</p>
+          </>
+        )}
+      </section>
+    </main>
+  );
+}
+
+// Curated leaderboard presets → each maps to a cached board (window/category/scope).
+const LB_PRESETS = [
+  { key: 'week-total',        label: 'This Week',                          window: 'week', category: 'total',      scope: 'all' },
+  { key: 'week-total-cohort', label: 'This Week — My Cohort',             window: 'week', category: 'total',      scope: 'cohort' },
+  { key: 'all-total',         label: 'All-Time',                          window: 'all',  category: 'total',      scope: 'all' },
+  { key: 'all-total-cohort',  label: 'All-Time — My Cohort',             window: 'all',  category: 'total',      scope: 'cohort' },
+  { key: 'week-attendance',   label: '🏅 Best Attendance — This Week',    window: 'week', category: 'attendance', scope: 'all' },
+  { key: 'all-attendance',    label: '🏅 Best Attendance — All-Time',     window: 'all',  category: 'attendance', scope: 'all' },
+  { key: 'week-poll',         label: '🎯 Poll Champions — This Week',      window: 'week', category: 'poll',       scope: 'all' },
+  { key: 'all-poll',          label: '🎯 Poll Champions — All-Time',       window: 'all',  category: 'poll',       scope: 'all' },
+  { key: 'week-spa',          label: '🧑‍🏫 Top SPA — This Week',           window: 'week', category: 'spa',        scope: 'all' },
+  { key: 'all-spa',           label: '🧑‍🏫 Top SPA — All-Time',            window: 'all',  category: 'spa',        scope: 'all' },
+  { key: 'week-query',        label: '💬 Top Query Answerers — This Week', window: 'week', category: 'query',      scope: 'all' },
+  { key: 'all-query',         label: '💬 Top Query Answerers — All-Time',  window: 'all',  category: 'query',      scope: 'all' },
+];
+
+function LeaderboardPanel({ student }) {
+  const [presetKey, setPresetKey] = useState('week-total');
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const preset = LB_PRESETS.find(p => p.key === presetKey);
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    fetch(`${API}/leaderboard/board?window=${preset.window}&category=${preset.category}&scope=${preset.scope}&email=${encodeURIComponent(student.email)}`)
+      .then(r => r.json())
+      .then(d => { if (live) { setData(d); setLoading(false); } })
+      .catch(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [presetKey, student.email]);
+  const rows = data?.rows || [];
+  const me = data?.me || null;
+  const meOutside = me && !rows.some(r => r.studentId === student._id);
   return (
     <section className="panel">
       <div className="panel-head">
         <h2>Leaderboard</h2>
-        <select value={type} onChange={e => setType(e.target.value)}>
-          <option value="overall">Overall Leaderboard</option>
-          <option value="my_onboarding_group">My Onboarding Group</option>
+        <select value={presetKey} onChange={e => setPresetKey(e.target.value)}>
+          {LB_PRESETS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
         </select>
       </div>
-      {type === 'my_onboarding_group' && groupLabel &&
-        <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
-      <table className="table">
-        <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
-        <tbody>{rows.map(row => (
-          <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
-            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
-          </tr>
-        ))}</tbody>
-      </table>
+      {preset.window === 'week' && data?.weekLabel && <p className="muted lb-week">Week of {data.weekLabel} · resets Monday</p>}
+      {loading ? <p className="muted">Loading…</p> : rows.length === 0 ? <p className="muted">No entries yet.</p> : (
+        <>
+          <table className="table lb-table">
+            <thead><tr><th>Rank</th><th>Name</th><th>Level</th><th>SP</th></tr></thead>
+            <tbody>{rows.map(r => (
+              <tr key={r.studentId} className={r.studentId === student._id ? 'current-student' : ''}>
+                <td>{r.rank}</td><td>{r.name}</td><td>L{r.level}</td><td>{r.sp}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+          {me && (
+            <div className="lb-me">
+              You: <b>#{me.rank}</b> · {me.sp} SP
+              {meOutside && <span className="muted"> — {preset.window === 'week' ? 'earn more this week to climb' : 'keep going to climb'}</span>}
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }
@@ -619,12 +1047,84 @@ function TrajectoryModal({ student, onClose }) {
   );
 }
 
-function StudentPulse({ profile }) {
+// Programme announcements with read-tracking. Unread notices render as a
+// highlighted card with a "Got it" button — that ack is the read signal the
+// team tracks. Read ones fold away behind a toggle so the page stays clean,
+// and the whole section disappears when there are no notices at all.
+function Announcements({ student }) {
+  const [data, setData] = useState(null);
+  const [showRead, setShowRead] = useState(false);
+  const load = async () => {
+    try {
+      const r = await fetch(`${API}/announcements?email=${encodeURIComponent(student.email)}`);
+      if (r.ok) setData(await r.json());
+    } catch { /* a failed notice fetch must never break the dashboard */ }
+  };
+  useEffect(() => { load(); }, [student.email]);
+  if (!data || !data.announcements?.length) return null;
+
+  const unread = data.announcements.filter(a => !a.acked);
+  const read = data.announcements.filter(a => a.acked);
+  const ack = async id => {
+    await fetch(`${API}/announcements/${id}/ack`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: student.email })
+    });
+    load();
+  };
+  const fmt = d => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+
+  return (
+    <section className="panel announcements">
+      <div className="ann-head">
+        <h2>📣 Announcements{unread.length > 0 && <em className="ann-badge">{unread.length} new</em>}</h2>
+        {read.length > 0 && (
+          <button className="ann-toggle" onClick={() => setShowRead(s => !s)}>
+            {showRead ? 'Hide read' : `Read earlier (${read.length})`}
+          </button>
+        )}
+      </div>
+      {unread.map(a => (
+        <article key={a.id} className="ann-item ann-new">
+          <header><strong>{a.title}</strong><time>{fmt(a.postedAt)}</time></header>
+          <p>{a.body}</p>
+          <button className="primary ann-ack" onClick={() => ack(a.id)}>Got it ✓</button>
+        </article>
+      ))}
+      {unread.length === 0 && <p className="muted ann-caughtup">You’re all caught up.</p>}
+      {showRead && read.map(a => (
+        <article key={a.id} className="ann-item ann-done">
+          <header><strong>{a.title}</strong><time>{fmt(a.postedAt)} · read ✓</time></header>
+          <p>{a.body}</p>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function StudentPulse({ profile, newAchievements = 0, canShareAchievements = false, onOpenAchievements }) {
   const { student, cohort, transactions } = profile;
   const [showTraj, setShowTraj] = useState(false);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
+  const many = newAchievements > 1;
   return (
     <>
+      {/* Milestones are settled on read, so a card can come into existence during
+          the very page load the student is looking at. Nothing else on the page
+          would tell them: the tab strip sits lower and reads identically whether
+          or not something new is waiting. */}
+      {newAchievements > 0 && onOpenAchievements && (
+        <button className="ach-nudge" onClick={onOpenAchievements}>
+          <span className="ach-nudge-icon" aria-hidden="true">🎖️</span>
+          <span className="ach-nudge-text">
+            <strong>{newAchievements} new achievement{many ? 's' : ''}</strong>
+            <em>{canShareAchievements
+              ? `See ${many ? 'them' : 'it'} and share ${many ? 'them' : 'it'}`
+              : `See ${many ? 'them' : 'it'} in your Achievements tab`}</em>
+          </span>
+          <span className="ach-nudge-go" aria-hidden="true">→</span>
+        </button>
+      )}
       <section className="pulse-grid">
         <div className="pulse-card progress-card">
           <span>Standing</span>
@@ -660,8 +1160,61 @@ function Sparkline({ points }) {
   );
 }
 
+// Student-facing FAQ — reflects the CURRENT SP rules (banded attendance/poll,
+// SPA, query answering, ViBe commitments, positive-only). Keep in sync with the
+// live rubric; edit this array to add/change questions.
+const FAQ_ITEMS = [
+  { q: 'What are Spurti Points (SP)?', a: 'SP are engagement points — a live signal of how consistently you take part in the programme, kept completely separate from your academic marks. Every active intern begins with 100 SP on their official start date, a base "learning energy" that everyone receives equally. From there your balance grows as you join standups, do the session polls, teach and learn from peers, answer queries, and work through ViBe courses. A high SP reflects steady participation and consistency — not how you performed on any exam.' },
+  { q: 'How do I earn SP?', a: 'There are five live sources, and each appears as its own category in your SP Bank: (1) Attendance at the daily standup, (2) the session Polls, (3) SPA — peer teaching and learning endorsements, (4) answering other students’ Queries, and (5) ViBe course Commitments. The system is positive-first: you gain SP for taking part, and most categories can never reduce your balance. The more consistently you engage across these, the higher your SP climbs.' },
+  { q: 'How is attendance SP calculated?', a: 'For each standup we measure the share of the session’s official time-window that you were present, then award it in bands: 90% or more → +10 SP, 75–89% → +5, 50–74% → +3, and below 50% → 0. There is no negative attendance SP — the lowest outcome is simply 0, never a deduction. For example, in a 60-minute window, staying about 54 minutes or more earns the full +10, roughly 45 minutes earns +5, and about 30 minutes earns +3.' },
+  { q: 'How does attendance work on the evening quiz standups (Spandan)?', a: 'The evening standups now run as a live quiz on the Spandan classroom, and there is no separate "join / leave" time recorded there. So your attendance for those sessions is measured from how many of the launched poll questions you answer correctly. Answering about 60% of the questions correctly counts as a full 60-minute session (the top band), and it scales down proportionally from there before the same 10/5/3/0 bands are applied. In short: genuinely showing up and engaging with the quiz is what earns your attendance now — you can’t idle in the background and still get credit.' },
+  { q: 'How is poll SP calculated?', a: 'Poll SP rewards correctness, measured relative to the day’s top scorer: your poll score is taken as a percentage of the highest scorer that day, and that percentage is banded 10/5/3/0. This means simply clicking through answers is not enough — accuracy is what counts, and the bar automatically flexes with how hard the quiz was on a given day, so an unusually tough night doesn’t unfairly punish everyone.' },
+  { q: 'What are SPA points?', a: 'SPA is the peer-teaching activity, and it rewards both learning from peers and teaching them. You earn +5 SP for each question you validly learn, capped at 50 SP (that is, up to 10 questions), and +8 SP for each peer you validly teach, capped at 30 SP. Only endorsements that pass validation count toward your SP — unvalidated or flagged ones do not. Integrity is enforced: if fraud is confirmed or an audit is failed, a penalty is applied to your SP, so it pays to be genuine.' },
+  { q: 'How do I earn SP for answering queries?', a: 'When you answer another student’s question (a peer query) with a real, useful answer, you earn +5 SP for each distinct query you help with, up to a maximum of 200 SP from this source overall. Answering your own question does not count, and answers that admins reject or mark as low-quality / unworthy earn nothing. The goal is genuine peer help — quality and effort, not volume — so posting shallow or copied answers to many queries will not build SP.' },
+  { q: 'What are ViBe commitments?', a: 'ViBe lets you make a commitment on your own learning: you stake some of your current SP on reaching a target completion percentage in a course by a deadline you choose. If you hit that goal in time, you win SP; if you miss it, you lose the amount you staked. It is entirely optional — a motivation tool that puts a bit of "skin in the game" behind a goal you set for yourself, so use it when you want an extra push to finish something.' },
+  { q: 'What is My Journey, and what is the 3,600-minute goal?', a: 'My Journey brings your progress across the four programme tracks — Standups, ViBe, SPA and Projects — together in one view. For standups, the target is 3,600 cumulative attended minutes (roughly 60 sessions of about 60 minutes each). You can set a personal target date for each track to pace yourself, and the standup progress bar shows the minutes you have achieved against the 3,600 required. Once you reach 3,600 minutes the goal is marked as achieved and you no longer need to set a date for it — you’ve completed that track’s attendance goal.' },
+  { q: 'Can my SP go down?', a: 'For everyday activity, no. Attendance and polls only ever add SP — their floor is 0 — so a day with low attendance or a weak poll simply earns less, never a deduction. SP decreases in only two specific situations: if you lose a ViBe stake you chose to make, or if an SPA integrity penalty applies (confirmed fraud or a failed audit). Spurti is deliberately built to reward participation and recovery, not to punish an ordinary off day, so one quiet session will not undo your progress.' },
+  { q: 'What is the SP Bank?', a: 'The SP Bank is your complete, transparent ledger of every SP change. Each line shows the date and time, the category, the reason for the change, the amount, and your running balance immediately afterwards. Reading it session by session tells the full story of how your total was built, rather than just showing a final number. It is also the first place to look whenever a figure seems off — the per-line reasons usually explain exactly what happened.' },
+  { q: 'How should I read my SP ledger?', a: 'Go through it session by session rather than staring only at the final total. For each date, check whether you received attendance SP, poll SP, and any SPA or query SP, note the reason text, and look at the balance after each change. The ledger is designed to be self-explanatory — most questions like "why is my SP this number?" are answered simply by reading the reasons line by line.' },
+  { q: 'What are the leaderboard and levels?', a: 'The leaderboard ranks active students by total SP, and the levels / leagues reflect where you currently stand. Both are engagement signals — they show consistency and participation, not academic ability, so a higher rank means someone has been steadily involved, not necessarily "better" at the subject. Because scores refresh periodically, rankings can move around; the healthiest approach is to focus on your own steady progress rather than day-to-day position changes.' },
+  { q: 'I did something but my SP hasn’t updated — why?', a: 'Scores are recomputed on a schedule (roughly every six hours), not instantly, so new attendance, poll results, endorsements, or answered queries can take some time to appear. Some data also has to be processed first before it can be scored. Give it a little time; if a genuine change still hasn’t shown up after about a day, then it’s worth raising a correction request.' },
+  { q: 'Why is a session missing from my SP?', a: 'The usual reasons are: the session happened before your official internship start date (those never count for you), you were marked excused for that period, the email you joined with doesn’t match your registered account, or that day’s data simply hasn’t been processed yet. Check your SP Bank for that specific date first. If a session you genuinely attended is still missing after processing, raise a correction with the date, session label, and the email you used.' },
+  { q: 'Why did my SP change by a different amount than I expected?', a: 'SP is calculated category by category and then added together, so a single day can combine, say, a full +10 attendance, a poll band, and some SPA or query SP. Because of this, your net for a day may look surprising until you break it down. Open the SP Bank, read each line’s reason for that date, and the per-category detail will almost always account for the total.' },
+  { q: 'How is SP different from marks?', a: 'Marks measure academic performance on assessed tasks; SP measures engagement and consistency in the learning process. You can have strong marks but low SP if you don’t participate steadily, or modest marks but high SP if you attend, attempt the quizzes, teach peers, and stay involved. Both matter, but they answer different questions — Spurti exists to make the engagement side visible early, while it can still be corrected.' },
+  { q: 'I joined with a different email — what should I do?', a: 'Always join sessions and quizzes with your registered programme email; otherwise your attendance and poll records may not link to your account and can appear as missing. If you have already used a different email, ask the team to add it as an alternate email on your record so those sessions attach correctly. Keeping to a single registered email everywhere is the simplest way to avoid mismatches.' },
+  { q: 'How do I request an SP correction?', a: 'Raise a request with enough detail to verify it quickly: your name, your registered email (and any alternate email), the session date and label, the category involved (Attendance / Poll / SPA / Query / ViBe), what you expected versus what you actually see, and any supporting evidence such as a screenshot, your join and leave time, or course-progress proof. The team checks the system records first, so accurate dates and session labels make a correction far easier and faster to resolve.' },
+  { q: 'Why can’t I search my SP directly?', a: 'For privacy and security, direct student search is disabled in production. Instead, open Spurti from your Samagama dashboard — the same login you already use — and it will show only your own record. This is what ensures no one can look up another student’s SP, and it’s why you normally reach Spurti through the official programme link rather than searching by name or email.' },
+];
+
+function FaqTab() {
+  const [open, setOpen] = useState(0);
+  return (
+    <section className="panel">
+      <div className="panel-head"><h2>FAQ</h2></div>
+      <p className="muted faq-intro">Tap a question to see the answer.</p>
+      <div className="faq-list">
+        {FAQ_ITEMS.map((item, i) => (
+          <div className={`faq-item ${open === i ? 'open' : ''}`} key={i}>
+            <button className="faq-q" onClick={() => setOpen(open === i ? -1 : i)} aria-expanded={open === i}>
+              <span>{item.q}</span><span className="faq-caret">{open === i ? '–' : '+'}</span>
+            </button>
+            {open === i && <p className="faq-a">{item.a}</p>}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// A tab entry is [key, label] or [key, label, badge]; the badge is only drawn
+// when it is a positive number, so existing callers are untouched.
 function Tabs({ tab, setTab, tabs }) {
-  return <nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>;
+  return <nav className="tabs">{tabs.map(([key, label, badge]) => (
+    <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>
+      {label}
+      {badge > 0 && <span className="tab-badge" aria-label={`${badge} new`}>{badge}</span>}
+    </button>
+  ))}</nav>;
 }
 
 function SpBank({ transactions }) {
@@ -804,6 +1357,12 @@ function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave })
   }
   return (
     <div className="jr-goal">
+      {!goal.pending && goal.progressPct != null && (
+        <>
+          <span className="jr-goal-meta">{metric}</span>
+          <div className="jr-progress"><i style={{ width: `${goal.progressPct}%` }} /></div>
+        </>
+      )}
       <span className={`jr-goal-label ${goal.status === 'missed' ? 'miss' : ''}`}>
         🎯 {goal.status === 'missed' ? `Goal missed — set a new date to ${targetText}` : `Set a target date to ${targetText}`}
       </span>
@@ -1282,7 +1841,8 @@ function AdminView({ admin, auth, onBack }) {
       const id = setInterval(loadActive, 10000);
       return () => clearInterval(id);
     }
-    if (tab === 'analytics' && !analytics) loadAnalytics();
+    // Both tabs read /admin/analytics — the sharing block rides along with it.
+    if ((tab === 'analytics' || tab === 'achievements') && !analytics) loadAnalytics();
   }, [tab]);
 
   return (
@@ -1292,7 +1852,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['achievements','Achievements'], ['students','Students']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -1311,9 +1871,184 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'attendance' && <AdminAttendance data={attendance} onStudent={loadStudent} />}
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
+      {tab === 'achievements' && <AdminAchievements data={analytics?.sharing} reigns={analytics?.reigns} />}
+      {tab === 'analytics' && <PipelineHealth data={analytics?.pipeline} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
+  );
+}
+
+// Achievements & sharing. The organising idea is that a raw share count is a
+// vanity number — it goes up simply because more cards get minted — so every
+// figure here that can be a rate is one, with cards HELD as the denominator.
+// Whether the six-hourly SP pipeline is actually working. This exists because
+// sync-attendance-records failed 31 runs in a row over eight days and the only
+// evidence was one line per run in a 4,700-line log file.
+function PipelineHealth({ data }) {
+  if (!data?.available) return null;
+  const when = (t) => t ? new Date(t).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : 'never';
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Pipeline health</h2>
+        <span className={data.alerting ? 'error' : 'muted'}>
+          {data.alerting ? `${data.alerting} step(s) failing repeatedly` : 'all steps healthy'}
+        </span>
+      </div>
+      <table className="table">
+        <thead><tr><th>Step</th><th>Status</th><th>Consecutive failures</th><th>Last run</th><th>Last ok</th></tr></thead>
+        <tbody>
+          {data.steps.map(s => (
+            <tr key={s.name} className={s.consecutiveFailures >= 2 ? 'step-alert' : ''}>
+              <td>{s.name}</td>
+              <td>{s.status === 'ok' ? 'ok' : <b className="error">failed</b>}</td>
+              <td>{s.consecutiveFailures > 0 ? <b className="error">{s.consecutiveFailures}</b> : '—'}</td>
+              <td>{when(s.lastRun)}</td>
+              <td>{s.lastOk ? when(s.lastOk) : <b className="error">never</b>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function AdminAchievements({ data, reigns }) {
+  if (!data) return <section className="panel empty">Loading achievement data…</section>;
+  const d = (x) => x ? new Date(x).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+  const r = data.reach || {};
+  const pct = (n) => `${n}%`;
+  const hrs = data.medianHoursToShare;
+  const latency = hrs === null || hrs === undefined ? '—'
+    : hrs < 48 ? `${hrs} h` : `${Math.round(hrs / 24)} d`;
+
+  return (
+    <>
+      <section className="panel">
+        <h2>Achievements &amp; sharing</h2>
+        <div className="ach-stats">
+          <div><span>Cards held</span><strong>{data.achievementsHeld}</strong></div>
+          <div><span>Cards shared</span><strong>{data.achievementsShared}</strong><em>{pct(data.shareRatePct)} of held</em></div>
+          <div><span>Share actions</span><strong>{data.totalShares}</strong><em>{data.last7Days} in last 7 days</em></div>
+          <div><span>Students sharing</span><strong>{data.sharers}</strong></div>
+          <div><span>Median earn → share</span><strong>{latency}</strong></div>
+          <div><span>Captions rewritten</span><strong>{pct(data.captionEditedPct)}</strong></div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>By category</h2>
+          <span className="muted">Share rate = distinct cards shared ÷ cards held, so categories that mint more aren't flattered.</span>
+        </div>
+        <table className="table">
+          <thead><tr><th>Category</th><th>Held</th><th>Shared</th><th>Share rate</th><th>Share actions</th><th>Views</th></tr></thead>
+          <tbody>
+            {(data.categories || []).map(c => (
+              <tr key={c.key}>
+                <td>{c.label}</td><td>{c.held}</td><td>{c.sharedCards}</td>
+                <td><b>{pct(c.shareRatePct)}</b></td><td>{c.shares}</td><td>{c.views}</td>
+              </tr>
+            ))}
+            {!(data.categories || []).length && <tr><td colSpan={6} className="muted">No cards issued yet.</td></tr>}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel">
+        <h2>By placing</h2>
+        <p className="muted">Whether a 1st is posted more readily than a 3rd — all three carry the same title, so this is the only place the difference shows.</p>
+        <table className="table">
+          <thead><tr><th>Place</th><th>Held</th><th>Share actions</th><th>Share rate</th></tr></thead>
+          <tbody>
+            {(data.byPlace || []).map(p => (
+              <tr key={p.place}><td>{['', '1st', '2nd', '3rd'][p.place]}</td><td>{p.held}</td><td>{p.shares}</td><td><b>{pct(p.shareRatePct)}</b></td></tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Board reigns</h2>
+          <span className="muted">Who has held the top of each all-time board, and for how long.</span>
+        </div>
+        <p className="muted">
+          An all-time board never settles while the programme runs, so the top spot is recorded as a dated
+          reign rather than an outright title. A reign earns a card once it has lasted <b>7 days</b>; shorter
+          ones are still kept here, which is what makes the churn visible.
+        </p>
+        <div className="ach-stats">
+          <div><span>Leadership changes</span><strong>{reigns?.total ?? 0}</strong></div>
+          <div><span>Median reign</span><strong>{reigns?.medianDays == null ? '—' : `${reigns.medianDays} d`}</strong><em>completed only</em></div>
+          <div><span>Currently reigning</span><strong>{reigns?.current?.length ?? 0}</strong><em>one per board</em></div>
+        </div>
+        <table className="table">
+          <thead><tr><th>Board</th><th>Holder</th><th>From</th><th>To</th><th>Days</th><th>SP</th><th>Card</th></tr></thead>
+          <tbody>
+            {(reigns?.history || []).map((r, i) => (
+              <tr key={i}>
+                <td>{r.board}</td><td>{r.name || '—'}</td><td>{d(r.from)}</td>
+                <td>{r.current ? <b>still reigning</b> : d(r.to)}</td>
+                <td>{r.days}</td><td>{r.sp}</td>
+                <td>{r.awarded ? 'yes' : <span className="muted">too short</span>}</td>
+              </tr>
+            ))}
+            {!(reigns?.history || []).length && <tr><td colSpan={7} className="muted">No one has topped a board yet.</td></tr>}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Reach</h2>
+          <span className="muted">Did the posts get looked at?</span>
+        </div>
+        <div className="ach-stats">
+          <div><span>Verify page views</span><strong>{r.views ?? 0}</strong><em>humans only</em></div>
+          <div><span>Unique viewer-days</span><strong>{r.uniqueViewerDays ?? 0}</strong></div>
+          <div><span>Views per share</span><strong>{r.viewsPerShare ?? 0}</strong></div>
+          <div><span>Crawler hits</span><strong>{r.botViews ?? 0}</strong><em>excluded above</em></div>
+          <div><span>Bad codes</span><strong>{r.notFound ?? 0}</strong></div>
+        </div>
+        {!!(r.byRef || []).length && (
+          <table className="table">
+            <thead><tr><th>Came from</th><th>Views</th></tr></thead>
+            <tbody>{r.byRef.map(x => <tr key={x.ref}><td>{x.ref}</td><td>{x.count}</td></tr>)}</tbody>
+          </table>
+        )}
+        <p className="muted">
+          A viewer-day is one device on one day, counted through a hash that is thrown away nightly — it cannot
+          identify anyone and cannot follow the same person to the next day. Verify-page visitors are members of
+          the public, not study participants, so no IP or cookie is stored.
+        </p>
+      </section>
+
+      <section className="panel">
+        <h2>Where cards go</h2>
+        <div className="ach-stats">
+          {Object.entries(data.byPlatform || {}).map(([k, v]) => (
+            <div key={k}><span>{k}</span><strong>{v}</strong></div>
+          ))}
+          {!Object.keys(data.byPlatform || {}).length && <p className="muted">Nothing shared yet.</p>}
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Top sharers</h2>
+        <table className="table">
+          <thead><tr><th>Name</th><th>Email</th><th>Share actions</th><th>Cards</th><th>Last</th></tr></thead>
+          <tbody>
+            {(data.topSharers || []).map(s => (
+              <tr key={s.email}><td>{s.name}</td><td>{s.email}</td><td>{s.shares}</td><td>{s.achievements}</td>
+                <td>{s.last ? new Date(s.last).toLocaleDateString('en-IN') : '—'}</td></tr>
+            ))}
+            {!(data.topSharers || []).length && <tr><td colSpan={5} className="muted">No shares yet.</td></tr>}
+          </tbody>
+        </table>
+      </section>
+    </>
   );
 }
 

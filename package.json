@@ -2,8 +2,10 @@
   "name": "analysis-summership",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
+    "test": "node --test test/*.test.js",
     "seed": "node server/scripts/seed.js",
     "rebuild": "node server/scripts/rebuild.js",
     "add-students": "node server/scripts/addStudents.js",

@@ -71,7 +71,7 @@ re-inserts the full ledger each run, so re-running never double-counts.
 | `sp-rubric-build.js` | **The scorer.** A+B+base100 bands → `sakshi_spurti`. `APPLY=1` to write. |
 | `sync-spurti-from-sakshi.js` | Mirror `sakshi_spurti.sptransactions` → `chatengine.spledgers` + `User.spPoints`. |
 | `sync-attendance-records.js` | Rebuild `sakshi_spurti.attendancerecords` from `sptransactions`. |
-| `sync-poll-records.js` | Rebuild `sakshi_spurti.pollrecords` from `sptransactions`. |
+| `sync-poll-records.cjs` | Rebuild `sakshi_spurti.pollrecords` from `sptransactions`. Runs from **Sakshi's** `sp-refresh.sh`, not the samagama pipeline — see below. |
 | `zoom-fetch-transcripts.js` | Zoom AI Companion summaries → `zoom_data.summaries`. |
 | `zoom-ingest-all-transcripts.js` | Zoom VTT transcripts → `zoom_data.transcripts`. |
 | `sync-sakshi-zoom-mirror.js` | `zoom_data.*` → `sakshi_spurti.zoom_*` (Sakshi has RW only on her DB). |
@@ -99,5 +99,7 @@ node --max-old-space-size=2048 zoom-update.js --from 2026-06-24 --to 2026-06-27
 node sp-rubric-build.js                 # dry preview
 APPLY=1 OUT_DIR=./sp-runs node sp-rubric-build.js
 # push to the app + records
-node sync-spurti-from-sakshi.js && node sync-attendance-records.js && node sync-poll-records.js
+node sync-spurti-from-sakshi.js
+# attendance + poll records are rebuilt by Sakshi's sp-refresh.sh:
+#   cd ~/spurti && node pipeline/sync-attendance-records.cjs && node pipeline/sync-poll-records.cjs
 ```

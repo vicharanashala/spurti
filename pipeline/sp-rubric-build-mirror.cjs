@@ -80,6 +80,24 @@ const GRACE_DATE = '2026-06-06'; // exceptional: 1 min join = full att + full po
 // the frozen `zoom_polls` mirror (participation) exactly as history has it — so
 // old poll SP is never disturbed. Same date as the evening attendance cutover.
 const SPANDAN_CUTOFF = process.env.SPANDAN_CUTOFF || EVENING_CUTOVER;
+// ── Hybrid attendance (Spandan correctness) from Day 64 ───────────────────────
+// From ATT_HYBRID_CUTOVER the daily standup runs on Spandan with NO Zoom room, so
+// there is no presence feed. Attendance is instead sourced from Spandan poll
+// CORRECTNESS: attendedMinutes = min(60, round(correct/pollsLaunched*100)) -> 60%
+// correct = a full 60-min session, then the same 10/5/3/0 tier on minutes/60.
+// Special non-quiz nights (V-Talks, celebrations) have no polls -> fall back to
+// Zoom presence clipped to their OFFICIAL window (SPECIAL_WINDOW_IST override,
+// since the raw Zoom span overstates it). Day <=63 attendance is untouched.
+// Minutes reach attendancerecords (the 3600-min journey goal) via
+// sync-attendance-records.js parsing the "present X of Y min (Z%)" reason.
+const ATT_HYBRID_CUTOVER = process.env.ATT_HYBRID_CUTOVER || '2026-07-29'; // Day 64
+const ATT_SESSION_MIN = 60;               // each standup session = 60 min (3600 total)
+const SPECIAL_WINDOW_IST = {
+  '2026-07-29': { start: '21:00', end: '22:00' }, // Day 64 Gurupurnima Special
+  // Day 66 V-Talk 06 (31 Jul) is INTENTIONALLY omitted: it was a webinar and its
+  // zoom_attendance has only 3 distinct emails (host/panelists), not the 250
+  // attendees — no per-student data exists to credit. Do not re-add without data.
+};
 const STAFF = new Set([
   'dled@iitrpr.ac.in', 'prakash.hegade@gmail.com',
   'sudarshansudarshan@gmail.com', 'sudarshan@iitrpr.ac.in', 'rajankrsna@gmail.com',
@@ -99,9 +117,29 @@ const SPA_GOOD = ['approved', 'audit_passed'];
 
 // ── Query answering → SP (Pattern A: rubric-recomputed) ──────────────────────
 // +5 SP per DISTINCT peer query a student answered (from
-// act_query_reviews.peer.submittedAnswerHistory), self-answers excluded, no cap.
+// act_query_reviews.peer.submittedAnswerHistory), self-answers excluded.
+// Anti-farming: the +5 is permanent once earned (no clawback on review), but an
+// answer the admin REJECTS (-10) or MARKS UNWORTHY (-5) takes ONE penalty row —
+// only for queries raised on/after QUERY_PEN_QUERY_START. Verdicts settled before
+// QUERY_PAY_STICKY_FROM keep the old no-pay treatment. Total pay capped per student.
 // Answering only — asking a question earns nothing.
-const QUERY_UNIT = 5;
+const QUERY_UNIT = 5, QUERY_CAP = 200;   // +5 SP / distinct query, cap 200 → max 40 queries
+const QUERY_BAD_ACTIONS = ['rejected', 'marked_unworthy'];
+// Penalty for admin-disapproved answers, FORWARD-ONLY — gated on when the QUERY was
+// RAISED (createdAt), not on the verdict date. Answers to queries that entered the
+// system before this date earn nothing when disapproved but never cost anything,
+// however late the admin reviews them; only answers to NEW queries carry the risk.
+// (Team decision 22 Aug: an admin swept 80 old-query verdicts the day the rule
+// launched, which the original verdict-date gate would have penalized — old-query
+// answers were given under the old no-penalty rules, so the query's entry date is
+// the honest boundary.)
+const QUERY_PEN_QUERY_START = '2026-08-22';
+// Verdicts BEFORE this date settled under the old no-pay rule and stay that way;
+// on/after it, pay is sticky (see the query loop). Set to the penalty-launch day
+// so the 21-Aug review sweep withdraws nothing.
+const QUERY_PAY_STICKY_FROM = '2026-08-21';
+const QUERY_PEN = { rejected: 10, marked_unworthy: 5 };
+const QUERY_PEN_CAP = 200;               // penalties stop accruing at -200 per student
 
 // ── PRESERVED categories — NOT recomputable from Zoom source, so they must survive
 // the delete-and-rebuild (else the wipe erases them every run). 'manual' = ViBe/
@@ -154,14 +192,22 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   const byDate = {}; for (const m of meetings) (byDate[m.date] = byDate[m.date] || []).push(m);
   const sessions = [];
   for (const date of Object.keys(byDate).sort()) {
-    const mandatory = byDate[date].filter((m) => isMandatory(m.topic) && (m.participantsCount || 0) >= 10);
+    // Special sessions (V-Talks/celebrations) aren't "mandatory" by topic (no
+    // "stand"/"orientation"; often literally "Special"), so on a SPECIAL_WINDOW_IST
+    // date the manual allowlist is the authorization — accept any >=10-participant
+    // meeting and let the window-overlap pick the right one.
+    const special = !!SPECIAL_WINDOW_IST[date];
+    const mandatory = byDate[date].filter((m) => (special || isMandatory(m.topic)) && (m.participantsCount || 0) >= 10);
     if (!mandatory.length) continue;
     let first, wStart, wEnd;
     if (date >= EVENING_CUTOVER) {
       // evening standup: fixed [20:05, 21:00] IST window; pick the mandatory meeting
       // that overlaps it most so a leftover all-day/morning room can't steal the slot.
-      wStart = utcFromISTDate(date, EVENING_WSTART_IST);
-      const wCap = utcFromISTDate(date, EVENING_WEND_IST);
+      // Special sessions (SPECIAL_WINDOW_IST) override the window to their official
+      // start/end (raw Zoom span overstates it — e.g. Gurupurnima Day 64 = 21:00-22:00).
+      const sw = SPECIAL_WINDOW_IST[date];
+      wStart = utcFromISTDate(date, sw ? sw.start : EVENING_WSTART_IST);
+      const wCap = utcFromISTDate(date, sw ? sw.end : EVENING_WEND_IST);
       const scored = mandatory.map((m) => {
         const ms = new Date(m.startTime).getTime(), me = new Date(m.endTime).getTime();
         return { m, ov: Math.max(0, Math.min(me, wCap) - Math.max(ms, wStart)) };
@@ -200,6 +246,24 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
         reason: `${label} (${ddmon(sp.date)}): ${pct}% of day's top poll score -> ${d > 0 ? '+' : ''}${d} SP (correctness-based).` });
     }
   };
+  // Hybrid attendance from a Spandan quiz night: attendedMinutes = min(60,
+  // round(correct/pollsLaunched*100)); 60% correct = full 60-min session; then the
+  // same 10/5/3/0 tier on minutes/60. Reason carries "present X of 60 min (Z%)" so
+  // sync-attendance-records.js folds the minutes into the 3600 journey goal.
+  const spandanAttByDate = new Map(); // date -> sp, only for dates the hybrid owns
+  for (const [date, sp] of spandanByDate) if (date >= ATT_HYBRID_CUTOVER) spandanAttByDate.set(date, sp);
+  const scoreSpandanAttendance = (sp, label) => {
+    const Q = sp.totalQuestions || (sp.questions || []).length || 0; if (!Q) return;
+    for (const x of sp.students || []) {
+      const e = String(x.email || '').toLowerCase().trim(); if (!e) continue;
+      const mins = Math.min(ATT_SESSION_MIN, Math.round((x.correctCount || 0) / Q * 100));
+      const pct = Math.round(mins / ATT_SESSION_MIN * 1000) / 10;
+      const d = tier(pct);
+      touch(e, x.studentName).rows.push({ date: sp.date, order: 1, cat: 'attendance', delta: d,
+        reason: `${label} (${ddmon(sp.date)}): present ${mins} of ${ATT_SESSION_MIN} min (${pct}%) via ${x.correctCount || 0}/${Q} correct polls -> ${d > 0 ? '+' : ''}${d} SP.` });
+      const o = students.get(e); if (!o.firstAtt || sp.date < o.firstAtt) o.firstAtt = sp.date;
+    }
+  };
 
   for (const s of sessions) {
     const winMin = Math.round((s.wEnd - s.wStart) / 60000);
@@ -216,7 +280,10 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       if (!o.name && p.name) o.name = p.name;
     }
     for (const o of segByEmail.values()) { if (o.fj != null && o.ll != null) { const a = Math.max(o.fj, s.wStart), b = Math.min(o.ll, s.wEnd); if (b > a) o.secs = (b - a) / 1000; } }
-    for (const [e, v] of segByEmail) {
+    // Skip Zoom attendance where the Spandan hybrid owns the date (Spandan quiz
+    // night) so a leftover Zoom room can't double-credit; special/no-poll nights
+    // (e.g. Gurupurnima Day 64) are NOT in spandanAttByDate and score here.
+    if (!spandanAttByDate.has(s.date)) for (const [e, v] of segByEmail) {
       const mins = (s.date === GRACE_DATE && v.secs > 0) ? winMin : Math.min(winMin, Math.round(v.secs / 60)); const pct = winMin ? Math.round(mins / winMin * 1000) / 10 : 0; const d = tier(pct);
       touch(e, v.name).rows.push({ date: s.date, order: 1, cat: 'attendance', delta: d, reason: `${s.label} (${ddmon(s.date)}): present ${mins} of ${winMin} min (${pct}%) within official ${istHHMM(s.wStart)}-${istHHMM(s.wEnd)} IST window -> ${d > 0 ? '+' : ''}${d} SP.` });
       const o = students.get(e); if (!o.firstAtt || s.date < o.firstAtt) o.firstAtt = s.date;
@@ -243,6 +310,11 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   // Spandan poll days with no mandatory evening session still earn poll SP (label from the Day number).
   for (const [, sp] of spandanByDate) scoreSpandanPoll(sp, 'Day ' + sp.dayNumber);
 
+  // Hybrid attendance pass: from ATT_HYBRID_CUTOVER (Day 64), Spandan quiz nights
+  // earn attendance from poll correctness (no Zoom standup room those days). Zoom
+  // attendance for these dates was skipped above, so no double credit.
+  for (const [, sp] of spandanAttByDate) scoreSpandanAttendance(sp, 'Day ' + sp.dayNumber);
+
   // 3b. SPA → per-canon validated learn/teach events (dated) + integrity flags.
   //     emailToCanon is fully built by now, so we can fold aliases correctly.
   const spaByCanon = new Map(); // canon -> { learn:[YYYY-MM-DD...], teach:[...] }
@@ -258,15 +330,37 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   }
   // Genuine fraud = net teacher_fraud_penalty + fraud_penalty_reversal < 0, with
   // operator "Testing" rows excluded (they are demote-feature tests, all reversed).
+  // The /testing/i guard applies to the PENALTY side ONLY — a reversal always counts.
+  // A reversal's reason routinely quotes the penalty it undoes (e.g. '...was explicitly
+  // logged with reason "Testing purpose"'), so filtering both sides dropped the +credit
+  // and kept the -debit, flagging a net-zero account as fraud. That hit exactly one
+  // person: an auditor whose penalty had already been investigated and reversed.
   for (const f of await sak.collection('act_spa_transactions').aggregate([
-        { $match: { transactionType: { $in: ['teacher_fraud_penalty', 'fraud_penalty_reversal'] }, reason: { $not: /testing/i } } },
-        { $group: { _id: { $toLower: '$email' }, net: { $sum: '$deltaSPA' } } }]).toArray()) {
-    if (f.net < 0) { const c = canonOf(f._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), fraud: true }); }
+        { $match: { $or: [
+            { transactionType: 'teacher_fraud_penalty', reason: { $not: /testing/i } },
+            { transactionType: 'fraud_penalty_reversal' }] } },
+        { $group: { _id: { $toLower: '$email' }, net: { $sum: '$deltaSPA' }, when: { $max: '$createdAt' } } }]).toArray()) {
+    if (f.net < 0) { const c = canonOf(f._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), fraud: true, fraudDate: dstr(f.when) || null }); }
   }
-  for (const a of await sak.collection('act_spa_transactions').aggregate([
-        { $match: { transactionType: { $in: ['audit_failure_learner_penalty', 'audit_failure_teacher_penalty'] } } },
-        { $group: { _id: { $toLower: '$email' } } }]).toArray()) {
-    const c = canonOf(a._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), auditFail: true });
+  // Audit failures, EXCLUDING the collusion-pattern cleanup. That sweep de-endorsed
+  // ~28k endorsements in bulk off a multi-signal detector, and its own rejectNote
+  // says the teacher's +10% reward was revoked and "no other penalty" — so it is
+  // not adjudicated misconduct and must not trigger the -20%. Same guard in spirit
+  // as the fraud netting above, which already drops operator test rows. A student
+  // who ALSO has a genuine audit failure still gets flagged, on that row's merit.
+  const auditRows = await sak.collection('act_spa_transactions').find(
+        { transactionType: { $in: ['audit_failure_learner_penalty', 'audit_failure_teacher_penalty'] } },
+        { projection: { email: 1, endorsementId: 1, createdAt: 1 } }).toArray();
+  const auditEids = [...new Set(auditRows.map((r) => r.endorsementId).filter(Boolean))];
+  const cleanupEids = new Set((await sak.collection('act_spa_endorsements').find(
+        { _id: { $in: auditEids }, rejectNote: /collusion-pattern cleanup/i },
+        { projection: { _id: 1 } }).toArray()).map((d) => String(d._id)));
+  for (const a of auditRows) {
+    if (a.endorsementId && cleanupEids.has(String(a.endorsementId))) continue;
+    const c = canonOf(String(a.email || '').toLowerCase().trim());
+    const prev = spaFlag.get(c) || {};
+    const d = dstr(a.createdAt); // date of the offence, for dating the penalty row
+    spaFlag.set(c, { ...prev, auditFail: true, auditDate: (d && (!prev.auditDate || d > prev.auditDate)) ? d : prev.auditDate });
   }
 
   // 3d. Query answering → per-canon distinct queries answered (dated). Answerer =
@@ -279,10 +373,35 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       uidToEmail.set(String(r.userId), String(r.email).toLowerCase().trim());
   }
   const queryByCanon = new Map(); // canon -> [YYYY-MM-DD ...] (one per distinct query answered)
+  const queryPenByCanon = new Map(); // canon -> [{date, action}] penalizable verdicts (query raised on/after QUERY_PEN_QUERY_START)
   for (const q of await sak.collection('act_query_reviews').find(
         { 'peer.submittedAnswerHistory.0': { $exists: true } },
-        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1 } }).toArray()) {
+        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1, 'peer.review.action': 1, 'peer.review.at': 1 } }).toArray()) {
     const askerId = String(q.userId);
+    const action = q.peer?.review?.action;
+    if (QUERY_BAD_ACTIONS.includes(action)) {
+      const penDate = dstr(q.peer?.review?.at);
+      const qRaised = dstr(q.createdAt);
+      // Historical reviews (verdict before QUERY_PAY_STICKY_FROM) stand as settled:
+      // the answer never pays and carries no penalty — exactly as balances have
+      // read for weeks. From that date onward the +5, once earned, is PERMANENT
+      // (team decision 22 Aug: no double-charge — a later disapproval never claws
+      // back the pay, it adds exactly one penalty row instead), so the query falls
+      // through to the pay loop below like any other.
+      if (!penDate || penDate < QUERY_PAY_STICKY_FROM) continue;
+      // Single penalty per answer, and only for queries RAISED after the rule
+      // existed — answers to older queries keep their pay and cost nothing.
+      if (qRaised && qRaised >= QUERY_PEN_QUERY_START) {
+        const seen = new Set();
+        for (let uid of (q.peer.submittedAnswerHistory || [])) {
+          uid = String(uid); if (uid === askerId || seen.has(uid)) continue; seen.add(uid);
+          const e = uidToEmail.get(uid); if (!e) continue;
+          const c = canonOf(e);
+          let arr = queryPenByCanon.get(c); if (!arr) { arr = []; queryPenByCanon.set(c, arr); }
+          arr.push({ date: penDate, action });
+        }
+      }
+    }
     const date = dstr(q.peer?.answer?.submittedAt) || dstr(q.createdAt) || dstr(q.updatedAt); if (!date) continue;
     const seen = new Set();
     for (let uid of (q.peer.submittedAnswerHistory || [])) {
@@ -348,20 +467,69 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     const penRate = flags.fraud ? SPA_FRAUD_RATE : (flags.auditFail ? SPA_AUDIT_RATE : 0);
     let spaPenalty = 0;
     if (penRate > 0) {
-      spaPenalty = Math.round(rows.reduce((a, r) => a + r.delta, 0) * penRate);
-      if (spaPenalty > 0) rows.push({ date: TODAY, order: 9, cat: 'spa', delta: -spaPenalty,
-        reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.` });
+      // Date the penalty to the offence, NOT to TODAY. The ledger is wiped and rebuilt
+      // on every sp-refresh (4x/day), so a TODAY stamp re-dated one old decision every
+      // run — in a newest-first SP Bank that reads as a fresh punishment every morning.
+      const penDate = (flags.fraud ? flags.fraudDate : flags.auditDate) || TODAY;
+      // Base is what the student had EARNED BY the offence date, not their whole
+      // accumulated total. Charging a July offence against August earnings meant the
+      // penalty kept growing after the fact, and a back-dated row computed from future
+      // rows made the running balance dip by more than was ever there at that point.
+      const penBase = rows.reduce((a, r) => a + (r.date <= penDate ? r.delta : 0), 0);
+      spaPenalty = Math.round(penBase * penRate);
+      if (spaPenalty > 0) rows.push({ date: penDate, order: 9, cat: 'spa', delta: -spaPenalty,
+        reason: `SPA (${ddmon(penDate)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of the ${penBase} SP earned up to ${ddmon(penDate)} -> -${spaPenalty} SP.` });
     }
-    // Query-answer rows: +5 per distinct peer query answered, one 'query' row per day.
+    // Query-answer rows: +5 per distinct peer query answered, one 'query' row per
+    // day, oldest-first, capped at QUERY_CAP SP per student (excess days truncated).
     const qDates = queryByCanon.get(cand);
     if (qDates && qDates.length) {
       const qByDay = new Map();
       for (const d of qDates) qByDay.set(d, (qByDay.get(d) || 0) + 1);
-      for (const [d, n] of qByDay) rows.push({ date: d, order: 4, cat: 'query', delta: n * QUERY_UNIT,
-        reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${n * QUERY_UNIT} SP.` });
+      // Anti-refarm needs no separate cap burn under sticky pay: a disapproved
+      // answer STAYS in the paid pool, so it already consumes its slice of the
+      // lifetime cap — a maxed farmer whose junk gets flagged eats the penalties
+      // with no cap room ever freed.
+      let qUsed = 0;
+      for (const d of [...qByDay.keys()].sort()) {
+        if (qUsed >= QUERY_CAP) break;
+        const n = qByDay.get(d);
+        let delta = n * QUERY_UNIT;
+        if (qUsed + delta > QUERY_CAP) delta = QUERY_CAP - qUsed;
+        qUsed += delta;
+        const capNote = qUsed >= QUERY_CAP ? ` (query SP capped at ${QUERY_CAP})` : '';
+        rows.push({ date: d, order: 4, cat: 'query', delta,
+          reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${delta} SP${capNote}.` });
+      }
     }
     // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
     for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
+    // Query-answer penalties (rule announced 21 Aug 2026, forward-only): one 'query'
+    // row per verdict day, dated to the VERDICT (stable across rebuilds, like the SPA
+    // penalty). Capped at QUERY_PEN_CAP per student and clamped so the penalty can
+    // never drive the student's total balance below zero.
+    const qPens = queryPenByCanon.get(cand);
+    if (qPens && qPens.length) {
+      let penBudget = QUERY_PEN_CAP, pensUsed = 0;
+      const penByDay = new Map(); // date -> { rejected: n, marked_unworthy: n }
+      for (const p of qPens) { const o = penByDay.get(p.date) || { rejected: 0, marked_unworthy: 0 }; o[p.action]++; penByDay.set(p.date, o); }
+      for (const d of [...penByDay.keys()].sort()) {
+        if (penBudget <= 0) break;
+        const o = penByDay.get(d);
+        // Clamp to SP actually held by the verdict date (same lesson as the SPA
+        // penalty): the running balance must never dip below zero at this row.
+        const heldByD = rows.reduce((a, r) => a + (r.date <= d ? r.delta : 0), 0) - pensUsed;
+        let pen = o.rejected * QUERY_PEN.rejected + o.marked_unworthy * QUERY_PEN.marked_unworthy;
+        pen = Math.min(pen, penBudget, Math.max(0, heldByD));
+        if (pen <= 0) continue;
+        penBudget -= pen; pensUsed += pen;
+        const parts = [];
+        if (o.rejected) parts.push(`${o.rejected} rejected (-${QUERY_PEN.rejected} each)`);
+        if (o.marked_unworthy) parts.push(`${o.marked_unworthy} marked unworthy (-${QUERY_PEN.marked_unworthy} each)`);
+        rows.push({ date: d, order: 6, cat: 'query', delta: -pen,
+          reason: `Query answering (${ddmon(d)}): admin review — ${parts.join(' + ')} -> -${pen} SP.` });
+      }
+    }
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
     finalBal.set(cand, bal); nameByCanon.set(cand, info.name);

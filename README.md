@@ -1,151 +1,233 @@
+# Spurti
 
-# Student Self-Motivation Engine
+Student engagement tracking for the **VLED Summership internship at IIT Ropar**. Spurti awards
+**SP (Spurti Points)** for taking part — attending standups, answering session polls correctly,
+teaching and learning from peers (SPA), answering other interns' queries, and working through ViBe
+courses — and shows each student where they stand, what they have earned, and what is left to do.
 
-## Problem Statement
+Live at **https://samagama.in/spurti/**, reached from a student's Samagama dashboard.
 
-Many students begin a course, subject, internship, certification, or learning program with interest, but lose consistency over time. This is especially common in large-scale learning environments where hundreds or thousands of learners are enrolled at once. Students may miss sessions, delay tasks, avoid practice, stop reflecting on progress, or slowly disconnect from the learning process.
+SP are a **participation signal, not academic marks.** They are deliberately kept separate from
+grading: the point is to make consistency visible early enough to act on, not to rank people.
+The longer-term product thinking behind that is in [PRODUCT.md](PRODUCT.md).
 
-Most education systems show students marks, grades, attendance, or final completion status. These signals are useful, but they often come too late. A learner may know they have failed only after the exam, assignment deadline, or program end. In large classes, teachers and mentors may also notice disengagement only after the student has already lost momentum.
+---
 
-The deeper problem is not only lack of information. It is lack of continuous motivation, self-monitoring, and recovery support. Students need a simple way to see their learning energy, understand their consistency, feel encouraged to keep going, and recover when they fall behind.
+## What exists today
 
-This direction addresses the problem by creating a general motivation engine for self-regulated learning. It converts learning effort, participation, progress, reflection, and consistency into visible motivation signals such as points, progress bands, streaks, badges, nudges, and recovery goals. The purpose is not to punish students or replace academic grading. The purpose is to help students stay aware, motivated, and moving toward completion.
+```text
+SP ledger          every award is a row in sptransactions with a human-readable reason;
+                   balances are rebuilt from the ledger, never incremented in place
+Levels & leagues   permanent Level = floor(highestSpEver/100); a fluid trophy league
+Leaderboards       cached boards: weekly + all-time, overall + per category, and
+                   per onboarding group (biweekly cohorts)
+My Journey         four tracks (standups, ViBe, SPA, projects) with student-set target dates;
+                   the standup goal is 3,600 attended minutes
+Achievements       permanent milestone and podium cards, shareable, each with a public
+                   verify page and QR — env-gated, see Configuration
+Admin dashboard    cohort stats, per-student records, SP audit views
+```
 
-## Concept Description
+Two independent halves, and it matters which one you are touching:
 
-The proposed system is a student self-motivation and engagement engine for any structured learning journey. It can be used in a school subject, college course, online course, internship, bootcamp, training program, certification, workshop, or large-scale learning platform.
+- **The web app** (`server/` + `client/`) — reads and displays. It does not compute SP.
+- **The pipeline** (`pipeline/`) — recomputes the whole SP ledger from source data (Zoom
+  attendance, Spandan polls, SPA and query activity) on a schedule, four times a day. This is
+  where SP actually comes from.
 
-The system gives students a visible measure of their learning momentum. This measure may be called learning energy, motivation points, engagement credits, progress points, or any locally suitable name. Students earn these signals through consistent learning behavior such as attending sessions, completing tasks, attempting quizzes, submitting reflections, participating in discussions, reaching milestones, revising regularly, or helping peers.
+`server/scripts/` holds the older one-off ingestion scripts, superseded by `pipeline/`.
 
-The approach is based on the idea of self-regulated learning. Students should be able to set goals, monitor their progress, recognize when they are falling behind, take corrective action, and reflect on improvement. The system supports this by giving continuous feedback in a student-friendly format.
+## How it fits together
 
-For large learning environments, the framework also helps teachers, mentors, or program teams understand which students are active, which students are slowing down, and which students may need support. The focus is not surveillance. The focus is early encouragement and timely intervention.
+```mermaid
+flowchart TB
+    subgraph sources["Source data"]
+        direction LR
+        zoom["Zoom attendance"]
+        spandan["Spandan polls"]
+        acts["SPA sessions · peer queries"]
+    end
 
-## Educational Motivation Model
+    subgraph pipe["Pipeline — computes SP · cron 4×/day"]
+        direction LR
+        rebuild["sp-rubric-build<br/>rebuilds the whole ledger"] --> derive["sync-levels<br/>sync-attendance<br/>sync-polls"] --> boards["leaderboard<br/>build"]
+    end
 
-The motivation model encourages students through four connected loops:
+    db[("MongoDB · sptransactions is the ledger, students.totalSp is derived from it")]
 
-- Awareness: Students see where they stand in the learning journey.
-- Action: Students are encouraged to complete small learning actions regularly.
-- Feedback: Students receive visible points, progress, badges, or nudges after meaningful effort.
-- Recovery: Students who fall behind receive clear pathways to restart and continue.
+    subgraph app["Web app — displays SP, computes none of it"]
+        direction LR
+        api["Express server.js<br/>API + static client + verify pages"] <--> ui["React client<br/>tabs · journey · achievements"]
+    end
 
-This loop helps students answer important self-regulation questions:
+    sources --> pipe --> db --> api
+    student(["Student"]) --> ui
+    ui -. "card drawn in the browser, PNG posted back" .-> api
+    api -. "validates chatengine_token" .-> samagama[["Samagama"]]
+    public(["Anyone with a shared link"]) -- "/spurti/verify/CODE · no login" --> api
+    db --> research["Weekly research export<br/>anonymised CSVs"]
+```
 
-- What is my current learning progress?
-- Am I being consistent?
-- What did I complete this week?
-- Where did I lose momentum?
-- What small action can I take next?
-- How can I recover and continue?
+The arrow that matters: **SP only ever flows out of the pipeline into MongoDB, and the app only
+reads it.** If a number looks wrong, the bug is almost always upstream of anything in `server/`.
 
-## Core Idea
+---
 
-The system should work as a motivation layer on top of learning activities. It does not need to be limited to one course type or one institution. It should support any learning context where persistence, participation, and completion matter.
+## Running it locally
 
-Examples of learning contexts include:
+**You need:** Node 20+, a MongoDB you can write to, and a `.env`.
 
-- A semester-long subject.
-- A remote or offline course.
-- A large online class.
-- A professional training program.
-- A school learning module.
-- A college internship.
-- A project-based bootcamp.
-- A certification or skill-development track.
+```bash
+git clone https://github.com/vicharanashala/spurti.git
+cd spurti
+cp .env.example .env          # then edit MONGO_URI at least
+npm run setup                 # installs both halves, rebuilds derived data, builds the client
+npm start                     # serves the API and the built client on PORT (default 5290)
+```
 
-In all these contexts, the central purpose remains the same: help students keep going until they complete the learning journey.
+Then open `http://localhost:5290/spurti/`.
 
-## Reward And Motivation Design
+**Working on the client?** Run the Vite dev server instead of rebuilding each time — it proxies
+`/api` and `/spurti` to the Node server on 5290, so run both:
 
-The reward system should support healthy motivation. It should not make students feel punished for every small mistake. It should help them understand their behavior and encourage better habits.
+```bash
+npm start                          # terminal 1 — API on 5290
+npm --prefix client run dev        # terminal 2 — UI on 5291 with hot reload
+```
 
-Design principles:
+**One thing that will confuse you first time:** student login is not Spurti's. A student is
+identified by the `chatengine_token` cookie that **Samagama** sets, which Spurti validates against
+`SAMAGAMA_AUTH_URL` (Samagama's own service, normally on port 5001). With no Samagama running
+locally you will not have a student session. For local work, keep `ALLOW_STUDENT_SEARCH=true` and
+look students up by email instead — that path is disabled in production on purpose.
 
-- Use points as feedback, not as academic marks.
-- Reward consistency, improvement, effort, and completion.
-- Prefer positive and banded rewards over harsh pass-fail thresholds.
-- Make progress visible in small steps.
-- Keep rewards explainable and fair.
-- Give students recovery paths after low engagement.
-- Encourage self-monitoring and reflection.
-- Avoid overemphasis on competition.
-- Use leaderboards carefully, if used at all.
-- Support both individual progress and community encouragement.
+**Useful scripts:**
 
-Possible motivational elements:
+```bash
+npm run rebuild          # rebuild derived collections (levels, boards, trajectories)
+npm run seed             # seed a local database
+npm run add-students     # add students from a CSV
+npm run sync-students    # sync the student list from the source sheet
+npm run ingest-session   # ingest one session's attendance
+```
 
-- Learning energy score or motivation points.
-- Weekly progress bands such as Excellent, Active, Slowing Down, and Recovery.
-- Streaks for regular practice, attendance, revision, or task completion.
-- Badges for milestones, improvement, comeback, consistency, and peer support.
-- Personal goals and weekly targets.
-- Gentle nudges when students become inactive.
-- Reflection prompts after important learning activities.
-- Recovery missions for students who fall behind.
-- Completion celebrations when students finish a module, subject, course, or program.
+---
 
-## Self-Regulated Learning Support
+## Repository layout
 
-The system should help students develop self-regulated learning habits. This means it should support:
+```text
+server/
+  server.js            all HTTP routes (~1,200 lines) — API under /api, static client, verify pages
+  config.js            env + the historical May session tables
+  models/              Mongoose schemas: Student, SPTransaction, Achievement, ShareEvent, ...
+  services/            the logic worth reading: leaderboards, achievements, levels, journey,
+                       standup, spa, vibe, trajectory
+  scripts/             legacy ingestion + one-off maintenance
+  migrations/          dated, run-once scripts
+  data/cards/          generated achievement card PNGs
+client/
+  src/main.jsx         the entire UI (~2,000 lines, single file)
+  src/shareCard.js     the share card, drawn to canvas in the student's own browser
+pipeline/              the SP recompute chain + its cron definitions; README.md inside
+CONTEXT.md             the deep reference: schema, SP rubric, admin endpoints, server details
+PRODUCT.md             why this exists — the motivation-engine design thinking
+```
 
-- Goal setting: Students know what they are trying to complete.
-- Planning: Students can see upcoming learning actions or milestones.
-- Self-monitoring: Students can track their own consistency and progress.
-- Feedback interpretation: Students understand why their motivation score changed.
-- Reflection: Students can think about what worked and what needs improvement.
-- Recovery: Students can restart after missing tasks or losing momentum.
+**Read `CONTEXT.md` before changing anything about how SP is calculated.** It documents the current
+band/tier rubric, and the rubric has changed more than once.
 
-The system should make progress feel manageable. Instead of showing only a large final goal, it should break the journey into smaller motivational checkpoints.
+---
 
-## Large-Scale Learning Support
+## Configuration
 
-In large learning environments, teachers and mentors cannot personally track every student's motivation every day. The system should help by summarizing learning engagement patterns at scale.
+Only two really matter to get started; the rest gate features that are off by default.
 
-It can help educators identify:
+| Variable | Default | What it does |
+|---|---|---|
+| `MONGO_URI` | local `analysis_summership` | Database. Production uses `sakshi_spurti`. |
+| `PORT` | `5290` | **Production runs on 5003**, set in its own `.env`. |
+| `ALLOW_STUDENT_SEARCH` | `true` | Look up students by email. **`false` in production** — privacy. |
+| `SAMAGAMA_AUTH_URL` | `http://127.0.0.1:5001/api/auth/me` | Where the student's cookie is validated. |
+| `ADMIN_EMAIL`, `ADMIN_TOKEN` | unset | Admin dashboard. Sent as `x-admin-email` / `x-admin-token`. |
+| `ACHIEVEMENTS_ENABLED` | off | The Achievements tab. |
+| `ACHIEVEMENTS_SHARING` | off | The Share/Download buttons, **separately** — the tab stays visible either way. |
+| `ACHIEVEMENTS_EMAILS` | unset | Preview the tab for named addresses only. |
+| `PUBLIC_BASE_URL` | inferred | Absolute origin for `og:` tags on verify pages. |
+| `CARD_DIR` | `server/data/cards` | Where generated card PNGs are written. |
+| `VERIFY_VIEW_LOG` | on | Set `0` to stop logging verify-page views. |
 
-- Students who are consistently active.
-- Students who are improving.
-- Students who are becoming inactive.
-- Students who need recovery support.
-- Topics or weeks where many students lose momentum.
-- Activities that create strong engagement.
+Feature flags are read once at process start, so **flipping one needs a restart, not a redeploy.**
 
-This allows educators to respond earlier through nudges, extra support, reminders, peer groups, or redesigned activities.
+---
 
-## Core Users
+## Contributing
 
-- Students: Track progress, stay motivated, recover from low engagement, and complete the learning journey.
-- Teachers or instructors: Understand class engagement and support students before they drop out.
-- Mentors or facilitators: Encourage learners, guide recovery, and recognize effort.
-- Program administrators: Monitor large-scale learning health and completion patterns.
+Small, single-purpose pull requests into `main`. Branch names follow what is already in the log:
 
-## Goals
+```text
+feat/<short-thing>      new behaviour        e.g. feat/exclude-spa-awards
+fix/<short-thing>       a bug                e.g. fix/reign-tie-max
+revert/<short-thing>    backing something out
+```
 
-- Help students stay motivated during long learning journeys.
-- Improve course, subject, internship, or program completion.
-- Build self-regulated learning habits.
-- Make learning effort and consistency visible.
-- Reduce silent dropout in large-scale education.
-- Encourage recovery instead of shame.
-- Support teachers and mentors with early engagement signals.
-- Create a fair and transparent motivation system.
+Before opening a PR:
 
-## Success Metrics
+1. **`npm test`** — must pass.
+2. `npm run build` if you touched the client.
+3. Run it against a real database and click the thing you changed. The tests cover the pure
+   scoring logic, not the routes or the UI (see below), so a lot still rests on you looking.
+4. If you touched SP calculation, leaderboards or achievements, say in the PR **what numbers move
+   and for whom**. These feed a research dataset; a silent change to scoring or ranking is
+   indistinguishable from a change in student behaviour later.
+5. If you added or renamed an env variable, update `.env.example` and the table above.
 
-This direction can be evaluated through:
+### Tests
 
-- Course or program completion rate.
-- Weekly active learner rate.
-- Task or milestone completion rate.
-- Improvement in student consistency over time.
-- Number of students who recover after low engagement.
-- Student perception of motivation and fairness.
-- Student self-regulated learning indicators.
-- Reduction in silent dropout.
-- Teacher or mentor ability to identify at-risk students earlier.
+```bash
+npm test                              # the whole suite
+node --test test/levels.test.js       # one file
+node --test --watch test/*.test.js    # while working
+```
 
-## Positioning
+Node's built-in `node:test` — no test dependencies to install, which keeps the dependency list at
+four packages. Tests live in `test/`, one file per module.
 
-This is a general educational motivation engine. It is not only for internships, and it is not only a points table. It is a self-regulated learning support system and research direction that helps students see their progress, stay encouraged, recover from setbacks, and complete any meaningful learning journey.
-Displaying PRODUCT.md.
+**What is covered:** the pure functions where a wrong answer is expensive and silent — levels,
+leagues, onboarding groups, weekly totals, rank ties, podium eligibility, and the share caption.
+These are the places where a bug does not throw; it just awards the wrong thing to the wrong person
+and nobody notices for a month.
+
+**What is not covered yet:** HTTP routes, anything needing a database, the React UI, and the
+pipeline. Those need fixtures or a test database and are the obvious next step. If you add coverage
+there, say so in the PR — do not quietly leave `test/` looking more complete than it is.
+
+Tests double as documentation of decisions that look arbitrary otherwise: why the joining grant is
+excluded from weekly boards, why a placing shared by four people is not a placing, why ranks are
+**not** unique and nothing may be keyed on them.
+
+Worth knowing:
+
+- **Nothing increments a balance.** SP is always recomputed from the ledger. If you find yourself
+  writing `totalSp += x`, stop.
+- **Achievements are permanent.** A card, once earned, keeps its `verifyId` forever, because that id
+  is in a QR code on an image somebody has already posted publicly. Do not regenerate or renumber
+  them.
+- **The share card is drawn in the student's browser** and exported with `toDataURL`, so every asset
+  it uses must be inlined as a data URI — a remote image taints the canvas and the export throws.
+- Production and this repository can drift. Check what is actually deployed before assuming `main`
+  is running.
+
+## Where it runs
+
+Production is on `samagama.in` behind nginx (which proxies `/spurti` to the Node process), kept
+alive by PM2, with the SP pipeline on cron four times a day. Specifics — paths, process names, cron
+times — are in `CONTEXT.md` and `pipeline/README.md`.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
+
+The code is MIT. **The data is not**, and none of it belongs in this repository: student names,
+emails, attendance, poll responses and SP ledgers are personal data belonging to the interns.
+`.gitignore` keeps `.env`, pipeline secrets and `server/data/` out; keep it that way, and never add
+a CSV export or a generated card PNG to a commit.

@@ -183,6 +183,42 @@ input {
   white-space: nowrap;
 }
 .tabs button.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+/* Unseen-achievement count. Sits on the tab itself so the strip stops reading
+   identically whether or not something new is waiting. */
+.tab-badge {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 7px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #c2410c;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 18px;
+  text-align: center;
+}
+.tabs button.active .tab-badge { background: #fff; color: var(--primary-dark); }
+/* The same signal, above the tab strip, where it cannot be scrolled past. */
+.ach-nudge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  border: 1px solid #f5c9a8;
+  border-radius: 10px;
+  background: #fff6ef;
+  text-align: left;
+  cursor: pointer;
+}
+.ach-nudge:hover { background: #ffeee1; border-color: #e8a877; }
+.ach-nudge-icon { font-size: 22px; line-height: 1; }
+.ach-nudge-text { display: flex; flex-direction: column; gap: 2px; }
+.ach-nudge-text strong { color: #9a3412; font-size: 15px; }
+.ach-nudge-text em { color: var(--muted); font-style: normal; font-size: 13px; }
+.ach-nudge-go { margin-left: auto; color: #9a3412; font-size: 18px; font-weight: 850; }
 .panel {
   padding: 20px;
   margin-bottom: 18px;
@@ -849,3 +885,133 @@ input {
 .cm-body { padding: 4px 14px 14px; border-top: 1px solid var(--line); }
 .cm-body .vg { margin-top: 8px; }
 .cm-soon { color: var(--muted); font-size: 14px; line-height: 1.6; padding: 10px 2px; }
+
+/* FAQ accordion tab (one answer open at a time) */
+.faq-intro { font-size: 12.5px; margin: 0 0 10px; }
+.faq-list { display: flex; flex-direction: column; gap: 8px; }
+.faq-item { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+.faq-item.open { border-color: var(--primary); }
+.faq-q { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 10px; text-align: left; background: none; border: none; padding: 12px 14px; font-size: 13.5px; font-weight: 700; color: var(--text); cursor: pointer; }
+.faq-item.open .faq-q { color: var(--primary); }
+.faq-caret { font-size: 18px; font-weight: 800; line-height: 1; color: var(--muted); flex: 0 0 auto; }
+.faq-item.open .faq-caret { color: var(--primary); }
+.faq-a { margin: 0; padding: 0 14px 14px; font-size: 13px; line-height: 1.55; color: var(--muted); }
+
+/* Weekly / category leaderboard */
+.lb-week { font-size: 12.5px; margin: 0 0 10px; }
+.lb-me { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); font-size: 13.5px; font-weight: 700; }
+.lb-me .muted { font-weight: 500; }
+
+/* ---- Achievements ------------------------------------------------------- */
+.ach { display: grid; gap: 16px; }
+.ach-head { display: grid; gap: 12px; }
+.ach-counts { display: flex; flex-wrap: wrap; gap: 10px 30px; align-items: baseline; }
+.ach-counts strong { font-size: 26px; color: var(--primary); margin-right: 7px; }
+.ach-counts span { font-size: 11px; letter-spacing: .11em; text-transform: uppercase; color: #64748b; }
+
+.ach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 12px; }
+.ach-tile { border: 1px solid #dbe4e8; border-radius: 12px; background: #fff; overflow: hidden; }
+.ach-tile.open { border-color: var(--primary); }
+.ach-tile.locked { border-style: dashed; background: #f8fafb; }
+.ach-face { width: 100%; display: flex; align-items: center; gap: 12px; padding: 13px 14px; background: none; border: 0; cursor: pointer; text-align: left; font: inherit; min-width: 0; }
+.ach-face:hover { background: #f4f9fb; }
+.ach-medal {
+  flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-size: 20px;
+  background: radial-gradient(circle at 38% 32%, #ffe6a6 0%, #e8b24a 44%, #b9862f 100%);
+  box-shadow: inset 0 -3px 7px rgba(0,0,0,.15);
+}
+.ach-tile.locked { display: flex; align-items: center; gap: 12px; padding: 13px 14px; }
+.ach-tile.locked .ach-medal { background: #e2e8f0; box-shadow: none; filter: grayscale(1); opacity: .75; }
+.ach-body { flex: 1; min-width: 0; }
+.ach-body h4 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.ach-when { display: block; margin-top: 3px; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: #64748b; overflow-wrap: anywhere; }
+.ach-caret { flex: 0 0 auto; color: var(--primary); font-size: 13px; }
+.ach-items { list-style: none; margin: 0; padding: 0 14px 12px; display: grid; gap: 7px; }
+.ach-items li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #f6fafb; border-radius: 9px; }
+.ach-item-medal { font-size: 17px; }
+.ach-item-text { flex: 1; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.ach-item-text b { display: block; }
+.ach-item-text em { font-style: normal; color: #64748b; font-size: 11.5px; }
+.ach-share { flex: 0 0 auto; border: 1px solid var(--primary); background: none; color: var(--primary); border-radius: 999px; padding: 5px 13px; font-weight: 800; font-size: 12px; cursor: pointer; }
+.ach-share:hover { background: var(--primary); color: #fff; }
+
+.share-modal { width: min(460px, 100%); max-height: 90vh; overflow: auto; display: grid; gap: 14px; align-content: start; }
+.share-preview { width: 100%; max-height: 52vh; object-fit: contain; border-radius: 12px; box-shadow: 0 14px 34px rgba(20,60,75,.18); }
+.share-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.share-actions button { flex: 1 1 130px; border-radius: 9px; padding: 11px 12px; font-weight: 800; font-size: 13px; cursor: pointer; border: 0; }
+.share-actions button:disabled { opacity: .5; cursor: default; }
+.share-note { font-size: 12px; }
+
+/* The steps sit between the caption and the buttons deliberately — the Share
+   button is disabled until the tick, so the block cannot be scrolled past. */
+.post-howto { border: 1px solid #dbe4e8; border-left: 3px solid var(--primary); border-radius: 9px; padding: 11px 13px; background: #f6fafb; }
+.post-howto b { font-size: 13px; }
+.post-howto ol { margin: 7px 0 9px; padding-left: 18px; display: grid; gap: 5px; }
+.post-howto li { font-size: 12.5px; line-height: 1.5; color: #475569; }
+.post-howto .tag-links { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 5px; }
+
+tr.step-alert { background: #fff1f0; }
+tr.step-alert td { border-color: #f3c9c5; }
+
+/* Admin: achievements & sharing */
+.ach-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 4px; }
+.ach-stats > div { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; background: #fafdff; }
+.ach-stats span { display: block; color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
+.ach-stats strong { display: block; font-size: 26px; color: var(--primary); margin: 3px 0 1px; }
+.ach-stats em { display: block; font-style: normal; font-size: 12px; color: var(--muted); }
+.post-howto .ack { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; font-weight: 700; color: #334155; cursor: pointer; }
+.post-howto .ack input { margin-top: 2px; flex: none; width: 15px; height: 15px; accent-color: var(--primary); cursor: pointer; }
+
+/* ---- Public verify page ------------------------------------------------- */
+.verify-page { display: grid; place-items: center; min-height: 100vh; }
+.verify-card { width: min(460px, 100%); text-align: center; padding: 30px 26px; }
+.verify-ok, .verify-bad { display: inline-block; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; font-weight: 800; border-radius: 999px; padding: 4px 12px; }
+.verify-ok { color: #2f7d5f; border: 1px solid #2f7d5f; }
+.verify-bad { color: #b3261e; border: 1px solid #b3261e; }
+.verify-medal {
+  width: 74px; height: 74px; margin: 16px auto 10px; border-radius: 50%; display: grid; place-items: center; font-size: 34px;
+  background: radial-gradient(circle at 38% 32%, #ffe6a6 0%, #e8b24a 44%, #b9862f 100%);
+  box-shadow: inset 0 -5px 12px rgba(0,0,0,.15);
+}
+.verify-card h1 { font-size: 25px; margin: 4px 0 2px; color: var(--primary); }
+.verify-period { color: #b9862f; font-weight: 700; font-size: 13px; margin: 0 0 14px; }
+.verify-awarded { font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase; color: #94a3b8; margin: 0; }
+.verify-name { font-size: 21px; font-weight: 700; margin: 3px 0 6px; }
+.verify-code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #94a3b8; margin-top: 14px; }
+.tag-links { display: flex; flex-wrap: wrap; gap: 14px; }
+.caption-box { display: grid; gap: 7px; }
+.caption-head { display: flex; align-items: center; justify-content: space-between; }
+.caption-head b { font-size: 13px; }
+.mini-copy { border: 1px solid var(--primary); background: none; color: var(--primary); border-radius: 999px; padding: 4px 12px; font-weight: 800; font-size: 12px; cursor: pointer; }
+.mini-copy:hover { background: var(--primary); color: #fff; }
+.caption-box textarea { width: 100%; resize: vertical; font: inherit; font-size: 12.5px; line-height: 1.55; color: #334155; padding: 10px 11px; border: 1px solid #dbe4e8; border-radius: 9px; background: #f8fafb; }
+.caption-box p { margin: 0; font-size: 12px; color: #64748b; }
+
+/* The "artwork may change" note sits under the main blurb — quieter than it,
+   so it reads as a footnote rather than a second announcement. */
+.ach-head .ach-note { font-size: 12px; margin-top: -2px; opacity: .8; }
+
+/* ── Announcements (programme notices with read-tracking) ─────────────────── */
+.announcements { margin-bottom: 16px; padding: 16px 18px; }
+.ann-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.ann-head h2 { margin: 0; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+.ann-badge {
+  font-style: normal; font-size: 12px; font-weight: 700; color: #fff;
+  background: var(--amber); border-radius: 999px; padding: 2px 9px;
+}
+.ann-toggle {
+  background: none; border: none; color: var(--primary);
+  font-size: 13px; font-weight: 600; padding: 4px 6px;
+}
+.ann-toggle:hover { text-decoration: underline; }
+.ann-item { border-radius: 12px; padding: 12px 14px; margin-top: 8px; }
+.ann-item header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.ann-item header strong { font-size: 15px; }
+.ann-item header time { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.ann-item p { margin: 6px 0 0; font-size: 14px; line-height: 1.55; white-space: pre-line; }
+.ann-new { background: #fff8ec; border: 1px solid #f2d9a4; }
+.ann-new + .ann-new { margin-top: 10px; }
+.ann-ack { margin-top: 10px; padding: 7px 16px; font-size: 13px; }
+.ann-done { background: #f6f8fb; border: 1px solid var(--line); }
+.ann-done p, .ann-done header strong { color: var(--muted); }
+.ann-caughtup { margin: 2px 0 0; font-size: 13px; }

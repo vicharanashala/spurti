@@ -73,12 +73,29 @@ async function fetchPage(since) {
       const m = DAY_RE.exec(s.name || '');
       if (!m) continue;                  // not a numbered Day session
       if (s.date < CUTOFF) continue;     // pre-switchover
-      const students = (s.students || []).map((x) => ({
-        email: lc(x.studentEmail),
-        pointsEarned: x.pointsEarned || 0,
-        questionsAnswered: x.questionsAnswered || 0,
-      })).filter((x) => x.email);
-      const topPoints = students.reduce((mx, x) => Math.max(mx, x.pointsEarned), 0);
+      // Store the FULL per-student record from the API. The API uses `points`/
+      // `answered` (older shape used `pointsEarned`/`questionsAnswered`); read both
+      // for safety. `correctCount` is required for correctness-based attendance.
+      // Keep pointsEarned/questionsAnswered aliases so the existing poll-SP scorer
+      // (reads pointsEarned/topPoints) keeps working unchanged.
+      const students = (s.students || []).map((x) => {
+        const points = x.points ?? x.pointsEarned ?? 0;
+        const answered = x.answered ?? x.questionsAnswered ?? 0;
+        return {
+          email: lc(x.studentEmail),
+          studentName: x.studentName || '',
+          rank: x.rank ?? null,
+          points,
+          answered,
+          correctCount: x.correctCount ?? 0,
+          correct: x.correct || '',
+          accuracy: x.accuracy ?? null,
+          answers: x.answers || {},
+          pointsEarned: points,          // alias (back-compat: poll-SP scorer)
+          questionsAnswered: answered,   // alias (back-compat)
+        };
+      }).filter((x) => x.email);
+      const topPoints = students.reduce((mx, x) => Math.max(mx, x.points), 0);
       const doc = {
         roomId: s.roomId,
         name: s.name,
@@ -87,6 +104,10 @@ async function fetchPage(since) {
         endedAt: new Date(s.endedAt),
         totalQuestions: s.totalQuestions || 0,
         maxPoints: s.maxPoints || 0,
+        questions: (s.questions || []).map((q) => ({
+          col: q.col, questionId: q.questionId, text: q.text,
+          type: q.type, responses: q.responses, correctPct: q.correctPct,
+        })),
         topPoints,
         studentCount: students.length,
         students,

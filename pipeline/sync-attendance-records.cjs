@@ -14,8 +14,21 @@
  *
  * Safe to re-run (upsert by email+sessionLabel).
  */
-const { MongoClient, ObjectId } = require('/var/samagama/server/node_modules/mongodb');
-require('/var/samagama/server/node_modules/dotenv').config({ path: '/var/samagama/server/.env' });
+// Local modules and local .env. This used to reach into
+// /var/samagama/server/... from when scoring lived on the samagama side; after
+// the 2026-06-28 move the sakshi user cannot READ that .env, so dotenv loaded
+// nothing, MONGO_URI came back undefined, and MongoClient.connect(undefined)
+// died with "Cannot read properties of undefined (reading 'startsWith')" —
+// which looks nothing like a permissions problem. Run from the repo root.
+const { MongoClient, ObjectId } = require('mongodb');
+require('dotenv').config();
+
+if (!process.env.MONGO_URI) {
+  // Fail with something legible instead of the startsWith error above.
+  console.error('MONGO_URI is not set. Run this from the repo root so .env is picked up:');
+  console.error('  cd ~/spurti && node pipeline/sync-attendance-records.cjs');
+  process.exit(1);
+}
 
 const REASON_RE = /present (\d+) of (\d+) min \(([\d.]+)%\)/;
 
@@ -30,7 +43,21 @@ const REASON_RE = /present (\d+) of (\d+) min \(([\d.]+)%\)/;
     .find({ category: 'attendance' })
     .toArray();
 
-  let upserted = 0, skipped = 0;
+  // Batched, not one await per row. This used to issue a separate round trip
+  // for every attendance transaction — around 60,000 of them, sequentially,
+  // which pushed the box's load average past 20 and would have tripped
+  // sp-refresh's own MAX_LOAD guard and skipped the cycle. Same writes, same
+  // upsert semantics, a few dozen round trips instead.
+  const BATCH = 1000;
+  let upserted = 0, skipped = 0, ops = [];
+
+  const flush = async () => {
+    if (!ops.length) return;
+    const r = await db.collection('attendancerecords').bulkWrite(ops, { ordered: false });
+    upserted += (r.upsertedCount || 0) + (r.modifiedCount || 0);
+    ops = [];
+  };
+
   for (const tx of txns) {
     const email = (tx.email || '').toLowerCase().trim();
     if (!email) { skipped++; continue; }
@@ -44,27 +71,30 @@ const REASON_RE = /present (\d+) of (\d+) min \(([\d.]+)%\)/;
     const attendancePercentage = m ? Number(m[3]) : 0;
     const studentId = studentById.get(email) || null;
 
-    await db.collection('attendancerecords').updateOne(
-      { email, sessionLabel },
-      {
-        $set: {
-          email,
-          sessionLabel,
-          qualified,
-          attendedMinutes,
-          totalSessionMinutes,
-          attendancePercentage,
-          ...(studentId ? { studentId } : {}),
-          updatedAt: new Date(),
+    ops.push({
+      updateOne: {
+        filter: { email, sessionLabel },
+        update: {
+          $set: {
+            email,
+            sessionLabel,
+            qualified,
+            attendedMinutes,
+            totalSessionMinutes,
+            attendancePercentage,
+            ...(studentId ? { studentId } : {}),
+            updatedAt: new Date(),
+          },
+          $setOnInsert: { createdAt: new Date() },
         },
-        $setOnInsert: { createdAt: new Date() },
+        upsert: true,
       },
-      { upsert: true }
-    );
-    upserted++;
+    });
+    if (ops.length >= BATCH) await flush();
   }
+  await flush();
 
-  console.log(`Done. upserted=${upserted} skipped=${skipped}`);
+  console.log(`Done. written=${upserted} skipped=${skipped} of ${txns.length} attendance txns`);
 
   // Verify for harsh007rana
   const check = await db.collection('attendancerecords')
