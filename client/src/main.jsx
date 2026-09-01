@@ -1521,8 +1521,6 @@ function VibeGoals({ student }) {
               <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
               <div className="vg-betbtns">
                 {!editing && <button className="secondary" onClick={() => { setForm({ goalPct: data.active.goalPct, stake: data.active.stake, multiplier: data.active.multiplier, deadline: form.deadline }); setEditing(true); }}>Edit commitment</button>}
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
               </div>
             </div>
           </div>
@@ -1625,8 +1623,6 @@ function StandupGoals({ student }) {
             <div className="side">
               <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
               <div className="vg-betbtns">
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
               </div>
             </div>
           </div>

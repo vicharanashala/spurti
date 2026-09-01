@@ -265,24 +265,64 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
+  const myGroup = leaderboardGroup(student.internshipStartDate);
+
+  const [transactions, polls, attendance, rankInfo, leaderboard, stats] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    Student.aggregate([
+      { $match: activeFilter },
+      { $facet: {
+        stats: [{ $group: { _id: null, avg: { $avg: '$totalSp' }, count: { $sum: 1 } } }],
+        top10: [{ $sort: { totalSp: -1, name: 1 } }, { $limit: 10 }, { $sort: { totalSp: 1 } }, { $limit: 1 }, { $project: { totalSp: 1 } }],
+        top50: [{ $sort: { totalSp: -1, name: 1 } }, { $limit: 50 }, { $sort: { totalSp: 1 } }, { $limit: 1 }, { $project: { totalSp: 1 } }],
+        nextRank: [
+          { $match: { $or: [
+            { totalSp: { $gt: student.totalSp } },
+            { totalSp: student.totalSp, name: { $lt: student.name } }
+          ]}},
+          { $sort: { totalSp: -1, name: 1 } }, { $limit: 1 }, { $project: { totalSp: 1 } }
+        ],
+        groupBoard: [
+          { $match: { internshipStartDate: { $exists: true, $ne: null } } },
+          { $addFields: { _grp: {
+            $let: {
+              vars: { d: { $toDate: '$internshipStartDate' } },
+              in: {
+                $let: {
+                  vars: {
+                    y: { $year: '$$d' }, m: { $month: '$$d' }, day: { $dayOfMonth: '$$d' },
+                    lastDay: { $dayOfMonth: { $dateFromParts: { year: { $year: '$$d' }, month: { $add: [{ $month: '$$d' }, 1] }, day: 0 } } }
+                  },
+                  in: {
+                    $cond: [
+                      { $lte: ['$$day', 15] },
+                      { $concat: [{ $toString: '$$y' }, '-', { $cond: [{ $lt: [{ $subtract: ['$$m', 1] }, 9] }, { $concat: ['0', { $toString: { $add: [{ $subtract: ['$$m', 1] }, 1] } }] }, { $toString: { $add: [{ $subtract: ['$$m', 1] }, 1] } }] }, '-01_to_', { $toString: '$$y' }, '-', { $cond: [{ $lt: [{ $subtract: ['$$m', 1] }, 9] }, { $concat: ['0', { $toString: { $add: [{ $subtract: ['$$m', 1] }, 1] } }] }, { $toString: { $add: [{ $subtract: ['$$m', 1] }, 1] } }] }, '-', { $cond: [{ $lte: [15, 15] }, '15', { $toString: '$$lastDay' }] }] },
+                      { $concat: [{ $toString: '$$y' }, '-', { $cond: [{ $lt: [{ $subtract: ['$$m', 1] }, 9] }, { $concat: ['0', { $toString: { $add: [{ $subtract: ['$$m', 1] }, 1] } }] }, { $toString: { $add: [{ $subtract: ['$$m', 1] }, 1] } }] }, '-16_to_', { $toString: '$$y' }, '-', { $cond: [{ $lt: [{ $subtract: ['$$m', 1] }, 9] }, { $concat: ['0', { $toString: { $add: [{ $subtract: ['$$m', 1] }, 1] } }] }, { $toString: { $add: [{ $subtract: ['$$m', 1] }, 1] } }] }, '-', { $toString: '$$lastDay' }] }
+                    ]
+                  }
+                }
+              }
+            }
+          }}},
+          { $match: { _grp: myGroup } },
+          { $sort: { totalSp: -1, name: 1 } }, { $limit: 50 },
+          { $project: { name: 1, email: 1, totalSp: 1, highestSpEver: 1, internshipStartDate: 1 } }
+        ]
+      }}
+    ]).then(r => r[0])
   ]);
-  const allSp = allStudents.map(s => Number(s.totalSp || 0));
-  const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
-  const top10Cutoff = allStudents[9]?.totalSp || null;
-  const top50Cutoff = allStudents[49]?.totalSp || null;
-  const currentIndex = allStudents.findIndex(s => s.email === email);
-  const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
-  // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
-  const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
-  const myGroup = leaderboardGroup(student.internshipStartDate);
-  const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
+
+  const avg = stats?.stats?.[0]?.avg || 0;
+  const averageSp = Math.round(avg);
+  const top10Cutoff = stats?.top10?.[0]?.totalSp || null;
+  const top50Cutoff = stats?.top50?.[0]?.totalSp || null;
+  const nextStudent = stats?.nextRank?.[0] || null;
+
   const mapRow = (row, index) => ({
     rank: index + 1,
     name: row.name,
@@ -327,7 +367,7 @@ async function studentPayload(student) {
       pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
     },
     leaderboard: leaderboard.map(mapRow),
-    groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
+    groupLeaderboard: (stats?.groupBoard || []).map(mapRow)
   };
 }
 
