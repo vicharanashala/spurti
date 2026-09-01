@@ -2096,6 +2096,11 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
 
   const enabled = survey?.enabled && survey.formUrl && student && !student[completedKey];
 
+  // Reset the done guard when the survey type changes (e.g. poll1 -> poll2).
+  // Without this, completing one survey locks out re-verification for others
+  // because the ref persists across renders.
+  useEffect(() => { done.current = false; }, [completedKey]);
+
   // Verify against the server. The completion flag is set ONLY by a real Google
   // submission (Apps Script webhook) or the server-side sheet sync — never by the
   // client — so clicking "I've submitted" cannot dismiss the modal without a
