@@ -119,18 +119,22 @@ export function validateBet({ state, course, goalPct, stake, multiplier, deadlin
 // it. Stamps the entry after the latest one so the running balance stays ordered
 // (dummy seed dates can be future-ish). Returns the new balance.
 export async function applySpDelta(email, delta, reason) {
-  const student = await Student.findOne({ email });
-  const newTotal = (student.totalSp || 0) + delta;
-  student.totalSp = newTotal;
-  if (newTotal > (student.highestSpEver || 0)) student.highestSpEver = newTotal;
-  await student.save();
+  const student = await Student.findOneAndUpdate(
+    { email },
+    { $inc: { totalSp: delta }, $max: { highestSpEver: delta > 0 ? undefined : -Infinity } },
+    { new: true }
+  );
+  if (!student) throw new Error(`Student not found: ${email}`);
+  if (delta > 0 && (student.totalSp || 0) > (student.highestSpEver || 0)) {
+    await Student.updateOne({ email }, { $set: { highestSpEver: student.totalSp } });
+  }
   const last = await SPTransaction.findOne({ email }).sort({ dateTime: -1 }).lean();
   const when = new Date(Math.max(Date.now(), (last?.dateTime ? new Date(last.dateTime).getTime() + 60000 : 0)));
   await SPTransaction.create({
     email, studentId: student._id, category: 'manual', sessionLabel: '',
-    deltaMode: 'absolute', deltaValue: delta, appliedDelta: delta, balanceAfter: newTotal, reason, dateTime: when
+    deltaMode: 'absolute', deltaValue: delta, appliedDelta: delta, balanceAfter: student.totalSp, reason, dateTime: when
   });
-  return newTotal;
+  return student.totalSp;
 }
 
 // DEMO ONLY: resolve a bet (there is no live settlement cron locally). The stake

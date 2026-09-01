@@ -22,13 +22,19 @@ const NAVY = '#20323b';
 const MUTED = '#6f8189';
 const FAINT = '#8a999e';
 
+// Sanitize text for canvas rendering — strip control characters and trim
+function sanitizeText(text) {
+  return String(text || '').replace(/[\x00-\x1f]/g, '').trim();
+}
+
 let logoPromise = null;
 function loadLogo() {
   if (!logoPromise) {
+    let resolved = false;
     logoPromise = new Promise((resolve, reject) => {
       const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
+      img.onload = () => { if (!resolved) { resolved = true; resolve(img); } };
+      img.onerror = () => { if (!resolved) { resolved = true; reject(new Error('Logo load failed')); } };
       img.src = VLED_LOGO;
     });
   }
@@ -48,9 +54,10 @@ function roundRect(ctx, x, y, w, h, r) {
 // Shrink the type until the line fits, rather than wrapping — a two-line name
 // would push the programme line into the footer.
 function fitText(ctx, text, maxWidth, startPx, font, minPx) {
+  const safeText = sanitizeText(text);
   let size = startPx;
   ctx.font = `700 ${size}px ${font}`;
-  while (ctx.measureText(text).width > maxWidth && size > minPx) {
+  while (ctx.measureText(safeText).width > maxWidth && size > minPx) {
     size -= 1;
     ctx.font = `700 ${size}px ${font}`;
   }
@@ -60,13 +67,14 @@ function fitText(ctx, text, maxWidth, startPx, font, minPx) {
 // `y` is the TOP of the line, not the baseline — the layout below stacks rows by
 // height, and mixing baselines into that is how the spacing drifts.
 function centred(ctx, text, cx, y, font, weight, size, colour, letterSpacing = 0) {
+  const safeText = sanitizeText(text);
   ctx.fillStyle = colour;
   ctx.font = `${weight} ${size}px ${font}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  if (!letterSpacing) { ctx.fillText(text, cx, y); return; }
+  if (!letterSpacing) { ctx.fillText(safeText, cx, y); return; }
   // Canvas has no letter-spacing in older Safari, so space the glyphs by hand.
-  const chars = [...text];
+  const chars = [...safeText];
   const total = chars.reduce((w, c) => w + ctx.measureText(c).width + letterSpacing, 0) - letterSpacing;
   let x = cx - total / 2;
   ctx.textAlign = 'left';

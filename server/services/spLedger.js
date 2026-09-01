@@ -6,9 +6,10 @@
 
 import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
+import { maskEmail } from './sp.js';
 
 /**
- * Get full ledger (all transactions) for a student, ordered by sessionDatetime.
+ * Get full ledger (all transactions) for a student, ordered by dateTime.
  * Returns running balance at each step.
  */
 export async function getLedger(email) {
@@ -16,27 +17,22 @@ export async function getLedger(email) {
   if (!student) return null;
 
   const transactions = await SPTransaction.find({ email: email.toLowerCase() })
-    .sort({ sessionDatetime: 1 })
+    .sort({ dateTime: 1 })
     .lean();
 
   let runningBalance = 0;
   const ledger = transactions.map(t => {
-    runningBalance += Number(t.delta || 0);
+    runningBalance += Number(t.appliedDelta || 0);
     return {
       category: t.category,
       sessionLabel: t.sessionLabel,
-      sessionDatetime: t.sessionDatetime,
-      delta: t.delta,
+      dateTime: t.dateTime,
+      appliedDelta: t.appliedDelta,
       reason: t.reason,
       balanceAfter: runningBalance,
-      recordedAt: t.recordedAt
+      createdAt: t.createdAt
     };
   });
-
-  // Initial tx (first entry) should show balance = 100, not 100+100=200
-  if (ledger.length > 0 && ledger[0].category === 'initial') {
-    ledger[0].balanceAfter = 100;
-  }
 
   return {
     email: student.email,
@@ -65,8 +61,8 @@ export async function getPublicStudent(email) {
 }
 
 /**
- * Get all students summary from transaction log.
- * Much faster than recomputing since totalSp is stored on Student.
+ * Get all students summary.
+ * Uses totalSp stored on Student (fast).
  */
 export async function getAllStudentsSummary() {
   const students = await Student.find({}).lean();
@@ -74,42 +70,34 @@ export async function getAllStudentsSummary() {
     email: s.email,
     name: s.name,
     totalSp: s.totalSp,
-    hasAttendance: s.sessions && Object.values(s.sessions).some(v => v > 0)
   }));
 }
 
 /**
  * Append a new transaction and update Student.totalSp atomically.
- * Use this when new data arrives (attendance, chat, poll, activity).
  */
-export async function appendTransaction(email, category, sessionLabel, sessionDatetime, delta, reason, ingestedFrom) {
-  const sessionDt = sessionDatetime instanceof Date ? sessionDatetime : new Date(sessionDatetime);
+export async function appendTransaction(email, category, sessionLabel, dateTime, delta, reason) {
+  const dt = dateTime instanceof Date ? dateTime : new Date(dateTime);
+
+  const student = await Student.findOneAndUpdate(
+    { email: email.toLowerCase() },
+    { $inc: { totalSp: delta } },
+    { new: true }
+  );
+  if (!student) throw new Error(`Student not found: ${email}`);
 
   const [txn] = await SPTransaction.create([{
     email: email.toLowerCase(),
+    studentId: student._id,
     category,
     sessionLabel,
-    sessionDatetime: sessionDt,
-    delta,
+    deltaMode: 'absolute',
+    deltaValue: delta,
+    appliedDelta: delta,
+    balanceAfter: student.totalSp,
     reason,
-    recordedAt: new Date(),
-    ingestedFrom
+    dateTime: dt
   }]);
 
-  // Atomic update of student totalSp
-  await Student.updateOne(
-    { email: email.toLowerCase() },
-    { $inc: { totalSp: delta } }
-  );
-
   return txn;
-}
-
-function maskEmail(email) {
-  const value = String(email || '').trim();
-  const [name, domain] = value.split('@');
-  if (!name || !domain) return 'hidden email';
-  const visibleStart = name.slice(0, Math.min(2, name.length));
-  const visibleEnd = name.length > 4 ? name.slice(-2) : '';
-  return `${visibleStart}${'*'.repeat(Math.max(3, name.length - visibleStart.length - visibleEnd.length))}${visibleEnd}@${domain}`;
 }
