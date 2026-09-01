@@ -172,6 +172,15 @@ app.use(cors({
   },
   credentials: true
 }));
+// Force HTTPS in production — admin auth headers (x-admin-token) are sent in
+// plaintext and must not be intercepted. HSTS tells browsers to upgrade future
+// requests to HTTPS automatically.
+if (process.env.NODE_ENV === 'production') {
+  app.use((_req, res, next) => {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    next();
+  });
+}
 app.use(express.json({ limit: '2mb' }));
 app.use(mongoSanitize());
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100, message: 'Too many requests, please try again later.' }));
@@ -371,6 +380,8 @@ async function studentPayload(student) {
   };
 }
 
+// Admin auth: x-admin-email + x-admin-token headers. Requires HTTPS in production
+// (HSTS header above) — these credentials travel in plaintext over HTTP.
 function isAdmin(req) {
   if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false; // fail closed when admin creds aren't configured
   const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
