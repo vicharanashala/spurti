@@ -48,7 +48,8 @@ export async function computeAndStoreTrajectories(now = new Date()) {
   const students = await Student.find({ status: { $ne: 'excused' }, internshipStartDate: { $ne: null } })
     .select('email internshipStartDate').lean();
 
-  const txns = await SPTransaction.find({}).select('email dateTime balanceAfter').sort({ dateTime: 1 }).lean();
+  const activeEmails = students.map(s => s.email);
+  const txns = await SPTransaction.find({ email: { $in: activeEmails } }).select('email dateTime balanceAfter').sort({ dateTime: 1 }).lean();
   const byEmail = new Map();
   for (const t of txns) { const a = byEmail.get(t.email); if (a) a.push(t); else byEmail.set(t.email, [t]); }
 
