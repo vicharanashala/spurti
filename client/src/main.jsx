@@ -1695,7 +1695,7 @@ function AdminView({ admin, auth, onBack }) {
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
   const fetchStats = async () => {
-    const r = await fetch(`${API}/admin/stats`, headers);
+    const r = await fetch(`${API}/admin/stats`, { headers });
     if (r.ok) setStats(await r.json());
   };
   useEffect(() => {
@@ -2063,7 +2063,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   const loadList = async (status) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/admin/students-by-status?status=${status}&limit=200`, headers);
+      const res = await fetch(`${API}/admin/students-by-status?status=${encodeURIComponent(status)}&limit=200`, { headers });
       if (res.ok) setList(await res.json());
     } finally {
       setLoading(false);
