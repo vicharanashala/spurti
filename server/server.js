@@ -252,14 +252,16 @@ async function studentEmailFromRequest(req) {
 async function rankFor(email) {
   const student = await Student.findOne({ email }).lean();
   if (!student || student.status === 'excused') return null;
-  const better = await Student.countDocuments({
-    status: { $ne: 'excused' },
-    $or: [
-      { totalSp: { $gt: student.totalSp } },
-      { totalSp: student.totalSp, name: { $lt: student.name } }
-    ]
-  });
-  const cohortSize = await Student.countDocuments({ status: { $ne: 'excused' } });
+  const [better, cohortSize] = await Promise.all([
+    Student.countDocuments({
+      status: { $ne: 'excused' },
+      $or: [
+        { totalSp: { $gt: student.totalSp } },
+        { totalSp: student.totalSp, name: { $lt: student.name } }
+      ]
+    }),
+    Student.countDocuments({ status: { $ne: 'excused' } })
+  ]);
   return { rank: better + 1, cohortSize };
 }
 

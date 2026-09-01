@@ -5,7 +5,6 @@
 // audit/fraud penalty. The rubric writes the `spaprogresses` summary this reads.
 // The web app NEVER writes SP — it only renders what the rubric produced.
 // Universal: applies to ALL cohorts (15-May onward).
-import Student from '../models/Student.js';
 import SpaProgress from '../models/SpaProgress.js';
 
 export function isSpaEligible() { return true; } // SPA SP is a universal feature.
@@ -41,16 +40,15 @@ export function computeSpaSp(prog) {
 // also writes the `spaprogresses` summary this reads. The web app never writes SP.
 export async function buildSpaState(student) {
   const prog = await SpaProgress.findOne({ email: student.email }).lean();
-  const stu = await Student.findOne({ email: student.email }).lean();
   if (!prog) {
-    return { eligible: true, name: student.name, totalSp: stu?.totalSp || 0,
+    return { eligible: true, name: student.name, totalSp: student.totalSp || 0,
       activity: 'Activity 1: Linear Algebra', hasActivity: false, config: CONFIG, maxSp: MAX_SPA_SP };
   }
   const calc = computeSpaSp(prog);
   return {
     eligible: true,
     name: student.name,
-    totalSp: stu?.totalSp || 0,
+    totalSp: student.totalSp || 0,
     activity: prog.activity,
     hasActivity: (prog.learnValidated || 0) + (prog.teachValidated || 0) > 0,
     ...calc,
