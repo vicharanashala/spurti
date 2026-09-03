@@ -588,11 +588,12 @@ function ShareModal({ item, me, onClose }) {
   const [readSteps, setReadSteps] = useState(false);
 
   useEffect(() => {
+    let live = true;
     import('./shareCard.js').then(m => {
       const text = m.shareCaption(item, verifyUrl);
-      setCaption(text);
-      setGenerated(text);
+      if (live) { setCaption(text); setGenerated(text); }
     });
+    return () => { live = false; };
   }, [item.achId]);
 
   useEffect(() => {
