@@ -1,6 +1,6 @@
 import 'dotenv/config';
 
-export const PORT = Number(process.env.PORT || 5290);
+export const PORT = Number(process.env.PORT || 5003);
 export const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/analysis_summership';
 export const ALLOW_STUDENT_SEARCH = process.env.ALLOW_STUDENT_SEARCH === 'true';
 // Samagama validates the student's chatengine_token cookie. Spurti reads that
