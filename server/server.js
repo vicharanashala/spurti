@@ -699,7 +699,7 @@ api.post('/share/card', async (req, res) => {
 // and which achievements are actually worth posting.
 api.post('/share/track', async (req, res) => {
   const { achId, platform, captionEdited, captionChars } = req.body || {};
-  if (!achId || !['linkedin', 'whatsapp', 'download', 'copy', 'native'].includes(platform)) {
+  if (!achId || !['linkedin', 'download', 'copy', 'native'].includes(platform)) {
     return res.status(400).json({ error: 'achId and a valid platform required' });
   }
   const student = await vibeStudent(req);
@@ -732,6 +732,14 @@ api.post('/ping', async (req, res) => {
   }
   if (page === 'record' || page.startsWith('admin')) {
     liveViewers.set(normalized, { name, page, lastSeen: new Date() });
+  }
+  // The map is keyed by email and entries are only ever refreshed, never removed:
+  // a student who stops pinging leaves a row behind forever. Evict anything stale
+  // on every ping so the map tracks only genuinely-active viewers (bounded by the
+  // 60s "active now" window the admin screen reads).
+  const seen = Date.now() - 60_000;
+  for (const [k, v] of liveViewers.entries()) {
+    if (v.lastSeen.getTime() < seen) liveViewers.delete(k);
   }
   res.json({ ok: true });
 });
