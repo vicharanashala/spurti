@@ -21,12 +21,18 @@ import Announcement from './models/Announcement.js';
 import AnnouncementAck from './models/AnnouncementAck.js';
 import { buildAchievementState, verifyAchievement } from './services/achievements.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { appendAudit as appendAuditService } from './services/audit.js';
 import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
 import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 import { buildSpaState } from './services/spa.js';
 import { buildTrajectoryState } from './services/trajectory.js';
+import { AUTO_HIDE_REPORTS, bumpResource, markDeleted, markRestored, summariseImpact, validateCreate, validateStars, buildListQuery, buildMineQuery, buildContextQuery, withContextLabel } from './services/resources.js';
+import registerResourceRoutes from './routes/resources.js';
+import registerAdminResourceRoutes from './routes/admin-resources.js';
+import registerAdminMissionRoutes from './routes/admin-missions.js';
+import registerMissionRoutes from './routes/missions.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -1197,6 +1203,73 @@ function pipelineHealth() {
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
 }
+
+// ---- Resource Exchange (Tier 2: routes extracted to ./routes/resources.js)
+// ponytail: report rate-limit is in-memory per-process. With 3k students this
+// fine; a real cluster would need Redis. Document + lift when we scale out.
+const reportBuckets = new Map();            // email -> {date, count}
+const REPORT_LIMIT_PER_DAY = 3;             // plan §10.4 — same email can't grief-report
+function reportRateLimit(email) {
+  const today = new Date().toISOString().slice(0, 10);
+  const key = email;
+  const b = reportBuckets.get(key);
+  if (!b || b.date !== today) {
+    reportBuckets.set(key, { date: today, count: 1 });
+    return false;
+  }
+  b.count += 1;
+  return b.count > REPORT_LIMIT_PER_DAY;
+}
+
+async function requireStudent(req, res) {
+  const email = await studentEmailFromRequest(req);
+  if (!email) { res.status(401).json({ error: 'Not authenticated' }); return null; }
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+  if (!student) { res.status(404).json({ error: 'Student not found' }); return null; }
+  if (student.status === 'excused') { res.status(403).json({ error: 'Excused student' }); return null; }
+  return { email, student };
+}
+
+registerResourceRoutes(api, {
+  requireStudent,
+  reportRateLimit,
+  leaderboardGroup,
+  validateCreate,
+  validateStars,
+  buildListQuery,
+  buildMineQuery,
+  buildContextQuery,
+  bumpResource,
+  markDeleted,
+  markRestored,
+  summariseImpact,
+  AUTO_HIDE_REPORTS,
+  withContextLabel,
+});
+
+// ---- Recovery Missions (student surface) ----
+// Tier 3: state-machine only — no SP write (that's tier 4).
+registerMissionRoutes(api, { requireStudent });
+
+// ---- Admin moderation ----
+// Routes extracted to ./routes/admin-resources.js — that file owns the
+// withAudit fail-closed policy for every admin mutation. Mounting here with
+// the app's adminGuard and the real appendAudit from the service layer.
+//
+// Tier 6 — student-facing routes stay in routes/resources.js; admin-only
+// routes live in routes/admin-resources.js so the audit/emitter boundary
+// is obvious in the file tree.
+registerAdminResourceRoutes(api, {
+  adminGuard,
+  leaderboardGroup,
+  appendAudit: appendAuditService
+});
+
+// ---- Recovery Missions — admin surface ----
+// Tier 5: Recovery Monitor. Read-only listings + template enable/disable.
+// No manual assignment / SP / completion paths — the scheduler is the
+// only thing that creates assignments.
+registerAdminMissionRoutes(api, { adminGuard });
 
 app.use('/api', api);
 app.use('/spurti/api', api);

@@ -281,6 +281,16 @@ function SearchModal({ onClose, onStudent }) {
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
   const [commitPhase, setCommitPhase] = useState('vibe');
+  // Tier 4 — phase cards can ask to open the create-resource modal pre-filled
+  // with their own context (e.g. phase='vibe'). Lifted to StudentView so any
+  // future surface (poll cards, journey cards) can also trigger it without
+  // re-implementing the modal logic.
+  const [shareCtx, setShareCtx] = useState(null);
+  // Tier 4 — phase card "open this resource" → switch to Resource Exchange
+  // and open the detail sheet. State lifted to StudentView so a freshly
+  // mounted ResourcesPanel can pick up an already-open resource.
+  const [pendingOpenId, setPendingOpenId] = useState(null);
+  const openResourceInExchange = (resourceId) => { setTab('resources'); setPendingOpenId(resourceId); };
   const { student } = profile;
   const goToCommitment = ph => { setCommitPhase(ph); setTab('vibe'); };
   // Fetched up here rather than inside the panel because the server decides who
@@ -289,6 +299,21 @@ function StudentView({ profile, onBack }) {
   const unseenAchievements = ach?.counts?.unseen || 0;
   // Opening the tab is what counts as seeing them, wherever it is opened from.
   const selectTab = key => { setTab(key); if (key === 'achievements') markAchievementsSeen(); };
+  // Tier 8B — feature toggle. Read once at mount via the public
+  // /api/resources/availability endpoint (no auth required). When admin
+  // disables, the tab disappears immediately. Stale-page handling for an
+  // already-open ResourcesPanel happens INSIDE that component (catches 403
+  // response and calls onResourceExchangeDisabled to flip this state).
+  const [featureEnabled, setFeatureEnabled] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API}/resources/availability?_=${Date.now()}`)
+      .then(r => r.ok ? r.json() : { enabled: true })
+      .then(j => { if (!cancelled && j && typeof j.enabled === 'boolean') setFeatureEnabled(j.enabled); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const onResourceExchangeDisabled = () => setFeatureEnabled(false);
   return (
     <main className="page compact">
       <header className="topbar">
@@ -311,16 +336,26 @@ function StudentView({ profile, onBack }) {
         ['journey','My Journey'],
         ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
         ['spa','SPA Points'],
+        // Tier 8B — Resource Exchange tab disappears when admin has
+        // disabled the feature. If the student is currently on the tab
+        // when disable happens, the ResourcesPanel below flips to a
+        // friendly empty state via onResourceExchangeDisabled.
+        ...(featureEnabled ? [['resources','Resource Exchange']] : []),
         ...(ach?.visible ? [['achievements','Achievements', unseenAchievements]] : []),
         ['leaderboard','Leaderboard'],
         ['faq','FAQ']]} />
-      {tab === 'bank' && <SpBank transactions={profile.transactions} />}
-      {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
+      {tab === 'bank' && <div className="bank-stack">
+        <RecoveryMissionWidget />
+        <SpBank transactions={profile.transactions} />
+      </div>}
+      {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} openShareFor={setShareCtx} onOpenResourceInExchange={openResourceInExchange} featureEnabled={featureEnabled} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
       {tab === 'achievements' && ach?.visible && <AchievementsPanel student={student} data={ach} />}
       {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
+      {tab === 'resources' && featureEnabled && <ResourcesPanel student={student} pendingOpenId={pendingOpenId} onConsumedPending={() => setPendingOpenId(null)} onResourceExchangeDisabled={onResourceExchangeDisabled} />}
       {tab === 'faq' && <FaqTab />}
+      {shareCtx && <CreateResourceSheet email={student.email} onClose={() => setShareCtx(null)} onCreated={() => setShareCtx(null)} initialContext={shareCtx} />}
     </main>
   );
 }
@@ -1082,6 +1117,155 @@ function Tabs({ tab, setTab, tabs }) {
   ))}</nav>;
 }
 
+// ---- Tier 3 — Recovery Mission Widget ---------------------------------------
+//
+// The centerpiece of the recovery-missions feature. Designed against the
+// mentor's previous criticism: "admin creates something, student doesn't
+// reliably see it." Every piece of state shown here comes from the
+// /api/missions/me endpoint on each mount. The widget carries NO local
+// state across remounts, so a browser refresh trivially proves the
+// closed-loop persistence — the test in test/missions-routes.test.js
+// does exactly that.
+//
+// ponytail: deliberately NOT extracted into its own file. main.jsx is
+// the project's single-file React tree (no router, no modules). Keeping
+// the widget inline matches the existing convention; if the SPA ever
+// moves to file-per-component, this can move with everything else.
+function RecoveryMissionWidget() {
+  const [state, setState] = useState({ loading: true });
+  const [busy, setBusy] = useState(false);
+
+  // Always refetch on mount. No cached state. This is the persistence test.
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setState({ loading: true });
+    try {
+      const res = await fetch(`${API}/missions/me`, { credentials: 'include' });
+      if (!res.ok) {
+        // 401/403/404 → widget stays hidden. Same pattern as ResourcesPanel's
+        // 403 feature_disabled handler: clean disappearance, no scary error.
+        return setState({ loading: false, hidden: true });
+      }
+      const data = await res.json();
+      if (!data.enabled) return setState({ loading: false, hidden: true });
+      if (!data.assignment) return setState({ loading: false, assignment: null });
+      setState({ loading: false, assignment: data.assignment });
+    } catch (err) {
+      setState({ loading: false, hidden: true });
+    }
+  }
+
+  async function send(event) {
+    setBusy(true);
+    try {
+      const res = await fetch(`${API}/missions/me`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event })
+      });
+      if (!res.ok) {
+        // Bubble the error up as a soft message — never raw JSON.
+        const body = await res.json().catch(() => ({}));
+        setState(s => ({ ...s, error: body.error || `Could not ${event} mission` }));
+      } else {
+        const data = await res.json();
+        setState({ loading: false, assignment: data.assignment });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (state.loading) return null;     // widget doesn't appear during initial load
+  if (state.hidden) return null;
+  if (!state.assignment) return null; // no mission this week
+
+  const { assignment } = state;
+  const status = assignment.status;
+  const dueLabel = formatDueLabel(assignment.expiresAt);
+
+  // Supportive copy — never "you are falling behind", never "low performer".
+  // Detection score, trigger reason, and cohort rank are admin-only — never
+  // shown to the student. The widget is intentionally unaware of why the
+  // mission exists.
+  let body;
+  let cta;
+  if (status === 'assigned') {
+    body = (
+      <>
+        <p className="rmw-blurb">
+          You're a little behind your usual participation. Complete this small activity to get back on track.
+        </p>
+        <h3 className="rmw-title">{assignment.mission.title}</h3>
+        <p className="rmw-meta">
+          2 of 3 questions required · +{assignment.mission.rewardSp} SP
+        </p>
+        <p className="rmw-due">Due {dueLabel}</p>
+      </>
+    );
+    cta = <button disabled={busy} onClick={() => send('start')}>Start Mission</button>;
+  } else if (status === 'in_progress') {
+    body = (
+      <>
+        <p className="rmw-blurb">
+          You're a little behind your usual participation. Complete this small activity to get back on track.
+        </p>
+        <h3 className="rmw-title">{assignment.mission.title}</h3>
+        <p className="rmw-meta">
+          2 of 3 questions required · +{assignment.mission.rewardSp} SP
+        </p>
+        <p className="rmw-due">Due {dueLabel}</p>
+      </>
+    );
+    cta = <button disabled={busy} onClick={() => send('complete')}>Continue</button>;
+  } else if (status === 'completed') {
+    body = (
+      <>
+        <h3 className="rmw-title">Mission complete</h3>
+        <p className="rmw-meta rmw-meta--done">
+          +{assignment.mission.rewardSp} SP earned
+        </p>
+      </>
+    );
+    cta = null;
+  } else if (status === 'expired') {
+    body = (
+      <>
+        <h3 className="rmw-title">Mission expired</h3>
+        <p className="rmw-blurb">Try again next week.</p>
+      </>
+    );
+    cta = null;
+  }
+
+  return (
+    <section className="panel rmw">
+      <div className="panel-head">
+        <h2>
+          <span className="rmw-eyebrow">🎯 Your Recovery Mission</span>
+        </h2>
+      </div>
+      <div className="rmw-body">
+        {body}
+        {state.error && <p className="rmw-error">{state.error}</p>}
+      </div>
+      {cta && <div className="rmw-cta">{cta}</div>}
+    </section>
+  );
+}
+
+// Render a due-label from the ISO expiresAt — e.g. "Friday" or "Friday 5pm".
+function formatDueLabel(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return 'today';
+  return d.toLocaleDateString('en-US', { weekday: 'long' });
+}
+
 function SpBank({ transactions }) {
   const [size, setSize] = useState(10);
   // Server sends oldest→newest (sorted dateTime asc); show newest first.
@@ -1240,7 +1424,7 @@ function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave })
   );
 }
 
-function MyJourney({ student, goToCommitment, canCommit = false }) {
+function MyJourney({ student, goToCommitment, canCommit = false, openShareFor, onOpenResourceInExchange, featureEnabled = true }) {
   const email = student.email;
   const [data, setData] = useState(null);
   const [form, setForm] = useState({});
@@ -1293,6 +1477,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
           </div>
           <PhaseGoal phaseKey="standup" field="standupBy" goal={goals.standup} targetText="reach 3,600 Zoom minutes" {...gp} />
           {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('standup')}>🎲 Stake SP →</button></div>}
+          {featureEnabled && <ResourcesForContext student={student} contextType="phase" contextRef="standup" label="Standup resources" openShareFor={openShareFor} onOpenResourceInExchange={onOpenResourceInExchange} />}
         </section>
 
         {/* ViBe — goal + commitment */}
@@ -1309,6 +1494,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
           {vibe.activeCommitment && <div className="jr-splits"><span className="jr-pill amber">🎲 Active commitment: +{vibe.activeCommitment.goalPct}%</span></div>}
           <PhaseGoal phaseKey="vibe" field="vibeBy" goal={goals.vibe} targetText="finish all your ViBe courses" {...gp} />
           {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('vibe')}>🎲 Stake SP →</button></div>}
+          {featureEnabled && <ResourcesForContext student={student} contextType="phase" contextRef="vibe" label="ViBe resources" openShareFor={openShareFor} onOpenResourceInExchange={onOpenResourceInExchange} />}
         </section>
 
         {/* SPA — goal (date) works now; progress data + commitment coming soon */}
@@ -1316,6 +1502,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
           <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-soon">Data soon</span></div>
           <p className="jr-sub">53-problem set · progress data coming soon</p>
           <PhaseGoal phaseKey="spa" field="spaBy" goal={goals.spa} targetText="solve all 53 problems" {...gp} />
+          {featureEnabled && <ResourcesForContext student={student} contextType="phase" contextRef="spa" label="SPA resources" openShareFor={openShareFor} onOpenResourceInExchange={onOpenResourceInExchange} />}
         </section>
 
         {/* Projects — goal (date) works now; progress data coming soon */}
@@ -1323,6 +1510,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
           <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">Data soon</span></div>
           <p className="jr-sub">Pull requests · progress data coming soon</p>
           <PhaseGoal phaseKey="project" field="projectBy" goal={goals.project} targetText="raise your first PR" {...gp} />
+          {featureEnabled && <ResourcesForContext student={student} contextType="phase" contextRef="project" label="Project resources" openShareFor={openShareFor} onOpenResourceInExchange={onOpenResourceInExchange} />}
         </section>
       </div>
 
@@ -1717,7 +1905,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['achievements','Achievements'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['achievements','Achievements'], ['resources','Resources'], ['students','Students']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -1739,8 +1927,676 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'achievements' && <AdminAchievements data={analytics?.sharing} reigns={analytics?.reigns} />}
       {tab === 'analytics' && <PipelineHealth data={analytics?.pipeline} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
+      {tab === 'resources' && <ResourceControlCenter headers={headers} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
+  );
+}
+
+// ---- Resource Control Center — Tier 7 Admin SPA ----------------------------
+// Three sub-views: Resources list, Reports queue, Audit Log. Each action
+// from this component goes through the audited admin routes we wired in
+// tier 6 — no direct database touch. Closing the lifecycle:
+//   student create → admin sees in Resources → admin hides → student can no
+//   longer see it → admin sees the action in Audit Log.
+const RCC_FILTERS = [
+  { key: 'all',       label: 'All' },
+  { key: 'active',    label: 'Active' },
+  { key: 'reported',  label: 'Reported' },
+  { key: 'hidden',    label: 'Hidden' },
+  { key: 'deleted',   label: 'Deleted' },
+  { key: 'effective', label: 'Effective' },
+  { key: 'official',  label: 'Official' }
+];
+
+function ResourceControlCenter({ headers }) {
+  const [sub, setSub] = useState('resources');
+  const [rows, setRows] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [err, setErr] = useState(null);
+  const [openId, setOpenId] = useState(null);
+
+  // ── Resources sub-view ───────────────────────────────────────────────────
+  const loadResources = async () => {
+    setErr(null);
+    try {
+      const inclDeleted = filter === 'deleted' ? '&deleted=1' : '';
+      const r = await fetch(`${API}/admin/resources?_=${Date.now()}${inclDeleted}`, { headers });
+      if (!r.ok) throw new Error(await r.text());
+      setRows((await r.json()).rows);
+    } catch (e) { setErr(e.message || 'Network error'); }
+  };
+  useEffect(() => { if (sub === 'resources') loadResources(); }, [sub, filter]);
+
+  const filteredRows = (rows || []).filter(r => {
+    if (!search) return true;
+    const hay = [r.title, r.description, r.tags?.join(' '), r.cohort, r.createdBy?.email, r.createdBy?.name]
+      .filter(Boolean).join(' ').toLowerCase();
+    if (!hay.includes(search.toLowerCase())) return false;
+    // Filter by status / source / reports — coarse client-side; the server
+    // filter chips are an MVP and the route has no per-filter query params yet.
+    if (filter === 'active' && r.deletedAt) return false;
+    if (filter === 'deleted' && !r.deletedAt) return false;
+    if (filter === 'hidden' && !r.deletedAt) return false;
+    if (filter === 'effective' && r.status !== 'effective') return false;
+    if (filter === 'official' && r.source !== 'admin') return false;
+    return true;
+  });
+
+  return (
+    <section className="rcc">
+      <div className="rcc-subtabs">
+        <button className={sub === 'resources' ? 'on' : ''} onClick={() => setSub('resources')}>Resources</button>
+        <button className={sub === 'reports'  ? 'on' : ''} onClick={() => setSub('reports')}>Reports</button>
+        <button className={sub === 'recovery' ? 'on' : ''} onClick={() => setSub('recovery')}>Recovery</button>
+        <button className={sub === 'audit'    ? 'on' : ''} onClick={() => setSub('audit')}>Audit Log</button>
+      </div>
+      <ResourceExchangeToggle headers={headers} />
+      {sub === 'resources' && (
+        <>
+          <div className="rcc-toolbar">
+            <input
+              className="rcc-search"
+              type="search"
+              placeholder="Search title, topic, owner…"
+              value={search} onChange={e => setSearch(e.target.value)}
+            />
+            <div className="rcc-filters">
+              {RCC_FILTERS.map(f => (
+                <button key={f.key}
+                  className={f.key === filter ? 'rcc-chip on' : 'rcc-chip'}
+                  onClick={() => setFilter(f.key)}>{f.label}</button>
+              ))}
+            </div>
+          </div>
+          {err && <p className="error">{err}</p>}
+          {!rows && <p className="muted">Loading…</p>}
+          {rows && filteredRows.length === 0 && <p className="muted">No resources match these filters.</p>}
+          {rows && filteredRows.length > 0 && (
+            <div className="rcc-list">
+              {filteredRows.map(r => (
+                <div key={r._id} className="rcc-row">
+                  <div className="rcc-row-head">
+                    <h3>{r.title}</h3>
+                    {r.source === 'admin' && <span className="rcc-badge official" title="Admin-created">Official</span>}
+                    {r.deletedAt && <span className="rcc-badge deleted">Deleted</span>}
+                    {r.status === 'effective' && <span className="rcc-badge effective">Effective</span>}
+                  </div>
+                  <p className="rcc-meta">
+                    {r.contextType} · {r.contextRef} · {r.cohort}
+                  </p>
+                  <p className="rcc-owner">By {r.createdBy?.name || r.createdBy?.email}</p>
+                  <p className="rcc-impact">
+                    {r.saveCount} saves · {r.ratingCount > 0 ? `${(r.ratingSum / r.ratingCount).toFixed(1)} ★ · ${r.ratingCount} ratings` : 'no ratings'}
+                  </p>
+                  <button className="secondary" onClick={() => setOpenId(r._id)}>View</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {openId && (
+            <ResourceAdminDetail
+              resourceId={openId}
+              headers={headers}
+              onClose={() => setOpenId(null)}
+              onChanged={() => { setOpenId(null); loadResources(); }}
+            />
+          )}
+        </>
+      )}
+      {sub === 'reports' && <ReportsSubView headers={headers} />}
+      {sub === 'recovery' && <RecoveryMonitorView headers={headers} />}
+      {sub === 'audit'   && <AuditSubView headers={headers} />}
+    </section>
+  );
+}
+
+// ---- Tier 8B — Feature Control toggle card (admin side) --------------------
+// Single card at the top of the admin Resources sub-tab. Shows the current
+// state and provides Disable / Enable with a small confirmation modal.
+// The 1-minute server-side cache means a toggle is NOT instantaneous for
+// already-connected students; that caveat is surfaced inline.
+// ---- Tier 5 — Recovery Monitor (admin side) ---------------------------------
+//
+// Centerpiece of the admin side of Recovery Missions. Answers the
+// mentor's original criticism: admin creates something, admin can see
+// every step of the student-facing lifecycle.
+//
+// Design rules:
+//   - show stats + table + row-level detail (no admin-only actions
+//     beyond enable/disable on templates)
+//   - human-readable trigger reasons, not raw scoring formulas
+//   - monochrome per design directive
+//   - support what the SPURTHI scheduler detected (the assignment),
+//     don't second-guess it
+function RecoveryMonitorView({ headers }) {
+  const [stats, setStats] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [err, setErr] = useState(null);
+  const [openId, setOpenId] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [audit, setAudit] = useState([]);
+  const [templates, setTemplates] = useState([]);
+
+  async function load() {
+    setErr(null);
+    try {
+      const [s, l, t] = await Promise.all([
+        fetch(`${API}/admin/missions/stats`, { headers }).then(r => r.json()),
+        fetch(`${API}/admin/missions`,      { headers }).then(r => r.json()),
+        fetch(`${API}/admin/missions/templates`, { headers }).then(r => r.json())
+      ]);
+      setStats(s);
+      setRows((l && l.rows) || []);
+      setTemplates((t && t.templates) || []);
+    } catch (e) { setErr(e.message || 'Network error'); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function openRow(id) {
+    setOpenId(id);
+    setDetail(null);
+    setAudit([]);
+    try {
+      const [d, a] = await Promise.all([
+        fetch(`${API}/admin/missions/${id}`, { headers }).then(r => r.json()),
+        fetch(`${API}/admin/missions/${id}/audit`, { headers }).then(r => r.json())
+      ]);
+      setDetail(d);
+      setAudit((a && a.events) || []);
+    } catch (e) { setErr(e.message || 'Network error'); }
+  }
+
+  async function toggleTemplate(id, enabled) {
+    try {
+      const r = await fetch(`${API}/admin/missions/templates/${id}`, {
+        method: 'PATCH',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled })
+      });
+      if (!r.ok) throw new Error(await r.text());
+      await load();
+    } catch (e) { setErr(e.message || 'Network error'); }
+  }
+
+  if (err) return <p className="rcc-err">{err}</p>;
+  if (!stats) return <p className="rcc-muted">Loading…</p>;
+
+  return (
+    <div className="rmon">
+      {/* Stats card — the 5 numbers at the top */}
+      <div className="rmon-stats">
+        <div className="rmon-stat"><span className="rmon-stat-n">{stats.candidates}</span><span className="rmon-stat-l">Candidates</span></div>
+        <div className="rmon-stat"><span className="rmon-stat-n">{stats.assigned}</span><span className="rmon-stat-l">Assigned</span></div>
+        <div className="rmon-stat"><span className="rmon-stat-n">{stats.completed}</span><span className="rmon-stat-l">Completed</span></div>
+        <div className="rmon-stat"><span className="rmon-stat-n">{stats.expired}</span><span className="rmon-stat-l">Expired</span></div>
+        <div className="rmon-stat"><span className="rmon-stat-n">+{stats.spAwarded}</span><span className="rmon-stat-l">SP awarded</span></div>
+      </div>
+
+      <p className="rmon-week">This week · {stats.weekStart.slice(0, 10)}</p>
+
+      {/* Assignments table */}
+      <div className="rmon-table">
+        <div className="rmon-row rmon-row-h">
+          <span>Student</span><span>Trigger</span><span>Mission</span><span>Status</span><span>SP</span>
+        </div>
+        {rows.length === 0 && <p className="rmon-empty">No assignments this week.</p>}
+        {rows.map(r => (
+          <div key={r.assignmentId} className="rmon-row" onClick={() => openRow(r.assignmentId)}>
+            <span className="rmon-student">
+              <strong>{r.student.name}</strong>
+              <em>{r.student.cohort}</em>
+            </span>
+            <span className="rmon-trigger">{explainTrigger(r)}</span>
+            <span>{r.mission.title}</span>
+            <span className={`rmon-status rmon-status-${r.status}`}>{r.status.replace('_', ' ')}</span>
+            <span>{r.rewardApplied == null ? '—' : `+${r.rewardApplied}`}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Detail sheet */}
+      {openId && detail && (
+        <div className="overlay" onClick={() => setOpenId(null)}>
+          <section className="modal wide" onClick={e => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2>{detail.student.name} · {detail.student.cohort}</h2>
+              <button className="icon" onClick={() => setOpenId(null)}>×</button>
+            </div>
+            <div className="rmon-detail">
+              <div className="rmon-detail-section">
+                <h3>Why assigned</h3>
+                <p>{explainTriggerDetail(detail)}</p>
+              </div>
+              <div className="rmon-detail-section">
+                <h3>Mission</h3>
+                <p><strong>{detail.mission.title}</strong></p>
+                <p className="rmon-muted">{detail.mission.description}</p>
+              </div>
+              <div className="rmon-detail-section">
+                <h3>Status</h3>
+                <p>{detail.status}</p>
+                <p className="rmon-muted">
+                  Assigned: {new Date(detail.createdAt).toLocaleString()}<br/>
+                  Expires: {new Date(detail.expiresAt).toLocaleString()}<br/>
+                  {detail.completedAt && <>Completed: {new Date(detail.completedAt).toLocaleString()}</>}
+                </p>
+              </div>
+              <div className="rmon-detail-section">
+                <h3>Result</h3>
+                <p>{detail.rewardApplied == null ? '—' : `+${detail.rewardApplied} SP`}</p>
+                <p className="rmon-muted">Current student SP: {detail.student.currentTotalSp}</p>
+              </div>
+              <div className="rmon-detail-section">
+                <h3>Audit</h3>
+                {audit.map(e => (
+                  <div key={e.id} className="rmon-audit-row">
+                    <span className="rmon-audit-kind">{e.kind}</span>
+                    <span className="rmon-muted">{e.actorType}{e.actorEmail ? ` · ${e.actorEmail}` : ''}</span>
+                    <span className="rmon-muted">{new Date(e.at).toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* Templates enable/disable */}
+      <h3 className="rmon-h3">Templates</h3>
+      {templates.length === 0 && <p className="rmon-muted">No templates yet.</p>}
+      <div className="rmon-templates">
+        {templates.map(t => (
+          <div key={t.id} className="rmon-template">
+            <div>
+              <strong>{t.title}</strong>
+              <em>{t.activityType} · +{t.rewardSp} SP · {t.thisWeekAssignments} this week</em>
+            </div>
+            <label className="rmon-toggle">
+              <input
+                type="checkbox"
+                checked={t.enabled}
+                onChange={e => toggleTemplate(t.id, e.target.checked)}
+              />
+              <span>{t.enabled ? 'Enabled' : 'Disabled'}</span>
+            </label>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Render the human-readable trigger reason from a row. Avoids the
+// raw scoring formula — admin sees "why", not "how".
+function explainTrigger(row) {
+  if (!row.triggerReason) return '—';
+  if (row.spDelta7d < 0) return 'Engagement drop';
+  return 'Recent participation dip';
+}
+
+function explainTriggerDetail(detail) {
+  const delta = Number(detail.spDelta7d || 0);
+  const baseline = Number(detail.spAtDetection || 0);
+  if (baseline <= 0) return 'Recent participation dip';
+  const recent = baseline + delta; // baseline is the absolute total at detection
+  const pct = baseline > 0 ? Math.max(0, Math.round((baseline - recent) / baseline * 100)) : 0;
+  if (pct >= 30) return `Engagement dropped ${pct}% from personal baseline`;
+  if (pct >= 10) return `Engagement dipped ${pct}% from personal baseline`;
+  return 'Recent participation dip';
+}
+
+function ResourceExchangeToggle({ headers }) {
+  const [cfg, setCfg] = useState(null);
+  const [err, setErr] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [confirm, setConfirm] = useState(null); // { nextEnabled, reason }
+
+  const load = async () => {
+    setErr(null);
+    try {
+      const r = await fetch(`${API}/admin/resources/config`, { headers });
+      if (!r.ok) throw new Error(await r.text());
+      setCfg(await r.json());
+    } catch (e) { setErr(e.message || 'Network error'); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const apply = async (enabled, reason) => {
+    setErr(null); setMsg(null);
+    const r = await fetch(`${API}/admin/resources/config`, {
+      method: 'PATCH', headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled, reason })
+    });
+    if (!r.ok) { setErr(`HTTP ${r.status}: ${await r.text()}`); return; }
+    setMsg(enabled ? 'Re-enabled.' : 'Disabled.');
+    await load();
+  };
+
+  if (err && !cfg) return <div className="rcc-feature"><p className="error">{err}</p></div>;
+  if (!cfg) return <div className="rcc-feature"><p className="muted">Loading feature state…</p></div>;
+
+  const enabled = !!cfg.enabled;
+  return (
+    <div className="rcc-feature">
+      <div className="rcc-feature-head">
+        <div className="rcc-feature-title">
+          {/* Tier 9: this toggle now gates both Resource Exchange AND
+              Recovery Missions. The label reflects that broader scope. */}
+          <strong>Experimental features</strong>
+          <span className="rcc-feature-state">{enabled ? 'Enabled' : 'Disabled'}</span>
+        </div>
+        <button
+          onClick={() => setConfirm({ nextEnabled: !enabled, reason: '' })}
+        >
+          {enabled ? 'Disable' : 'Enable'}
+        </button>
+      </div>
+      <p className="muted rcc-feature-desc">
+        {enabled
+          ? 'Resource Exchange + Recovery Missions are both available to students.'
+          : 'Resource Exchange + Recovery Missions are both paused for students. Admin Control Center remains fully available.'}
+      </p>
+      {msg && <p className="muted rcc-flash">{msg}</p>}
+      {err && <p className="error rcc-flash">{err}</p>}
+      <p className="muted rcc-feature-cache">
+        Changes may take up to 60 seconds to reach active student sessions (server-side cache).
+      </p>
+      {confirm && (
+        <div className="overlay">
+          <section className="modal rcc-confirm">
+            <div className="modal-head">
+              <h2>{confirm.nextEnabled
+                ? 'Enable experimental features?'
+                : 'Disable experimental features?'}</h2>
+              <button className="icon" aria-label="Close confirm" onClick={() => setConfirm(null)}>x</button>
+            </div>
+            <p>{confirm.nextEnabled
+              ? 'Resource Exchange + Recovery Missions will be available to students again.'
+              : 'Resource Exchange + Recovery Missions will be paused for students. Existing data (resources, assignments, audit history) will not be deleted.'}</p>
+            <label className="rcc-confirm-reason">
+              Reason (optional, encouraged)
+              <input
+                value={confirm.reason}
+                onChange={e => setConfirm({ ...confirm, reason: e.target.value })}
+                placeholder={confirm.nextEnabled ? 'e.g. moderation maintenance complete' : 'e.g. moderation maintenance'}
+              />
+            </label>
+            <div className="rcc-confirm-actions">
+              <button className="secondary" onClick={() => setConfirm(null)}>Cancel</button>
+              <button onClick={async () => {
+                  await apply(confirm.nextEnabled, confirm.reason.trim() || '');
+                  setConfirm(null);
+                }}>{confirm.nextEnabled ? 'Enable' : 'Disable'}</button>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Resource detail (admin-side): full info + actions + activity log.
+function ResourceAdminDetail({ resourceId, headers, onClose, onChanged }) {
+  const [r, setR] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [err, setErr] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(null);
+
+  const load = async () => {
+    setErr(null);
+    try {
+      const [d, a] = await Promise.all([
+        fetch(`${API}/admin/resources/${resourceId}`, { headers }).then(x => x.json()),
+        fetch(`${API}/admin/resources/${resourceId}/audit`, { headers }).then(x => x.json())
+      ]);
+      if (d.error) { setErr(d.error); return; }
+      setR(d); setEvents(a.events || []);
+      setDraft({
+        title: d.title, description: d.description, url: d.url, tags: (d.tags || []).join(', '),
+        contextType: d.contextType, contextRef: d.contextRef, reason: ''
+      });
+    } catch (e) { setErr(e.message || 'Network error'); }
+  };
+  useEffect(() => { load(); }, [resourceId]);
+
+  const callAdmin = async (method, path, body) => {
+    setErr(null); setMsg(null);
+    const r = await fetch(`${API}${path}`, { method, headers: { ...headers, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    if (!r.ok) { setErr(`HTTP ${r.status}: ${await r.text()}`); return false; }
+    setMsg('Done.'); return true;
+  };
+
+  if (err && !r) return <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>Resource</h2><button className="icon" onClick={onClose}>x</button></div><p className="error">{err}</p></section></div>;
+  if (!r) return <div className="overlay"><section className="modal"><p className="muted">Loading…</p></section></div>;
+
+  const isDeleted = !!r.deletedAt;
+  return (
+    <div className="overlay">
+      <section className="modal wide rcc-detail">
+        <div className="modal-head">
+          <h2>{r.title}</h2>
+          <button className="icon" aria-label="Close detail" onClick={onClose}>x</button>
+        </div>
+
+        {msg && <p className="muted rcc-flash">{msg}</p>}
+        {err && <p className="error rcc-flash">{err}</p>}
+
+        <div className="rcc-detail-grid">
+          {/* Content */}
+          <div className="rcc-block">
+            <h3>Content</h3>
+            {editing ? (
+              <>
+                <label>Title<input value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })} /></label>
+                <label>Description<textarea rows={3} value={draft.description} onChange={e => setDraft({ ...draft, description: e.target.value })} /></label>
+                <label>URL<input value={draft.url} onChange={e => setDraft({ ...draft, url: e.target.value })} /></label>
+                <label>Tags (comma-separated)<input value={draft.tags} onChange={e => setDraft({ ...draft, tags: e.target.value })} /></label>
+                <label>Context type<input value={draft.contextType} onChange={e => setDraft({ ...draft, contextType: e.target.value })} /></label>
+                <label>Context ref<input value={draft.contextRef} onChange={e => setDraft({ ...draft, contextRef: e.target.value })} /></label>
+                <label>Reason<input value={draft.reason} onChange={e => setDraft({ ...draft, reason: e.target.value })} placeholder="why this change?" /></label>
+              </>
+            ) : (
+              <>
+                <p><strong>Type:</strong> {r.type}</p>
+                {r.url && <p><strong>URL:</strong> <a href={r.url} target="_blank" rel="noopener noreferrer">{r.url}</a></p>}
+                {r.description && <p><strong>Description:</strong> {r.description}</p>}
+                {r.tags && r.tags.length > 0 && <p><strong>Tags:</strong> {r.tags.join(', ')}</p>}
+                <p><strong>Context:</strong> {r.contextType} / {r.contextRef}</p>
+                <p><strong>Cohort:</strong> {r.cohort}</p>
+                <p><strong>Source:</strong> {r.source}{r.source === 'admin' && ' (Official)'}</p>
+              </>
+            )}
+          </div>
+
+          {/* Impact */}
+          <div className="rcc-block">
+            <h3>Impact</h3>
+            <p>Saves: <strong>{r.saveCount}</strong></p>
+            <p>Ratings: <strong>{r.ratingCount}</strong></p>
+            <p>Average rating: <strong>{r.ratingCount > 0 ? (r.ratingSum / r.ratingCount).toFixed(2) : '—'}</strong></p>
+            <p>Utility: <strong>{r.utility?.toFixed?.(3) ?? r.utility}</strong></p>
+            <p>Status: <strong>{r.status}</strong></p>
+            {isDeleted && <p><strong>Visibility:</strong> deleted{isDeleted && r.deletedBy ? ` (by ${r.deletedBy})` : ''}</p>}
+          </div>
+        </div>
+
+        <div className="rcc-actions">
+          {editing ? (
+            <>
+              <button onClick={async () => {
+                const body = {
+                  title: draft.title, description: draft.description, url: draft.url,
+                  tags: draft.tags.split(',').map(t => t.trim()).filter(Boolean),
+                  contextType: draft.contextType, contextRef: draft.contextRef,
+                  reason: draft.reason
+                };
+                if (await callAdmin('PATCH', `/admin/resources/${resourceId}`, body)) {
+                  setEditing(false); onChanged();
+                }
+              }}>Save</button>
+              <button className="secondary" onClick={() => setEditing(false)}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => setEditing(true)} disabled={isDeleted}>Edit</button>
+              <button className="warn" disabled={isDeleted} onClick={async () => {
+                const reason = prompt('Hide reason (spam, outdated, inappropriate…)', 'spam');
+                if (reason == null) return;
+                if (await callAdmin('POST', `/admin/resources/${resourceId}/hide`, { reason })) onChanged();
+              }}>Hide</button>
+              {isDeleted && <button onClick={async () => {
+                if (await callAdmin('POST', `/admin/resources/${resourceId}/restore`)) onChanged();
+              }}>Restore</button>}
+              <button className="danger" onClick={async () => {
+                const reason = prompt('Why delete this resource?', 'wrong topic');
+                if (reason == null) return;
+                if (await callAdmin('DELETE', `/admin/resources/${resourceId}`, { reason })) onChanged();
+              }}>Delete</button>
+            </>
+          )}
+        </div>
+
+        <div className="rcc-block">
+          <h3>Activity</h3>
+          {events.length === 0 && <p className="muted">No audit events yet for this resource.</p>}
+          <ul className="rcc-timeline">
+            {events.map((e, i) => (
+              <li key={i} className={`rcc-ev rcc-ev-${e.kind}`}>
+                <span className="rcc-ev-time">{new Date(e.at).toLocaleString()}</span>
+                <span className="rcc-ev-actor"><strong>{e.actorEmail || e.actorType}</strong></span>
+                <span className="rcc-ev-kind">{e.kind.replace('resource.', '')}</span>
+                {e.payload?.reason && <span className="muted rcc-ev-payload">— {e.payload.reason}</span>}
+                {e.payload?.title && <span className="muted rcc-ev-payload">— {e.payload.title}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// Reports sub-view: open reports first, with quick action buttons.
+function ReportsSubView({ headers }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  const [msg, setMsg] = useState(null);
+
+  const load = async () => {
+    setErr(null);
+    try {
+      const r = await fetch(`${API}/admin/reports?_=${Date.now()}`, { headers });
+      if (!r.ok) throw new Error(await r.text());
+      setRows((await r.json()).rows);
+    } catch (e) { setErr(e.message); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const resolve = async (id, action, hideReason) => {
+    setErr(null); setMsg(null);
+    const body = { action };
+    if (action === 'auto_hide') body.hideReason = hideReason || 'spam';
+    const r = await fetch(`${API}/admin/resource-reports/${id}/resolve`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) { setErr(`HTTP ${r.status}: ${await r.text()}`); return; }
+    setMsg(`Resolved (${action}).`); load();
+  };
+
+  return (
+    <div className="rcc-reports">
+      {msg && <p className="muted rcc-flash">{msg}</p>}
+      {err && <p className="error rcc-flash">{err}</p>}
+      {!rows && <p className="muted">Loading…</p>}
+      {rows && rows.length === 0 && <p className="muted">No reports yet.</p>}
+      {rows && rows.map(r => (
+        <div key={r._id} className={`rcc-report rcc-report-${r.status}`}>
+          <div className="rcc-report-head">
+            <strong>Resource:</strong> {r.resourceId}
+            {r.status !== 'open' && <span className="rcc-badge">{r.status}</span>}
+          </div>
+          <p className="muted">Reported by <strong>{r.email}</strong> at {new Date(r.createdAt).toLocaleString()}</p>
+          {r.reason && <p>Reason: {r.reason}</p>}
+          {r.status === 'open' && (
+            <div className="rcc-report-actions">
+              <button onClick={() => resolve(r._id, 'dismissed')}>Keep</button>
+              <button className="warn" onClick={() => {
+                const reason = prompt('Why hide?', 'spam');
+                if (reason != null) resolve(r._id, 'auto_hide', reason);
+              }}>Hide</button>
+              <button className="secondary" onClick={() => resolve(r._id, 'actioned')}>Mark actioned</button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Audit sub-view: chronological log with simple filters.
+function AuditSubView({ headers }) {
+  const [events, setEvents] = useState(null);
+  const [err, setErr] = useState(null);
+  const [filterActor, setFilterActor] = useState('');
+  const [filterKind, setFilterKind] = useState('');
+  const [filterFrom, setFilterFrom] = useState('');
+
+  const load = async () => {
+    setErr(null);
+    const params = new URLSearchParams();
+    if (filterActor) params.set('actor', filterActor);
+    if (filterKind) params.set('kind', filterKind);
+    if (filterFrom) params.set('from', filterFrom);
+    try {
+      const r = await fetch(`${API}/admin/audit?${params.toString()}`, { headers });
+      if (!r.ok) throw new Error(await r.text());
+      setEvents((await r.json()).events);
+    } catch (e) { setErr(e.message); }
+  };
+  useEffect(() => { load(); }, [filterActor, filterKind, filterFrom]);
+
+  return (
+    <div className="rcc-audit">
+      <div className="rcc-toolbar">
+        <input type="text" placeholder="Actor email" value={filterActor} onChange={e => setFilterActor(e.target.value)} />
+        <select value={filterKind} onChange={e => setFilterKind(e.target.value)}>
+          <option value="">All kinds</option>
+          <option value="resource.created">created</option>
+          <option value="resource.updated">updated</option>
+          <option value="resource.reported">reported</option>
+          <option value="resource.auto_hidden">auto_hidden</option>
+          <option value="resource.hidden">hidden</option>
+          <option value="resource.restored">restored</option>
+          <option value="resource.deleted">deleted</option>
+          <option value="resource.report_resolved">report_resolved</option>
+        </select>
+        <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} />
+        <button className="secondary" onClick={load}>Refresh</button>
+      </div>
+      {err && <p className="error">{err}</p>}
+      {!events && <p className="muted">Loading…</p>}
+      {events && events.length === 0 && <p className="muted">No events match these filters.</p>}
+      {events && (
+        <table className="table">
+          <thead><tr><th>Time</th><th>Actor</th><th>Kind</th><th>Resource</th></tr></thead>
+          <tbody>
+            {events.map((e, i) => (
+              <tr key={i}>
+                <td>{new Date(e.at).toLocaleString()}</td>
+                <td>{e.actorEmail || e.actorType}</td>
+                <td>{e.kind.replace('resource.', '')}</td>
+                <td className="muted">{e.resourceId}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 
@@ -2167,3 +3023,576 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
 
 
 createRoot(document.getElementById('root')).render(<App />);
+
+// ---- Resource Exchange ----------------------------------------------------
+// Tier 3 SPA tab. Reuses every existing primitive: .panel / .cards / .card /
+// .overlay / .modal / .muted / .error / .tabs / .tab-badge. NO new design
+// system. NO new state library. NO new api helper — same `${API}/...?email=`
+// fetch pattern as every other tab.
+// ponytail: list is single-fetch with limit=50 (the route's server cap); no
+// infinite scroll, no client-side pagination. Add pagination when 50 isn't
+// enough on real cohorts.
+// ponytail: no toast/notification system; inline `.error` / `.muted` text
+// only, matching the rest of the SPA's status conventions.
+// The card surfaces resource.contextType + contextRef + phase as a single
+// muted meta line — that's how it visually belongs to SPURTHI's existing
+// learning context (plan §1 / §2).
+
+// Tier 4 — "resources attached to this context" inline list. Renders inside
+// existing learning surfaces (phase cards in MyJourney today; later, poll
+// cards and journey snapshots). Fetches from the context-bound endpoint
+// `/api/resources/context/:type/:ref`, sorted by utility desc, capped at 12.
+// ponytail: per-context card limit hard-capped at 3 in this view so a busy
+// phase card never overflows; rest are reachable from the full list.
+//
+// ponytail: card click navigates to the full Resource Exchange tab instead of
+// rendering its own detail modal. Reason: the existing detail modal lives
+// inside ResourcesPanel (with `createdBy`, save/rate/report wiring) —
+// duplicating it here would drift. Switching tabs achieves the same goal with
+// zero new chrome.
+function ResourcesForContext({ student, contextType, contextRef, label, openShareFor, onOpenResourceInExchange }) {
+  const email = student.email;
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  const [total, setTotal] = useState(0);
+  const load = async () => {
+    try {
+      const r = await fetch(`${API}/resources/context/${contextType}/${encodeURIComponent(contextRef)}`, { credentials: 'include' });
+      if (!r.ok) { setErr('Failed to load resources'); return; }
+      const j = await r.json();
+      setRows(j.rows || []);
+      setTotal(j.total || 0);
+    } catch (e) { setErr(e?.message || 'Network error'); }
+  };
+  useEffect(() => { load(); }, [contextType, contextRef, email]);
+  const visible = rows ? rows.slice(0, 3) : null;
+  const more = total > 3;
+  return (
+    <div className="rx-ctx">
+      <header className="rx-ctx-head">
+        <span className="muted">{label || 'Related resources'}</span>
+        <button className="secondary rx-ctx-share" onClick={() => openShareFor && openShareFor({ type: contextType, ref: contextRef })}
+                aria-label={`Share a resource for this ${contextType}`}>
+          Share a resource
+        </button>
+      </header>
+      {err && <p className="error">{err}</p>}
+      {visible == null ? (
+        <p className="muted rx-ctx-empty">Loading…</p>
+      ) : visible.length === 0 ? (
+        <p className="muted rx-ctx-empty">No shared resources yet — be the first to add one.</p>
+      ) : (
+        <div className="rx-ctx-list">
+          {visible.map(r => (
+            <button key={r._id} className="rx-ctx-card" onClick={() => onOpenResourceInExchange && onOpenResourceInExchange(r._id)} aria-label={`Open ${r.title} in Resource Exchange`}>
+              <span className="muted rx-ctx-card-meta">{contextType === 'phase' ? r.contextRef : r.contextLabel || r.contextRef}</span>
+              <span className="rx-ctx-card-title">{r.title}</span>
+              {r.description && <span className="muted rx-ctx-card-desc">{r.description.length > 90 ? r.description.slice(0, 87) + '…' : r.description}</span>}
+              <span className="muted rx-ctx-card-foot">{(r.ratingCount ? `${(r.ratingSum / r.ratingCount).toFixed(1)} avg · ${r.ratingCount} ratings` : 'no ratings')} · saved by {r.saveCount ?? 0}</span>
+            </button>
+          ))}
+          {more && <button className="rx-ctx-more muted" onClick={() => onOpenResourceInExchange && onOpenResourceInExchange(null)}>See all in Resource Exchange</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+const R_TYPE_ICON = { link: 'Link', video: 'Video', note: 'Note', code: 'Code' };
+const R_CONTEXT_LABEL = { topic: '', question: '', phase: '' };
+// Each resource row carries a server-computed `contextLabel` (e.g.
+// "#backprop", "Standups", or the poll-question text). The SPA never renders
+// raw contextRef — that would expose ObjectIds to students.
+
+function ResourcesPanel({ student, pendingOpenId, onConsumedPending, onResourceExchangeDisabled }) {
+  const email = student.email;
+  const [sub, setSub] = useState('discover');
+  const [rows, setRows] = useState(null);
+  const [sort, setSort] = useState('latest');
+  const [q, setQ] = useState('');
+  const [error, setError] = useState(null);
+  const [featureDisabled, setFeatureDisabled] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [openRes, setOpenRes] = useState(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [mine, setMine] = useState(null);
+  const [stats, setStats] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Tier 11 — cohort pulse + my-saved are loaded alongside the row fetch so
+  // the first paint of the Discover tab already has numbers. Saves a round
+  // trip on every sub-tab switch. Errors here are non-fatal (just leaves
+  // stats as null → no pulse strip rendered); the row fetch is the source
+  // of truth for the actual content.
+  const fetchRows = async () => {
+    setError(null);
+    setSessionExpired(false);
+    const url = sub === 'mine'
+      ? `${API}/resources/mine`
+      : sub === 'saved'
+        ? `${API}/resources/saved`
+        : `${API}/resources?feed=${sort}`;
+    try {
+      const r = await fetch(url, { credentials: 'include' });
+      if (r.status === 401) {
+        // Tier 11 — show a friendly recovery state instead of the raw
+        // server error string. The user is clearly logged in (StudentView
+        // just loaded), so a 401 here means the chatengine_token cookie
+        // is gone — a reload re-runs the Samagama handshake.
+        setSessionExpired(true);
+        return;
+      }
+      const j = await r.json();
+      // Tier 8B — 403 feature_disabled is the runtime source-of-truth
+      // for stale-page handling. Flip our local state and notify the
+      // parent so the tab disappears across the whole student UI.
+      if (r.status === 403 && j?.error === 'feature_disabled') {
+        setFeatureDisabled(true);
+        if (onResourceExchangeDisabled) onResourceExchangeDisabled();
+        return;
+      }
+      if (!r.ok) { setError(j.error || 'Failed to load'); return; }
+      if (sub === 'mine') { setMine(j); setRows(j.rows || []); }
+      else setRows(j.rows || []);
+    } catch (e) { setError(e?.message || 'Network error'); }
+  };
+
+  const fetchStats = async () => {
+    try {
+      const r = await fetch(`${API}/resources/stats`, { credentials: 'include' });
+      if (!r.ok) return;
+      const j = await r.json();
+      setStats(j);
+    } catch { /* non-fatal */ }
+  };
+
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([fetchRows(), sub === 'discover' && fetchStats()]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  useEffect(() => { refresh(); }, [sub, sort, q, email]);
+  // Tier 11 — load stats once when the panel mounts; the cohort pulse
+  // changes slowly (new resources are spread over weeks), so we don't
+  // re-fetch on every tab/sub-tab switch.
+  useEffect(() => { fetchStats(); }, [email]);
+
+  // Tier 4 — when StudentView hands us a pendingOpenId (a phase card
+  // click requested this exact resource), wait for the list to load, then
+  // open the detail sheet. Falls back to "not found" silently if the id
+  // doesn't match any current row.
+  useEffect(() => {
+    if (!pendingOpenId || !rows) return;
+    const r = rows.find(x => String(x._id) === String(pendingOpenId));
+    if (r) { setOpenRes(r); onConsumedPending && onConsumedPending(); }
+  }, [rows, pendingOpenId, onConsumedPending]);
+
+  // Tier 8B — friendly empty state when admin disabled the feature.
+  // Replaces the list + search + share-create UI with a single short
+  // message. No scary technical error, no toast, no broken UI.
+  if (featureDisabled) {
+    return (
+      <div className="rx">
+        <section className="panel rx-head">
+          <h2>Resource Exchange</h2>
+        </section>
+        <section className="panel empty rx-disabled">
+          <p className="muted">Resource Exchange is temporarily unavailable.</p>
+          <p className="muted rx-disabled-sub">Existing resources remain in place and will return when the feature is re-enabled.</p>
+        </section>
+      </div>
+    );
+  }
+
+  // Tier 11 — session recovery state. Replaces the entire list surface
+  // with a single short card + reload button. Never shows the raw
+  // "Not authenticated" text from the server.
+  if (sessionExpired) {
+    return (
+      <div className="rx">
+        <section className="panel rx-head">
+          <h2>Resource Exchange</h2>
+          <p className="muted">
+            Resources contribute useful material at the point in the cohort where it is relevant — tagged to a topic, phase, or poll so it is obvious why each is here.
+          </p>
+        </section>
+        <section className="panel empty rx-session">
+          <p className="rx-session-title">Your session expired.</p>
+          <p className="muted">Reload the page to re-establish the connection.</p>
+          <button className="primary rx-session-btn" onClick={() => window.location.reload()}>
+            Reload
+          </button>
+        </section>
+      </div>
+    );
+  }
+
+  // Tier 11 — Discover surface with the cohort pulse strip. Stats are
+  // null on first paint, so this short-circuits cleanly.
+  const pulse = sub === 'discover' && stats;
+
+  return (
+    <div className="rx">
+      <section className="panel rx-head">
+        <h2>Resource Exchange</h2>
+        <p className="muted">
+          Resources contribute useful material at the point in the cohort where it is relevant — tagged to a topic, phase, or poll so it is obvious why each is here.
+        </p>
+        <div className="rx-subtabs">
+          <button className={`rx-subtab ${sub === 'discover' ? 'active' : ''}`} onClick={() => setSub('discover')}>Discover</button>
+          <button className={`rx-subtab ${sub === 'saved' ? 'active' : ''}`} onClick={() => setSub('saved')}>Saved</button>
+          <button className={`rx-subtab ${sub === 'mine' ? 'active' : ''}`} onClick={() => setSub('mine')}>My resources</button>
+          <button className="rx-subtab primary" onClick={() => setShowCreate(true)}>Share a resource</button>
+          <button
+            className="rx-subtab ghost rx-refresh"
+            onClick={refresh}
+            disabled={refreshing}
+            aria-label="Refresh resources"
+            title="Refresh">
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+        {sub === 'discover' && (
+          <div className="rx-search">
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by tag (e.g. backprop, easy)" aria-label="Search resources by tag" />
+            <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort resources">
+              <option value="latest">Most recent</option>
+              <option value="saves">Most saved</option>
+              <option value="utility">Most useful</option>
+            </select>
+          </div>
+        )}
+        {error && <p className="error">{error}</p>}
+      </section>
+
+      {/* Tier 11 — cohort pulse strip. Three text-only tiles. Monochrome:
+          numbers + label, no coloured dots or pills (per design directive). */}
+      {pulse && (
+        <section className="panel rx-pulse" aria-label="Cohort activity">
+          <div className="rx-pulse-tile">
+            <strong>{stats.totalResources}</strong>
+            <span>resources in cohort</span>
+          </div>
+          <div className="rx-pulse-tile">
+            <strong>{stats.totalSaves}</strong>
+            <span>total saves</span>
+          </div>
+          <div className="rx-pulse-tile">
+            <strong>{stats.totalRaters}</strong>
+            <span>students rating</span>
+          </div>
+        </section>
+      )}
+
+      {/* Tier 11 — popular tags as quick-fill chips. Click sets q to that
+          tag, which triggers a fetch with ?q=… rebuilt client-side. Tags
+          come from the server, sorted by usage desc. */}
+      {pulse && Array.isArray(stats.topTags) && stats.topTags.length > 0 && (
+        <section className="rx-tags" aria-label="Popular tags">
+          <span className="muted rx-tags-label">Popular tags</span>
+          {stats.topTags.map(t => (
+            <button
+              key={t.tag}
+              type="button"
+              className={`rx-tag ${q === t.tag ? 'active' : ''}`}
+              onClick={() => setQ(q === t.tag ? '' : t.tag)}
+              aria-label={`Filter by tag ${t.tag}`}>
+              {t.tag}
+              <em>{t.count}</em>
+            </button>
+          ))}
+        </section>
+      )}
+
+      {sub === 'mine' && mine && (
+        <section className="panel rx-impact">
+          <h3 className="rx-impact-title">Your impact</h3>
+          <div className="rx-impact-tiles">
+            <div><strong>{mine.resources ?? 0}</strong><span>resources shared</span></div>
+            <div><strong>{mine.totalSaves ?? 0}</strong><span>total saves</span></div>
+            <div><strong>{mine.totalRaters ?? 0}</strong><span>ratings received</span></div>
+            <div><strong>{mine.byStatus?.effective ?? 0}</strong><span>marked effective</span></div>
+          </div>
+        </section>
+      )}
+
+      {rows == null ? (
+        <section className="panel rx-skeleton" aria-hidden="true">
+          {[0, 1, 2].map(i => (
+            <div key={i} className="card rx-card rx-skel" />
+          ))}
+        </section>
+      ) : rows.length === 0 ? (
+        sub === 'discover' && !q ? (
+          <section className="panel empty rx-empty-cta">
+            <p className="rx-empty-title">No resources shared in your cohort yet.</p>
+            <p className="muted">Be the first. Share something useful and the cohort will see it instantly.</p>
+            <button className="primary rx-empty-btn" onClick={() => setShowCreate(true)}>Share the first resource</button>
+          </section>
+        ) : (
+          <section className="panel empty">
+            <p className="muted">
+              {sub === 'saved'
+                ? 'Nothing saved yet. Tap Save on a resource to keep it here.'
+                : sub === 'mine'
+                  ? "You haven't shared anything yet. Try Share a resource to start."
+                  : q
+                    ? `Nothing in your cohort matches "${q}". Try a broader tag, or share the first one yourself.`
+                    : 'No resources in your cohort yet. Be the first to share.'}
+            </p>
+          </section>
+        )
+      ) : (
+        <div className="cards rx-list">
+          {rows.map(r => (
+            <ResourceCard key={r._id} r={r} onOpen={() => setOpenRes(r)} email={email} onChanged={refresh} />
+          ))}
+        </div>
+      )}
+
+      {openRes && (
+        <ResourceSheet resource={openRes} email={email}
+          onClose={() => setOpenRes(null)} onChanged={() => { refresh(); setOpenRes(null); }} />
+      )}
+      {showCreate && (
+        <CreateResourceSheet email={email}
+          onClose={() => setShowCreate(false)}
+          onCreated={() => { setShowCreate(false); refresh(); }} />
+      )}
+    </div>
+  );
+}
+
+// One resource card. Order: title → context (muted, secondary) → description →
+// signals + actions. The context line is the differentiator: it shows the
+// resource's relevance to the cohort (topic tag, phase, or poll question) so
+// the student sees WHY this resource belongs in their feed.
+function ResourceCard({ r, onOpen, email, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const toggleSave = async (e) => {
+    e.stopPropagation();
+    setBusy(true);
+    try { await fetch(`${API}/resources/${r._id}/save`, { method: 'POST', credentials: 'include' }); onChanged(); }
+    finally { setBusy(false); }
+  };
+  // Tier 10 — like toggle. Optimistic local state for snappy UI; onChanged()
+  // refetches the row so the server's likeCount is the source of truth.
+  const toggleLike = async (e) => {
+    e.stopPropagation();
+    const wasLiked = r.likedByMe;
+    setBusy(true);
+    try {
+      await fetch(`${API}/resources/${r._id}/${wasLiked ? 'unlike' : 'like'}`, { method: 'POST', credentials: 'include' });
+      onChanged();
+    } finally { setBusy(false); }
+  };
+  const avg = r.ratingCount ? (r.ratingSum / r.ratingCount) : null;
+  const context = r.contextLabel || '';
+  const typeText = R_TYPE_ICON[r.type] || r.type;
+  return (
+    <article className="card rx-card" onClick={onOpen} role="button" tabIndex={0}
+             onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onOpen()}
+             aria-label={`Open resource: ${r.title}`}>
+      <header className="rx-card-head">
+        <span className="r-type" aria-hidden="true">{typeText}</span>
+        <h3>{r.title}</h3>
+        {r.status && <span className={`rx-status s-${r.status}`} title={`Status: ${r.status}`}>{r.status}</span>}
+      </header>
+      {context && <p className="muted rx-meta">{context}</p>}
+      {r.description && <p className="rx-desc">{r.description.length > 140 ? r.description.slice(0, 137) + '…' : r.description}</p>}
+      <footer className="rx-card-foot">
+        <span className="rx-stats">
+          {avg
+            ? <span title={`${r.ratingCount} ratings`}>{avg.toFixed(1)} avg <em>({r.ratingCount})</em></span>
+            : <span className="muted">no ratings yet</span>}
+          <span className="rx-saved">saved by {r.saveCount ?? 0}</span>
+          {/* Tier 10 — like/download counters */}
+          <span className="muted rx-likes" title="Likes">♥ {r.likeCount ?? 0}</span>
+          <span className="muted rx-downloads" title="Downloads">↓ {r.downloadCount ?? 0}</span>
+        </span>
+        <span className="rx-actions" onClick={e => e.stopPropagation()}>
+          {/* Tier 10 — like button next to save */}
+          <button className="secondary" disabled={busy} onClick={toggleLike} aria-label={r.likedByMe ? 'Unlike' : 'Like'}>
+            {r.likedByMe ? '♥ Liked' : '♡ Like'}
+          </button>
+          <button className="secondary" disabled={busy} onClick={toggleSave} aria-label="Save this resource">
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+          <span className="muted rx-by">by {r.createdBy?.name || 'a student'}</span>
+        </span>
+      </footer>
+    </article>
+  );
+}
+
+// Detail overlay. Same .overlay + .modal + .modal-head pattern as SearchModal,
+// TrajectoryModal, etc. No new chrome.
+function ResourceSheet({ resource: r, email, onClose, onChanged }) {
+  const [stars, setStars] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const context = r.contextLabel || '';
+  const rate = async (n) => {
+    setBusy(true);
+    try {
+      const res = await fetch(`${API}/resources/${r._id}/rate`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stars: n })
+      });
+      if (res.ok) { setStars(n); setMsg(`Rated ${n} of 5. Thanks for the signal.`); onChanged(); }
+      else { const j = await res.json().catch(() => ({})); setMsg(j.error || 'Could not save your rating.'); }
+    } finally { setBusy(false); }
+  };
+  const report = async () => {
+    setBusy(true);
+    try {
+      const reason = window.prompt('Why are you reporting this resource?') || '';
+      const res = await fetch(`${API}/resources/${r._id}/report`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason })
+      });
+      const j = await res.json().catch(() => ({}));
+      if (res.status === 429) setMsg('You have already reported several resources today. Try again tomorrow.');
+      else if (!res.ok) setMsg(j.error || 'Could not report.');
+      else { setMsg('Reported. The team will review it.'); onChanged(); }
+    } finally { setBusy(false); }
+  };
+  // Tier 10 — download counter. Opens the URL in a new tab + counts once
+  // per (resource, student). The server returns the URL explicitly so the
+  // SPA doesn't have to trust its own copy of the row.
+  const download = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(`${API}/resources/${r._id}/download`, { method: 'POST', credentials: 'include' });
+      const j = await res.json().catch(() => ({}));
+      if (res.ok && j.url) {
+        if (j.countedByMe) setMsg('Download tracked. Opening link…');
+        if (typeof window !== 'undefined') window.open(j.url, '_blank', 'noopener');
+        onChanged();
+      } else {
+        setMsg(j.error || 'Could not track download.');
+      }
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <section className="modal rx-sheet">
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">{R_TYPE_ICON[r.type] || r.type}</p>
+            <h2>{r.title}</h2>
+          </div>
+          <button className="icon" onClick={onClose} aria-label="Close resource">x</button>
+        </div>
+        {context && <p className="muted rx-meta">{context}</p>}
+        {r.description && <p className="rx-desc">{r.description}</p>}
+        {r.url && <p><a href={r.url} target="_blank" rel="noopener noreferrer">Open resource</a></p>}
+        <div className="rx-rate">
+          <span className="muted">How useful was this?</span>
+          <div className="rx-stars">
+            {[1, 2, 3, 4, 5].map(n => (
+              <button key={n} className="icon" disabled={busy} onClick={() => rate(n)}
+                      aria-label={`Rate ${n} of 5 stars`}>
+                {n <= stars ? '★' : '☆'}
+              </button>
+            ))}
+            {r.ratingCount ? <span className="muted">avg { (r.ratingSum / r.ratingCount).toFixed(1) } ({r.ratingCount})</span> : null}
+          </div>
+        </div>
+        <div className="rx-sheet-foot">
+          {/* Tier 10 — download button. Calls the download endpoint which
+              counts the download and returns the URL. Avoids hard-coding
+              the URL in the client (server is authoritative). */}
+          <button className="secondary" onClick={download} disabled={busy} aria-label="Download this resource">
+            {busy ? 'Tracking…' : 'Download'}
+          </button>
+          <button className="secondary" onClick={report} disabled={busy} aria-label="Report this resource">Report</button>
+          <span className="muted">by {r.createdBy?.name || 'a student'}</span>
+        </div>
+        {msg && <p className="muted">{msg}</p>}
+      </section>
+    </div>
+  );
+}
+
+// Create form — same shape as VibeGoals' inline section: labels above inputs,
+// error inline, primary submit. Topic context pre-fills because that's the
+// most common case; Tier 4 lets callers pass an `initialContext` so the
+// form opens already bound to the current phase / poll / topic.
+function CreateResourceSheet({ email, onClose, onCreated, initialContext }) {
+  const [type, setType] = useState('link');
+  const [url, setUrl] = useState('');
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [contextType, setContextType] = useState(initialContext?.type || 'topic');
+  const [contextRef, setContextRef] = useState(initialContext?.ref || '');
+  const [tags, setTags] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    const tagList = tags.split(/[\s,]+/).map(t => t.trim()).filter(Boolean);
+    try {
+      const res = await fetch(`${API}/resources`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, url: type === 'link' || type === 'video' ? url : '', title, description, contextType, contextRef, tags: tagList })
+      });
+      const j = await res.json();
+      if (!res.ok) setErr(j.error || 'Could not create resource.');
+      else onCreated();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <section className="modal rx-create">
+        <div className="modal-head">
+          <h2>Share a resource</h2>
+          <button className="icon" onClick={onClose} aria-label="Close share form">x</button>
+        </div>
+        <p className="muted">Help a peer. Resources are publicly visible to your cohort, and indexed by tag, topic, or phase.</p>
+        <div className="rx-form">
+          <label>Type
+            <select value={type} onChange={e => setType(e.target.value)}>
+              <option value="link">Link</option>
+              <option value="video">Video</option>
+              <option value="note">Note</option>
+              <option value="code">Code</option>
+            </select>
+          </label>
+          {(type === 'link' || type === 'video') && (
+            <label>URL<input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://…" /></label>
+          )}
+          <label>Title<input value={title} onChange={e => setTitle(e.target.value)} maxLength={80} placeholder="Backprop explained" /></label>
+          <label>Description<textarea value={description} onChange={e => setDescription(e.target.value)} maxLength={400} rows={3} placeholder="What is this and how does it help?" /></label>
+          <label>Context
+            <select value={contextType} onChange={e => setContextType(e.target.value)} aria-label="Context type">
+              <option value="topic">Topic tag (e.g. backprop)</option>
+              <option value="phase">Phase (standup, vibe, spa, project)</option>
+              <option value="question">Poll question</option>
+            </select>
+          </label>
+          <label>{contextType === 'topic' ? 'Tag' : contextType === 'phase' ? 'Phase key' : 'Poll record id'}
+            <input value={contextRef} onChange={e => setContextRef(e.target.value)}
+                   placeholder={contextType === 'topic' ? 'backprop' : contextType === 'phase' ? 'standup' : 'poll id from samagama'} />
+          </label>
+          <label>Tags (up to 5, space- or comma-separated)
+            <input value={tags} onChange={e => setTags(e.target.value)} placeholder="neural-nets entropy easy" />
+          </label>
+          {err && <p className="error">{err}</p>}
+        </div>
+        <div className="rx-sheet-foot">
+          <button className="secondary" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="primary" onClick={submit} disabled={busy || !title || !contextRef}
+                  aria-label="Share this resource">
+            {busy ? 'Sharing…' : 'Share resource'}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}

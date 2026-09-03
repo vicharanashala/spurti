@@ -36,3 +36,4 @@ data/
 logs/
 sp-runs/
 *.bak-*
+.spurti-plan/

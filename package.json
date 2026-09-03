@@ -11,6 +11,8 @@
     "add-students": "node server/scripts/addStudents.js",
     "sync-students": "node server/scripts/syncStudents.js",
     "ingest-session": "node server/scripts/ingestSession.js",
+    "recovery-missions": "node server/scripts/runRecoveryMissions.js",
+    "recovery-missions:dry-run": "node server/scripts/runRecoveryMissions.js --dry-run",
     "setup": "npm install && npm --prefix client install && npm run rebuild && npm run build",
     "build": "npm --prefix client run build",
     "start": "node server/server.js",
@@ -21,5 +23,8 @@
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
     "mongoose": "^8.8.4"
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2"
   }
 }

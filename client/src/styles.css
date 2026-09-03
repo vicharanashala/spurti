@@ -854,3 +854,237 @@ tr.step-alert td { border-color: #f3c9c5; }
 .ann-done { background: #f6f8fb; border: 1px solid var(--line); }
 .ann-done p, .ann-done header strong { color: var(--muted); }
 .ann-caughtup { margin: 2px 0 0; font-size: 13px; }
+
+/* ---- Resource Exchange (Tier 3 SPA tab) ------------------------------- */
+.rx-subtabs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.rx-subtab { background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; font-weight: 600; cursor: pointer; }
+.rx-subtab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.rx-subtab.primary { background: var(--primary-dark); color: #fff; border-color: var(--primary-dark); }
+.rx-search { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.rx-search input, .rx-search select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
+.rx-search input { flex: 1 1 220px; }
+
+.rx-impact-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.rx-impact-tiles > div { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px; text-align: center; }
+.rx-impact-tiles strong { display: block; font-size: 22px; color: var(--primary); }
+.rx-impact-tiles span { color: var(--muted); font-size: 13px; }
+.rx-impact-title { margin: 0 0 10px; font-size: 15px; color: var(--muted); }
+
+.rx-list { gap: 12px; }
+.rx-card { cursor: pointer; transition: transform 80ms ease, box-shadow 80ms ease; padding: 14px 16px; }
+.rx-card:hover, .rx-card:focus { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(15,23,42,.06); outline: none; }
+.rx-card-head { display: flex; align-items: center; gap: 10px; }
+.rx-card-head h3 { margin: 0; font-size: 16px; line-height: 1.3; }
+.r-type { font-size: 18px; flex-shrink: 0; }
+.rx-meta { font-size: 13px; margin: 6px 0; }
+.rx-desc { font-size: 14px; line-height: 1.5; margin: 8px 0; color: var(--ink); }
+.rx-card-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.rx-stats { display: flex; gap: 12px; font-size: 13px; color: var(--ink); }
+.rx-stats em { font-style: normal; color: var(--muted); font-size: 12px; }
+.rx-actions { display: flex; align-items: center; gap: 10px; }
+.rx-by { font-size: 12px; }
+.rx-status { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: var(--primary-dark); text-transform: capitalize; }
+.rx-status.s-new { background: #f1f5f9; color: #475569; }
+.rx-status.s-verified { background: #ecfdf5; color: #065f46; }
+.rx-status.s-effective { background: #eff6ff; color: #1d4ed8; }
+
+.rx-form { display: grid; gap: 12px; margin: 8px 0; }
+.rx-form label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.rx-form input, .rx-form textarea, .rx-form select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; font-family: inherit; }
+.rx-rate { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px; background: #f8fafc; border-radius: 10px; }
+.rx-stars button { font-size: 22px; padding: 2px 4px; }
+.rx-sheet-foot, .rx-sheet-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 12px; }
+.rx-sheet-foot .rx-by { font-size: 13px; }
+
+/* ---- Tier 11 — Resource Exchange richness (monochrome) ------------------ */
+/* Cohort pulse strip — three text tiles, no colour, no coloured dots. The
+   user-facing directive is monochrome: state is signalled by text + outlined
+   buttons, never by coloured pills. */
+.rx-pulse { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.rx-pulse-tile { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; text-align: center; }
+.rx-pulse-tile strong { display: block; font-size: 22px; font-weight: 600; color: var(--ink); }
+.rx-pulse-tile span { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
+
+/* Popular-tags strip — quick-fill chips for the search box. Tap to filter
+   the discover feed. Active state is the same outlined treatment the
+   rest of the panel uses; no colours. */
+.rx-tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 14px; margin: 0 0 12px; background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+.rx-tags-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 4px; }
+.rx-tag { background: #f8fafc; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; font-family: inherit; display: inline-flex; align-items: center; gap: 6px; }
+.rx-tag em { font-style: normal; color: var(--muted); font-size: 11px; }
+.rx-tag.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+.rx-tag.active em { color: rgba(255,255,255,.7); }
+.rx-tag:hover:not(.active) { background: #fff; border-color: var(--ink); }
+
+/* Refresh button — a ghost chip in the subtab row. */
+.rx-subtab.ghost { background: #fff; border-style: dashed; }
+.rx-subtab.ghost:hover:not([disabled]) { background: #f8fafc; }
+.rx-subtab.ghost[disabled] { opacity: 0.6; cursor: default; }
+.rx-refresh { margin-left: auto; }
+
+/* Session-expired card — replaces the raw "Not authenticated" red banner
+   with a calm, branded recovery state + Reload button. */
+.rx-session { padding: 36px 24px; text-align: center; }
+.rx-session-title { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+.rx-session .muted { margin: 0 0 14px; font-size: 14px; }
+.rx-session-btn { padding: 8px 22px; }
+
+/* Empty-state CTA — replaced the bare "No resources yet" line with a
+   primary CTA that opens the share form. Discover-only. */
+.rx-empty-cta { padding: 36px 24px; text-align: center; }
+.rx-empty-title { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+.rx-empty-cta .muted { margin: 0 0 14px; font-size: 14px; }
+.rx-empty-btn { padding: 8px 22px; }
+
+/* Skeleton placeholder — three placeholder cards with the same dimensions
+   as a real resource card. Subtle pulse animation, monochrome. */
+.rx-skeleton { display: grid; gap: 12px; padding: 14px 16px; }
+.rx-skel { height: 132px; border: 1px dashed var(--line); background:
+  repeating-linear-gradient(90deg, #f8fafc 0, #f8fafc 24px, #ffffff 24px, #ffffff 48px);
+  animation: rx-skel-pulse 1.4s linear infinite; cursor: default; }
+.rx-skel:hover { transform: none; box-shadow: none; }
+@keyframes rx-skel-pulse { 0% { background-position: 0 0; } 100% { background-position: 48px 0; } }
+
+/* Tier 4 — resources attached to a learning context (phase cards, etc.) */
+.rx-ctx { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.rx-ctx-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 12px; }
+.rx-ctx-head .muted { font-weight: 600; color: var(--ink); }
+.rx-ctx-share { font-size: 12px; padding: 4px 10px; }
+.rx-ctx-empty { padding: 10px 0; font-style: italic; }
+.rx-ctx-list { display: grid; gap: 8px; }
+.rx-ctx-card {
+  display: grid; gap: 4px; text-align: left;
+  background: #f8fafc; border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; cursor: pointer; font: inherit; color: inherit;
+  transition: background 80ms ease, border-color 80ms ease;
+  width: 100%;
+}
+.rx-ctx-card:hover, .rx-ctx-card:focus {
+  background: #fff; border-color: var(--primary); outline: none;
+}
+.rx-ctx-card-meta { font-size: 12px; text-transform: lowercase; }
+.rx-ctx-card-title { font-size: 14px; font-weight: 600; line-height: 1.3; }
+.rx-ctx-card-desc { font-size: 13px; line-height: 1.4; }
+.rx-ctx-card-foot { font-size: 12px; margin-top: 2px; }
+.rx-ctx-more { background: none; border: 1px dashed var(--line); border-radius: 8px; padding: 8px; cursor: pointer; font: inherit; text-align: center; }
+.rx-ctx-more:hover { background: #fff; }
+
+/* ---- Resource Control Center (Tier 7 Admin SPA) ------------------------- */
+.rcc-subtabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.rcc-subtabs button { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line); background: #f8fafc; cursor: pointer; font: inherit; }
+.rcc-subtabs button.on { background: var(--primary); color: white; border-color: var(--primary); }
+.rcc-toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.rcc-search { flex: 1; min-width: 200px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); font: inherit; }
+.rcc-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.rcc-chip { padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); background: #fff; cursor: pointer; font: inherit; font-size: 12px; }
+.rcc-chip.on { background: var(--primary); color: white; border-color: var(--primary); }
+.rcc-list { display: grid; gap: 10px; }
+.rcc-row { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 4px; }
+.rcc-row-head { display: flex; gap: 8px; align-items: center; }
+.rcc-row-head h3 { margin: 0; font-size: 16px; }
+.rcc-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; text-transform: lowercase; }
+.rcc-badge.official { background: #ecfeff; color: #0e7490; border: 1px solid #a5f3fc; }
+.rcc-badge.deleted { background: #fee2e2; color: #991b1b; }
+.rcc-badge.effective { background: #ecfdf5; color: #065f46; }
+.rcc-meta { font-size: 12px; color: var(--muted); margin: 0; }
+.rcc-owner { font-size: 13px; margin: 0; }
+.rcc-impact { font-size: 12px; color: var(--muted); margin: 0; }
+.rcc-detail { padding-bottom: 18px; }
+.rcc-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 720px) { .rcc-detail-grid { grid-template-columns: 1fr; } }
+.rcc-block { background: #f8fafc; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+.rcc-block h3 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.rcc-block p { margin: 4px 0; font-size: 14px; }
+.rcc-block label { display: block; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.rcc-block label input, .rcc-block label textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+.rcc-actions { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
+.rcc-actions button.warn { background: #fde68a; color: #92400e; border-color: #fcd34d; }
+.rcc-actions button.danger { background: #fecaca; color: #991b1b; border-color: #fca5a5; }
+.rcc-timeline { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.rcc-ev { display: flex; gap: 8px; align-items: baseline; font-size: 13px; padding: 6px 8px; border-left: 3px solid var(--primary); background: #fff; border-radius: 0 6px 6px 0; }
+.rcc-ev-time { color: var(--muted); font-size: 12px; min-width: 160px; }
+.rcc-ev-actor { min-width: 140px; }
+.rcc-ev-kind { font-weight: 600; }
+.rcc-ev-payload { font-size: 12px; }
+.rcc-flash { padding: 6px 10px; border-radius: 6px; }
+.rcc-report { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+.rcc-report-open { border-left: 4px solid #f59e0b; }
+.rcc-report-resolved { border-left: 4px solid #10b981; opacity: .85; }
+.rcc-report-head { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+.rcc-report-actions { display: flex; gap: 8px; margin-top: 8px; }
+.rcc-report-actions button.warn { background: #fde68a; color: #92400e; border-color: #fcd34d; }
+.rcc-audit table { font-size: 13px; }
+.rcc-audit td { word-break: break-all; }
+.rcc-audit input[type=text] { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+.rcc-audit select, .rcc-audit input[type=date] { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; background: #fff; }
+
+/* ---- Tier 8B — Resource Exchange feature toggle (admin) ------------------- */
+/* Tier 8B — monochrome per design directive. No green/red dots, no coloured
+   badges. State is conveyed by text label + outlined button variant only,
+   consistent with the rest of SPURTHI's admin UI. */
+.rcc-feature { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin-bottom: 14px; }
+.rcc-feature-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 6px; }
+.rcc-feature-title { display: flex; gap: 10px; align-items: baseline; font-size: 16px; }
+.rcc-feature-title strong { font-weight: 600; }
+.rcc-feature-state { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: #f8fafc; }
+.rcc-feature-desc { margin: 4px 0 8px; font-size: 13px; }
+.rcc-feature-cache { margin: 8px 0 0; font-size: 11px; color: var(--muted); font-style: italic; }
+.rcc-confirm { max-width: 480px; }
+.rcc-confirm p { margin: 0 0 12px; font-size: 14px; line-height: 1.45; }
+.rcc-confirm-reason { display: block; font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+.rcc-confirm-reason input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; margin-top: 4px; }
+.rcc-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ---- Tier 8B — student "temporarily unavailable" state -------------------- */
+.rx-disabled { padding: 32px 20px; text-align: center; }
+.rx-disabled p { margin: 4px 0; font-size: 15px; }
+.rx-disabled-sub { font-size: 13px; }
+
+/* ---- Tier 3 — Recovery Mission Widget (student) --------------------------- */
+/* Monochrome per design directive — no coloured state pills, no status dots.
+   Supportive copy is the only signal. */
+.bank-stack > .rmw + .panel { margin-top: 16px; }
+.rmw { display: block; padding: 16px 20px; border: 1px solid var(--line); border-radius: 8px; background: #fff; margin-bottom: 16px; }
+.rmw .panel-head h2 { font-size: 16px; font-weight: 600; }
+.rmw-eyebrow { font-size: 13px; color: var(--muted); letter-spacing: 0.02em; text-transform: uppercase; }
+.rmw-body { padding: 12px 16px 4px; }
+.rmw-blurb { margin: 0 0 12px; font-size: 14px; line-height: 1.45; color: var(--muted); }
+.rmw-title { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
+.rmw-meta { margin: 0 0 4px; font-size: 13px; color: var(--muted); }
+.rmw-meta--done { font-weight: 500; color: var(--text); }
+.rmw-due { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
+.rmw-cta { padding: 8px 16px 14px; display: flex; justify-content: flex-start; }
+.rmw-cta button { padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; cursor: pointer; }
+.rmw-cta button[disabled] { opacity: 0.5; cursor: default; }
+.rmw-error { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+
+/* ---- Tier 5 — Recovery Monitor (admin) ----------------------------------- */
+/* Monochrome per design directive. No coloured status pills — the
+   human-readable trigger reason and a single text label are the signals. */
+.rmon { display: flex; flex-direction: column; gap: 14px; }
+.rmon-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+.rmon-stat { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+.rmon-stat-n { font-size: 22px; font-weight: 600; }
+.rmon-stat-l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.rmon-week { font-size: 12px; color: var(--muted); margin: -4px 0 4px; }
+.rmon-table { background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.rmon-row { display: grid; grid-template-columns: 1.2fr 1fr 1.4fr 0.8fr 0.5fr; gap: 12px; padding: 10px 14px; align-items: center; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 13px; }
+.rmon-row:last-child { border-bottom: none; }
+.rmon-row-h { font-weight: 600; background: #f8fafc; cursor: default; font-size: 12px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--muted); }
+.rmon-row:hover:not(.rmon-row-h) { background: #fafafa; }
+.rmon-student strong { display: block; }
+.rmon-student em { font-style: normal; font-size: 11px; color: var(--muted); }
+.rmon-trigger { font-size: 13px; color: var(--muted); }
+.rmon-status { font-size: 12px; color: var(--muted); text-transform: capitalize; }
+.rmon-empty { padding: 20px; text-align: center; color: var(--muted); font-size: 13px; margin: 0; }
+.rmon-h3 { margin: 14px 0 4px; font-size: 14px; font-weight: 600; }
+.rmon-muted { color: var(--muted); font-size: 13px; }
+.rmon-detail { display: flex; flex-direction: column; gap: 12px; padding: 0 16px 16px; }
+.rmon-detail-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 4px; }
+.rmon-detail-section p { margin: 0 0 4px; font-size: 14px; }
+.rmon-audit-row { display: grid; grid-template-columns: 1.2fr 1.5fr 1fr; gap: 12px; padding: 4px 0; font-size: 13px; border-bottom: 1px solid #f1f5f9; }
+.rmon-audit-kind { font-family: ui-monospace, monospace; font-size: 12px; }
+.rmon-templates { display: flex; flex-direction: column; gap: 8px; }
+.rmon-template { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.rmon-template em { font-style: normal; font-size: 12px; color: var(--muted); display: block; }
+.rmon-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
