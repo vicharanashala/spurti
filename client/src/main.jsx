@@ -334,10 +334,15 @@ function SpaModule({ student }) {
   const [data, setData] = useState(null);
 
   useEffect(() => {
+    let live = true;
     (async () => {
-      const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
-      setData(await r.json());
+      try {
+        const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
+        const j = await r.json();
+        if (live) setData(j);
+      } catch { /* keep data null → panel shows loading; safe on error */ }
     })();
+    return () => { live = false; };
   }, [email]);
 
   if (!data) return <section className="panel">Loading your SPA points…</section>;
@@ -849,7 +854,12 @@ function LeaderboardPanel({ student }) {
 function TrajectoryModal({ student, onClose }) {
   const [data, setData] = useState(null);
   useEffect(() => {
-    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`).then(r => r.json()).then(setData);
+    let live = true;
+    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`)
+      .then(r => r.json())
+      .then(d => { if (live) setData(d); })
+      .catch(() => { if (live) setData(null); });
+    return () => { live = false; };
   }, [student.email]);
 
   const series = data ? [
@@ -1247,11 +1257,14 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
   const [showTraj, setShowTraj] = useState(false);
   const [err, setErr] = useState(null);
 
-  const load = async () => {
-    const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`);
-    setData(await r.json());
+  const load = async (live = () => true) => {
+    try {
+      const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`);
+      const j = await r.json();
+      if (live()) setData(j);
+    } catch { /* keep data null → "Loading your journey…" instead of an unhandled rejection */ }
   };
-  useEffect(() => { load(); }, [email]);
+  useEffect(() => { let live = true; load(() => live); return () => { live = false; }; }, [email]);
 
   if (!data) return <section className="panel">Loading your journey…</section>;
   if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
@@ -1383,14 +1396,19 @@ function VibeGoals({ student }) {
   const [editing, setEditing] = useState(false);
   const [err, setErr] = useState(null);
 
-  const load = async () => {
-    const r = await fetch(`${API}/vibe/state?email=${encodeURIComponent(email)}`);
-    setData(await r.json());
+  const load = async (live = () => true) => {
+    try {
+      const r = await fetch(`${API}/vibe/state?email=${encodeURIComponent(email)}`);
+      const j = await r.json();
+      if (live()) setData(j);
+    } catch { /* keep data null → "Loading ViBe Goals…" instead of an unhandled rejection */ }
   };
   useEffect(() => {
-    load();
+    let live = true;
+    load(() => live);
     const d = new Date(); d.setDate(d.getDate() + 2);
     setForm(f => ({ ...f, deadline: d.toISOString().slice(0, 10) }));
+    return () => { live = false; };
   }, [email]);
 
   if (!data) return <section className="panel">Loading ViBe Goals…</section>;
@@ -1554,11 +1572,14 @@ function StandupGoals({ student }) {
   const [multiplier, setMultiplier] = useState(4);
   const [err, setErr] = useState(null);
 
-  const load = async () => {
-    const r = await fetch(`${API}/standup/state?email=${encodeURIComponent(email)}`);
-    setData(await r.json());
+  const load = async (live = () => true) => {
+    try {
+      const r = await fetch(`${API}/standup/state?email=${encodeURIComponent(email)}`);
+      const j = await r.json();
+      if (live()) setData(j);
+    } catch { /* keep data null → "Loading standups…" instead of an unhandled rejection */ }
   };
-  useEffect(() => { load(); }, [email]);
+  useEffect(() => { let live = true; load(() => live); return () => { live = false; }; }, [email]);
 
   if (!data) return <section className="panel">Loading standups…</section>;
   if (!data.eligible) return <section className="panel empty">Standup commitments aren’t available for your cohort yet.</section>;
