@@ -32,7 +32,7 @@ const shareEventSchema = new mongoose.Schema({
   captionEdited: { type: Boolean, default: false },
   captionChars: { type: Number, default: 0 },
 
-  platform: { type: String, enum: ['linkedin', 'whatsapp', 'download', 'copy', 'native'], required: true },
+  platform: { type: String, enum: ['linkedin', 'download', 'copy', 'native'], required: true },
   at: { type: Date, default: Date.now, index: true }
 });
 
