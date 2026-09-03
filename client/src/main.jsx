@@ -184,7 +184,7 @@ function AdminLogin({ onAdmin, onBack }) {
           <button className="secondary" onClick={onBack}>Back</button>
         </div>
         <div className="login-form">
-         function L <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Admin email" />
+          <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Admin email" />
           <input value={token} onChange={e => setToken(e.target.value)} placeholder="Admin token" type="password" />
           <button className="primary" onClick={submit}>Open dashboard</button>
           {error && <p className="error">{error}</p>}
