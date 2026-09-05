@@ -111,9 +111,28 @@ const STAFF = new Set([
 // never used. Two capped tracks + a one-time integrity penalty on current SP.
 // Source: act_spa_endorsements + act_spa_transactions (mirrored 6-hourly).
 const SPA_LEARN_UNIT = 5, SPA_LEARN_CAP = 50;   // +5 SP / validated question learned, cap 50 → max 250
-const SPA_TEACH_UNIT = 8, SPA_TEACH_CAP = 30;   // +8 SP / validated peer taught,     cap 30 → max 240
+const SPA_TEACH_UNIT = 10, SPA_TEACH_CAP = 25;  // +10 SP / validated peer taught,    cap 25 → max 250
+// Certificate-scale rescore (2026-09-05, per HANDOFF_CERTIFICATE_DATA.md): teach
+// 8×30 → 10×25, strictly upward at every count ≤25; counts 26-30 kept ≥ old pay
+// by the cap math (old max 240 < new max 250).
 const SPA_FRAUD_RATE = 0.5, SPA_AUDIT_RATE = 0.2;
 const SPA_GOOD = ['approved', 'audit_passed'];
+
+// ── Project → SP (mentor-reviewed PR; certificate scale) ─────────────────────
+// One-time +500 when the mentor review of the student's project PR is
+// 'completed' (act_pr_reviews.reviewStatus). 'rejected', 'pending' and
+// 'pending_reevaluation' earn nothing. Dated resubmittedAt || reviewedAt —
+// reviewedAt keeps the EARLIER rejection date on resubmitted projects.
+const PROJECT_SP = 500;
+
+// ── Certificate-locked students ──────────────────────────────────────────────
+// Their certificate is fully processed and issued — printed numbers must never
+// move. They keep the exact rule-set in force at print time: no 'project'
+// category, SPA teach at the legacy 8×30. Everyone still in the signing queue
+// gets the new rules and a regenerated certificate.
+// 2026-09-05: Yaradla Yaswanth Reddy (the only fully-processed certificate).
+const CERT_LOCKED = new Set(['yaswanthreddythb@gmail.com']);
+const SPA_TEACH_UNIT_LEGACY = 8, SPA_TEACH_CAP_LEGACY = 30;
 
 // ── Query answering → SP (Pattern A: rubric-recomputed) ──────────────────────
 // +5 SP per DISTINCT peer query a student answered (from
@@ -315,6 +334,25 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   // attendance for these dates was skipped above, so no double credit.
   for (const [, sp] of spandanAttByDate) scoreSpandanAttendance(sp, 'Day ' + sp.dayNumber);
 
+  // V-Talk attendance pass: special synchronous sessions from the
+  // vtalk_attendance mirror (built by pipeline/vtalk-attendance-build.cjs from
+  // Zoom meeting/webinar reports; webinar rows are strict name->student matches,
+  // unique only). Scored OUTSIDE the per-day session cascade because V-Talks
+  // co-exist with standups on the same date. V-Talk 07 is deliberately absent
+  // (it ran inside Spandan and is already scored as "Day 78 (14 Aug)").
+  // Reason carries "present X of Y min (Z%)" so sync-attendance-records.cjs
+  // folds the minutes into attendancerecords / the 3600 journey goal.
+  for (const v of await sak.collection('vtalk_attendance').find({}).toArray()) {
+    const e = String(v.email || '').toLowerCase().trim(); if (!e) continue;
+    const W = v.windowMinutes || ATT_SESSION_MIN;
+    const mins = Math.min(W, Math.round(v.attendedMinutes || 0));
+    const pct = W ? Math.round(mins / W * 1000) / 10 : 0;
+    const d = tier(pct);
+    touch(e, v.name).rows.push({ date: v.date, order: 1, cat: 'attendance', delta: d,
+      reason: `${v.label} (${ddmon(v.date)}): present ${mins} of ${W} min (${pct}%) -> ${d > 0 ? '+' : ''}${d} SP.` });
+    const o = students.get(e); if (!o.firstAtt || v.date < o.firstAtt) o.firstAtt = v.date;
+  }
+
   // 3b. SPA → per-canon validated learn/teach events (dated) + integrity flags.
   //     emailToCanon is fully built by now, so we can fold aliases correctly.
   const spaByCanon = new Map(); // canon -> { learn:[YYYY-MM-DD...], teach:[...] }
@@ -413,7 +451,18 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     }
   }
 
-  // 3e. PRESERVED rows (manual/peer_faq) — read BEFORE the wipe and fold into each
+  // 3e. Project → per-canon completed mentor review (earliest completion date).
+  const projectByCanon = new Map(); // canon -> YYYY-MM-DD of review completion
+  for (const r of await sak.collection('act_pr_reviews').find(
+        { reviewStatus: 'completed' }, { projection: { email: 1, reviewedAt: 1, resubmittedAt: 1 } }).toArray()) {
+    const e = String(r.email || '').toLowerCase().trim(); if (!e) continue;
+    const c = canonOf(e);
+    const date = dstr(r.resubmittedAt) || dstr(r.reviewedAt) || TODAY;
+    const prev = projectByCanon.get(c);
+    if (!prev || date < prev) projectByCanon.set(c, date);
+  }
+
+  // 3f. PRESERVED rows (manual/peer_faq) — read BEFORE the wipe and fold into each
   //     student's ledger so commitment/admin SP survives the rebuild. Re-created with
   //     the same delta/date/reason (metadata like original createdAt is not retained).
   const preservedByCanon = new Map(); // canon -> [{ date, order, cat, delta, reason }]
@@ -452,13 +501,16 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     // SPA rows (Pattern A): one consolidated 'spa' row per day, cumulative caps
     // across days. These bypass the (date|cat) best-dedup by being pushed directly.
     const spa = spaByCanon.get(cand); const flags = spaFlag.get(cand) || {};
+    // CERT_LOCKED students keep the legacy teach pay (rules at certificate print time).
+    const teachUnit = CERT_LOCKED.has(cand) ? SPA_TEACH_UNIT_LEGACY : SPA_TEACH_UNIT;
+    const teachCap = CERT_LOCKED.has(cand) ? SPA_TEACH_CAP_LEGACY : SPA_TEACH_CAP;
     let spaLearnUsed = 0, spaTeachUsed = 0;
     if (spa) {
       const byDay = new Map(); // date -> { learn, teach }
       for (const d of spa.learn.slice().sort()) { if (spaLearnUsed >= SPA_LEARN_CAP) break; spaLearnUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.learn++; byDay.set(d, o); }
-      for (const d of spa.teach.slice().sort()) { if (spaTeachUsed >= SPA_TEACH_CAP) break; spaTeachUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.teach++; byDay.set(d, o); }
+      for (const d of spa.teach.slice().sort()) { if (spaTeachUsed >= teachCap) break; spaTeachUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.teach++; byDay.set(d, o); }
       for (const [d, o] of byDay) {
-        const delta = o.learn * SPA_LEARN_UNIT + o.teach * SPA_TEACH_UNIT; if (!delta) continue;
+        const delta = o.learn * SPA_LEARN_UNIT + o.teach * teachUnit; if (!delta) continue;
         const parts = []; if (o.learn) parts.push(`${o.learn} learned`); if (o.teach) parts.push(`${o.teach} taught`);
         rows.push({ date: d, order: 3, cat: 'spa', delta, reason: `SPA (${ddmon(d)}): ${parts.join(' + ')} (validated) -> +${delta} SP.` });
       }
@@ -501,6 +553,13 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
         rows.push({ date: d, order: 4, cat: 'query', delta,
           reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${delta} SP${capNote}.` });
       }
+    }
+    // Project row: one-time +PROJECT_SP on mentor-completed review (Pattern A,
+    // rubric-recomputed). CERT_LOCKED students keep their issued numbers.
+    const projDate = projectByCanon.get(cand);
+    if (projDate && !CERT_LOCKED.has(cand)) {
+      rows.push({ date: projDate, order: 7, cat: 'project', delta: PROJECT_SP,
+        reason: `Project (${ddmon(projDate)}): mentor review of your project PR completed -> +${PROJECT_SP} SP.` });
     }
     // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
     for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);

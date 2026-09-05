@@ -854,3 +854,14 @@ tr.step-alert td { border-color: #f3c9c5; }
 .ann-done { background: #f6f8fb; border: 1px solid var(--line); }
 .ann-done p, .ann-done header strong { color: var(--muted); }
 .ann-caughtup { margin: 2px 0 0; font-size: 13px; }
+
+/* SP at-a-glance table (FAQ tab) */
+.sp-table-wrap { margin: 4px 0 18px; }
+.sp-table-wrap h3 { margin: 0 0 8px; }
+.sp-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.sp-table th, .sp-table td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+.sp-table th { background: rgba(100, 116, 139, .08); }
+.sp-table .sp-total td { border-top: 2px solid var(--line); }
+.sp-deduct-head { margin: 12px 0 4px; font-weight: 600; }
+.sp-deduct { margin: 0 0 4px 18px; color: var(--muted); font-size: 13px; }
+.sp-deduct li { margin: 3px 0; }
