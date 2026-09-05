@@ -194,6 +194,17 @@ node server/scripts/ingestChat.js data/uploads/2026-05-17/chat.txt "17 May Weeke
 
 Only use a chat file for the correct day/session. If a copied chat file belongs to another day, do not ingest it for that session.
 
+## Optional: At-Risk Student Report
+
+`analyticsService.js` flags students below a fixed SP threshold ("red zone"), but that alone can't tell a student who is climbing from one who is falling. `server/scripts/atRiskScoring.js` fits a simple trend line to each active student's SP ledger and flags students whose SP is both declining and at/below the cohort median. It's read-only — it does not write to the database.
+
+```bash
+node server/scripts/atRiskScoring.js
+node server/scripts/atRiskScoring.js --days 21 --top 15
+```
+
+This prints a table to the console and writes a JSON report to `sp-runs/at-risk-<date>.json`.
+
 ## Build And Run
 
 Build the React frontend:
