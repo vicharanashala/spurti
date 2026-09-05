@@ -315,6 +315,25 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   // attendance for these dates was skipped above, so no double credit.
   for (const [, sp] of spandanAttByDate) scoreSpandanAttendance(sp, 'Day ' + sp.dayNumber);
 
+  // V-Talk attendance pass: special synchronous sessions from the
+  // vtalk_attendance mirror (built by pipeline/vtalk-attendance-build.cjs from
+  // Zoom meeting/webinar reports; webinar rows are strict name->student matches,
+  // unique only). Scored OUTSIDE the per-day session cascade because V-Talks
+  // co-exist with standups on the same date. V-Talk 07 is deliberately absent
+  // (it ran inside Spandan and is already scored as "Day 78 (14 Aug)").
+  // Reason carries "present X of Y min (Z%)" so sync-attendance-records.cjs
+  // folds the minutes into attendancerecords / the 3600 journey goal.
+  for (const v of await sak.collection('vtalk_attendance').find({}).toArray()) {
+    const e = String(v.email || '').toLowerCase().trim(); if (!e) continue;
+    const W = v.windowMinutes || ATT_SESSION_MIN;
+    const mins = Math.min(W, Math.round(v.attendedMinutes || 0));
+    const pct = W ? Math.round(mins / W * 1000) / 10 : 0;
+    const d = tier(pct);
+    touch(e, v.name).rows.push({ date: v.date, order: 1, cat: 'attendance', delta: d,
+      reason: `${v.label} (${ddmon(v.date)}): present ${mins} of ${W} min (${pct}%) -> ${d > 0 ? '+' : ''}${d} SP.` });
+    const o = students.get(e); if (!o.firstAtt || v.date < o.firstAtt) o.firstAtt = v.date;
+  }
+
   // 3b. SPA → per-canon validated learn/teach events (dated) + integrity flags.
   //     emailToCanon is fully built by now, so we can fold aliases correctly.
   const spaByCanon = new Map(); // canon -> { learn:[YYYY-MM-DD...], teach:[...] }
