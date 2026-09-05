@@ -35,6 +35,24 @@ Bank:
 5. **Project** — your project PR, once the mentor review is completed.
 6. **ViBe** — course commitments.
 
+### SP at a glance
+
+| Source | How you earn | SP | Cap |
+|---|---|---|---|
+| Initial | one-time credit on your official start date | +100 | 100 |
+| Attendance | standup presence: ≥90% / 75–89% / 50–74% of the window | +10 / +5 / +3 per session | Not capped |
+| Polls | your day's score vs the day's top scorer, same bands | +10 / +5 / +3 per day | Not capped |
+| SPA — learn | each validated question you learn | +5 | 250 (50 questions) |
+| SPA — teach | each validated peer you teach | +10 | 250 (25 peers) |
+| Query answering | each distinct peer query you genuinely answer | +5 | 200 (40 queries) |
+| Project | your project PR passes the mentor review | +500 one-time | 500 |
+| **Total (earnable SP)** | *attendance and polls counted at their 600 design value (60 sessions × 10)* | | **2,500** |
+
+Where SP can reduce:
+- SPA integrity: confirmed fraud −50% / failed audit −20% of the SP earned up to that date (one-time).
+- Query review: a rejected answer −10, marked unworthy −5 (only for queries raised on/after 22 Aug 2026; capped at −200 overall).
+- ViBe commitments: missing a goal you staked SP on loses the stake × penalty (only if you chose to stake).
+
 The system is **positive-first**: you gain SP for taking part, and most
 categories can never reduce your balance.
 

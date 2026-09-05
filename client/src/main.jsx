@@ -1051,11 +1051,44 @@ const FAQ_ITEMS = [
   { q: 'Why can’t I search my SP directly?', a: 'For privacy and security, direct student search is disabled in production. Instead, open Spurti from your Samagama dashboard — the same login you already use — and it will show only your own record. This is what ensures no one can look up another student’s SP, and it’s why you normally reach Spurti through the official programme link rather than searching by name or email.' },
 ];
 
+// SP rates at a glance — keep in sync with the live rubric
+// (pipeline/sp-rubric-build-mirror.cjs) and FAQ_SP.md.
+const SP_RATES = [
+  { src: 'Initial', how: 'one-time credit on your official start date', sp: '+100', cap: '100' },
+  { src: 'Attendance', how: 'standup presence: ≥90% / 75–89% / 50–74% of the window', sp: '+10 / +5 / +3 per session', cap: 'Not capped' },
+  { src: 'Polls', how: 'your day’s score vs the day’s top scorer, same bands', sp: '+10 / +5 / +3 per day', cap: 'Not capped' },
+  { src: 'SPA — learn', how: 'each validated question you learn', sp: '+5', cap: '250 (50 questions)' },
+  { src: 'SPA — teach', how: 'each validated peer you teach', sp: '+10', cap: '250 (25 peers)' },
+  { src: 'Query answering', how: 'each distinct peer query you genuinely answer', sp: '+5', cap: '200 (40 queries)' },
+  { src: 'Project', how: 'your project PR passes the mentor review', sp: '+500 one-time', cap: '500' },
+];
+const SP_DEDUCTIONS = [
+  'SPA integrity: confirmed fraud −50% / failed audit −20% of the SP earned up to that date (one-time).',
+  'Query review: an answer the admins reject −10, marked unworthy −5 (only for queries raised on/after 22 Aug; capped at −200 overall).',
+  'ViBe commitments: missing a goal you staked SP on loses the stake × penalty (only if you chose to stake).',
+];
+
 function FaqTab() {
   const [open, setOpen] = useState(0);
   return (
     <section className="panel">
       <div className="panel-head"><h2>FAQ</h2></div>
+      <div className="sp-table-wrap">
+        <h3>SP at a glance</h3>
+        <table className="sp-table">
+          <thead><tr><th>Source</th><th>How you earn</th><th>SP</th><th>Cap</th></tr></thead>
+          <tbody>
+            {SP_RATES.map(r => (
+              <tr key={r.src}><td>{r.src}</td><td>{r.how}</td><td>{r.sp}</td><td>{r.cap}</td></tr>
+            ))}
+            <tr className="sp-total"><td><b>Total (earnable SP)</b></td><td className="muted">attendance and polls counted at their 600 design value (60 sessions × 10)</td><td colSpan={2}><b>2,500</b></td></tr>
+          </tbody>
+        </table>
+        <p className="muted sp-deduct-head">Where SP can reduce:</p>
+        <ul className="sp-deduct">
+          {SP_DEDUCTIONS.map((d, i) => <li key={i}>{d}</li>)}
+        </ul>
+      </div>
       <p className="muted faq-intro">Tap a question to see the answer.</p>
       <div className="faq-list">
         {FAQ_ITEMS.map((item, i) => (
