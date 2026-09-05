@@ -82,7 +82,7 @@ export async function buildJourneyState(student) {
   };
 
   // --- Phase 4: Projects — live from the Samagama PR-submission mirror.
-  // Progress is real; the SP rule for PRs is still TBD (sp stays 0 for now). ---
+  // SP = +500 on mentor-completed review, scored by the rubric (category 'project'). ---
   const [prSub, prRev] = await Promise.all([
     ActPullRequest.findOne({ email }).lean(),
     ActPrReview.findOne({ email }).lean()
@@ -91,7 +91,7 @@ export async function buildJourneyState(student) {
     submitted: !!prSub,
     prsRaised: prSub ? countPrLinks(prSub.branchOrPrLinks) : 0,
     reviewStatus: prRev?.reviewStatus || null,
-    sp: 0, spRulePending: true,
+    sp: spByCat(['project']),
     pending: false
   };
 

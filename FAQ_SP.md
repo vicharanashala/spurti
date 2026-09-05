@@ -25,14 +25,15 @@ Spurti means energy, inspiration, and forward movement — the intent is to help
 students keep their learning energy through the whole programme.
 
 ### 3. What are the SP earning sources?
-There are **five live sources**, each recorded as its own category in the SP
+There are **six live sources**, each recorded as its own category in the SP
 Bank:
 
 1. **Attendance** — the daily standup.
 2. **Poll** — the session quizzes.
 3. **SPA** — peer teaching and learning endorsements.
 4. **Query** — answering other students' questions.
-5. **ViBe** — course commitments.
+5. **Project** — your project PR, once the mentor review is completed.
+6. **ViBe** — course commitments.
 
 The system is **positive-first**: you gain SP for taking part, and most
 categories can never reduce your balance.
@@ -109,8 +110,8 @@ SPA rewards learning from and teaching peers, from **validated** endorsements
 only:
 
 ```text
-Learn a question (validated):  +5 SP each, capped at 50 SP  (up to 10 questions)
-Teach a peer     (validated):  +8 SP each, capped at 30 SP
+Learn a question (validated):  +5 SP each,  up to 50 questions (max 250 SP)
+Teach a peer     (validated):  +10 SP each, up to 25 peers     (max 250 SP)
 ```
 
 Unvalidated or flagged endorsements do not count.
@@ -130,6 +131,13 @@ When you give a real, useful answer to another student's question, you earn
 
 The goal is genuine peer help — quality and effort, not volume. Shallow or
 copied answers to many queries will not build SP.
+
+## Section 6b: Project SP
+
+### How do I earn SP for my project?
+When your project PR passes the **mentor review** (marked *completed*), you earn
+a one-time **+500 SP**, dated to the review completion. A submission that is
+rejected or still pending review earns nothing until it passes.
 
 ## Section 7: ViBe course commitments
 

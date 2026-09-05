@@ -1324,7 +1324,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
 
         {/* Projects — live from the PR submission + review mirrors; SP rule still TBD */}
         <section className="jr-card phase-project">
-          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">SP soon</span></div>
+          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-sp">+{projects.sp} SP</span></div>
           <p className="jr-sub">{projects.submitted ? `${projects.prsRaised} PR${projects.prsRaised === 1 ? '' : 's'} submitted` : 'Pull requests — none submitted yet'}</p>
           {projects.reviewStatus && (
             <div className="jr-splits"><span className="jr-pill">Review: {projects.reviewStatus}</span></div>
