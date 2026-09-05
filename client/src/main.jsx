@@ -1256,7 +1256,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
   if (!data) return <section className="panel">Loading your journey…</section>;
   if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
 
-  const { standups, vibe, goals } = data;
+  const { standups, vibe, spa, projects, goals } = data;
 
   const saveTarget = async (field, value) => {
     const r = await fetch(`${API}/journey/plan`, {
@@ -1311,17 +1311,24 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
           {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('vibe')}>🎲 Stake SP →</button></div>}
         </section>
 
-        {/* SPA — goal (date) works now; progress data + commitment coming soon */}
+        {/* SPA — live progress from the rubric summary (same source as the SPA Points tab) */}
         <section className="jr-card phase-spa">
-          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-soon">Data soon</span></div>
-          <p className="jr-sub">53-problem set · progress data coming soon</p>
+          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-sp">+{spa.sp} SP</span></div>
+          <p className="jr-sub">{spa.solved}/{spa.total} problems solved · full breakdown in the SPA Points tab</p>
+          <div className="jr-stats">
+            <div><strong>{spa.solved}</strong><span>problems solved</span></div>
+            <div><strong>{spa.taught}</strong><span>peers taught</span></div>
+          </div>
           <PhaseGoal phaseKey="spa" field="spaBy" goal={goals.spa} targetText="solve all 53 problems" {...gp} />
         </section>
 
-        {/* Projects — goal (date) works now; progress data coming soon */}
+        {/* Projects — live from the PR submission + review mirrors; SP rule still TBD */}
         <section className="jr-card phase-project">
-          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">Data soon</span></div>
-          <p className="jr-sub">Pull requests · progress data coming soon</p>
+          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">SP soon</span></div>
+          <p className="jr-sub">{projects.submitted ? `${projects.prsRaised} PR${projects.prsRaised === 1 ? '' : 's'} submitted` : 'Pull requests — none submitted yet'}</p>
+          {projects.reviewStatus && (
+            <div className="jr-splits"><span className="jr-pill">Review: {projects.reviewStatus}</span></div>
+          )}
           <PhaseGoal phaseKey="project" field="projectBy" goal={goals.project} targetText="raise your first PR" {...gp} />
         </section>
       </div>
