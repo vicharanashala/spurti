@@ -165,6 +165,10 @@ const liveViewers = new Map();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
+// Express 4 does not catch rejected promises from async route handlers.
+// This wrapper catches rejections and forwards them to the error handler.
+const wrapAsync = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -443,7 +447,7 @@ api.get('/search', async (req, res) => {
     const email = normalizeEmail(q);
     const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
     if (student?.status === 'excused') return res.json(excusedPayload(student));
-    if (student) return res.json({ exact: true, profile: await studentPayload(student) });
+    if (student) return res.json({ exact: true, matches: [publicStudent(student)] });
   }
 
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -468,7 +472,7 @@ api.post('/confirm', async (req, res) => {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
-  res.json(await studentPayload(student));
+  res.json({ confirmed: true, name: student.name, email: student.email, totalSp: student.totalSp });
 });
 
 api.get('/leaderboard', async (req, res) => {
@@ -730,7 +734,7 @@ api.post('/ping', async (req, res) => {
   } catch (err) {
     if (err?.name !== 'ValidationError') console.error('ping log failed:', err?.message);
   }
-  if (page === 'record' || page.startsWith('admin')) {
+  if (page === 'record' || (typeof page === 'string' && page.startsWith('admin'))) {
     liveViewers.set(normalized, { name, page, lastSeen: new Date() });
   }
   res.json({ ok: true });
@@ -1264,6 +1268,19 @@ if (fs.existsSync(clientDist)) {
 } else {
   app.get('*', (_req, res) => res.status(404).send('Build the client first with npm run build.'));
 }
+
+// Global error handler — catches errors forwarded via next(err) from wrapAsync.
+app.use((err, _req, res, _next) => {
+  console.error('Route error:', err?.message || err);
+  if (!res.headersSent) res.status(500).json({ error: 'Internal server error' });
+});
+
+// Safety net: prevent unhandled promise rejections from crashing the process.
+// Express 4 does not catch async rejections; wrapAsync on individual routes is
+// the primary fix, but this prevents a missed wrapper from killing the server.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason?.message || reason);
+});
 
 mongoose.connect(MONGO_URI).then(() => {
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
