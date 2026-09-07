@@ -872,3 +872,5 @@ tr.step-alert td { border-color: #f3c9c5; }
 .e2-card .e2-row input[type="date"] { flex: 1; min-width: 0; padding: 10px; border-radius: 8px; border: 1px solid rgba(127,127,127,.35); background: transparent; color: inherit; font: inherit; }
 .e2-card .e2-sp { font-weight: 600; }
 .e2-card .jr-goal-hint { display: block; margin-top: 4px; opacity: .75; font-size: .85em; }
+.e2-card .e2-progress { margin: 12px 0 2px; display: block; }
+.e2-card .e2-progress .jr-goal-meta { display: block; margin-bottom: 6px; }

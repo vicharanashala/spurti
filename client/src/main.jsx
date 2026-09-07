@@ -2201,6 +2201,12 @@ function GoalCardModal({ student, surveyBlocking }) {
 
   const save = async () => {
     if (!pick || !date) return;
+    // The picker's min already blocks earlier dates, but a typed date can slip
+    // past it on some browsers — enforce the realistic minimum here too.
+    if (pick.goal.minDate && date < pick.goal.minDate) {
+      setErr(`That date is earlier than realistically possible — the earliest is ${fmtDate(pick.goal.minDate)}.`);
+      return;
+    }
     setBusy(true); setErr(null);
     try {
       const r = await fetch(`${API}/journey/plan`, {
@@ -2248,6 +2254,16 @@ function GoalCardModal({ student, surveyBlocking }) {
                 <p className="e2-sp">Set it now and earn a one-time <strong>+{e2.sp} SP</strong>.</p>
               )}
             </div>
+            {pick.goal.progressPct != null && (
+              <div className="e2-progress">
+                <span className="jr-goal-meta">
+                  {pick.goal.unit === '%'
+                    ? `You're at ${pick.goal.progressPct}% — ${pick.goal.remainingPct}% to go.`
+                    : `You have ${pick.goal.current} of ${pick.goal.target} ${pick.goal.unit} — ${pick.goal.remaining} ${pick.goal.unit} to go.`}
+                </span>
+                <div className="jr-progress"><i style={{ width: `${pick.goal.progressPct}%` }} /></div>
+              </div>
+            )}
             <div className="e2-row">
               <input
                 type="date"
@@ -2260,7 +2276,12 @@ function GoalCardModal({ student, surveyBlocking }) {
                 {busy ? 'Saving…' : 'Set my goal'}
               </button>
             </div>
-            {pick.goal.minDate && <span className="jr-goal-hint">Earliest realistic: {fmtDate(pick.goal.minDate)}</span>}
+            {pick.goal.minDate && (
+              <span className="jr-goal-hint">
+                Earliest realistic finish: {fmtDate(pick.goal.minDate)} — earlier dates can't be picked.
+                {pick.goal.paceHint ? ` ${pick.goal.paceHint}` : ''}
+              </span>
+            )}
             {err && <p className="survey-note">{err}</p>}
             <div className="survey-actions">
               <button type="button" className="survey-ghost" onClick={skip}>Skip for now</button>
