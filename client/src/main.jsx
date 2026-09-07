@@ -1729,24 +1729,36 @@ function AdminView({ admin, auth, onBack }) {
     return () => clearInterval(id);
   }, [admin]);
   const loadLeaderboard = async (limit = leaderLimit) => {
-    const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers });
-    setLeaderboard(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers });
+      if (res.ok) setLeaderboard(await res.json());
+    } catch { /* leaderboard stays as-is */ }
   };
   const loadAttendance = async () => {
-    const res = await fetch(`${API}/admin/attendance`, { headers });
-    setAttendance(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/attendance`, { headers });
+      if (res.ok) setAttendance(await res.json());
+    } catch { /* attendance stays as-is */ }
   };
   const loadStudent = async (id) => {
-    const res = await fetch(`${API}/admin/student/${id}`, { headers });
-    setStudentProfile(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/student/${id}`, { headers });
+      const data = await res.json();
+      if (res.ok && data.student) setStudentProfile(data);
+      else setStudentProfile(null);
+    } catch { setStudentProfile(null); }
   };
   const loadActive = async () => {
-    const res = await fetch(`${API}/admin/active`, { headers });
-    setActive(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/active`, { headers });
+      if (res.ok) setActive(await res.json());
+    } catch { /* active stays as-is */ }
   };
   const loadAnalytics = async () => {
-    const res = await fetch(`${API}/admin/analytics`, { headers });
-    setAnalytics(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/analytics`, { headers });
+      if (res.ok) setAnalytics(await res.json());
+    } catch { /* analytics stays as-is */ }
   };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);

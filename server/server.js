@@ -176,6 +176,16 @@ app.use(express.json({ limit: '2mb' }));
 // This wrapper catches rejections and forwards them to the error handler.
 const wrapAsync = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+// Auto-wrap all async route handlers on the api Router so every route is
+// protected. Without this, a single DB error or CastError crashes the process.
+for (const method of ['get', 'post', 'put', 'delete', 'patch']) {
+  const orig = api[method].bind(api);
+  api[method] = (path, ...handlers) => {
+    const wrapped = handlers.map(h => typeof h === 'function' ? wrapAsync(h) : h);
+    return orig(path, ...wrapped);
+  };
+}
+
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -330,7 +340,11 @@ function isAdmin(req) {
   if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false; // fail closed when admin creds aren't configured
   const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
   const token = String(req.headers['x-admin-token'] || '');
-  const tokenOk = token.length === ADMIN_TOKEN.length && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(ADMIN_TOKEN));
+  // Use timing-safe comparison for the token. Pad shorter input to the same
+  // length so the comparison doesn't leak token length via response time.
+  const buf = Buffer.alloc(ADMIN_TOKEN.length, 0);
+  buf.write(token);
+  const tokenOk = crypto.timingSafeEqual(buf, Buffer.from(ADMIN_TOKEN));
   return emailOk && tokenOk;
 }
 
@@ -580,6 +594,7 @@ api.post('/admin/announcements', adminGuard, async (req, res) => {
 
 api.post('/admin/announcements/:id', adminGuard, async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid announcement ID' });
+  if (typeof req.body?.active !== 'boolean') return res.status(400).json({ error: 'active (boolean) is required' });
   const ann = await Announcement.findByIdAndUpdate(req.params.id,
     { $set: { active: !!req.body?.active } }, { new: true }).lean();
   if (!ann) return res.status(404).json({ error: 'Announcement not found' });
