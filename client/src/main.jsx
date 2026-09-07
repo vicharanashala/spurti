@@ -76,9 +76,17 @@ function AppShell() {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
   }
   if (view === 'student' && profile) {
+    // The E2 goal card must never stack on top of a mandatory survey pop-up —
+    // same gate conditions the three SurveyModals use below.
+    const surveyBlocking = [
+      [config.survey, 'surveyCompleted'],
+      [config.poll2, 'poll2Completed'],
+      [config.poll3, 'poll3Completed']
+    ].some(([cfg, key]) => cfg?.enabled && cfg.formUrl && profile.student && !profile.student[key]);
     return (
       <>
         <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <GoalCardModal student={profile.student} surveyBlocking={surveyBlocking} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -2132,6 +2140,158 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   );
 }
 
+
+// ── E2 goal-card (experiment, pre-reg 2026-09-07) ────────────────────────────
+// Pop-up shown to arms B/C at login while the experiment window is open and the
+// student has no journey goal yet (all gated server-side via student.e2Card).
+// Asks for ONE date — the student's current active phase — settable in one tap,
+// skippable in one tap. Shown at most once per calendar day (localStorage),
+// permanently gone once any goal is set. Every impression/skip/set is logged
+// server-side; the log write never blocks the UI.
+const E2_PHASES = [
+  ['standup', 'standupBy', 'your Stand-ups'],
+  ['vibe', 'vibeBy', 'your ViBe courses'],
+  ['spa', 'spaBy', 'your SPA practice'],
+  ['project', 'projectBy', 'your Project']
+];
+
+function GoalCardModal({ student, surveyBlocking }) {
+  const e2 = student?.e2Card;
+  const [state, setState] = useState('idle'); // idle | open | done | closed
+  const [pick, setPick] = useState(null);
+  const [date, setDate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const logEvent = (event, extra = {}) => {
+    fetch(`${API}/e2/card-event`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, phase: pick?.phaseKey, ...extra })
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!e2 || surveyBlocking) return;
+    const todayKey = `e2CardShown:${new Date().toISOString().slice(0, 10)}`;
+    if (localStorage.getItem('e2CardDone') || localStorage.getItem(todayKey)) return;
+    let active = true;
+    (async () => {
+      try {
+        const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(student.email)}`);
+        const j = await r.json();
+        if (!active || !j?.eligible) return;
+        // First phase with no goal yet and still settable (not achieved/active).
+        const next = E2_PHASES
+          .map(([phaseKey, field, label]) => ({ phaseKey, field, label, goal: j.goals?.[phaseKey] }))
+          .find(p => p.goal && !j.plan?.[p.field] && p.goal.status !== 'achieved' && p.goal.status !== 'active');
+        if (!next) { localStorage.setItem('e2CardDone', '1'); return; }
+        setPick(next);
+        setState('open');
+        localStorage.setItem(todayKey, '1');
+        fetch(`${API}/e2/card-event`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'impression', phase: next.phaseKey })
+        }).catch(() => {});
+      } catch { /* any failure -> no card today */ }
+    })();
+    return () => { active = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (state !== 'open' && state !== 'done') return null;
+
+  const save = async () => {
+    if (!pick || !date) return;
+    // The picker's min already blocks earlier dates, but a typed date can slip
+    // past it on some browsers — enforce the realistic minimum here too.
+    if (pick.goal.minDate && date < pick.goal.minDate) {
+      setErr(`That date is earlier than realistically possible — the earliest is ${fmtDate(pick.goal.minDate)}.`);
+      return;
+    }
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`${API}/journey/plan`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: student.email, [pick.field]: date })
+      });
+      const j = await r.json();
+      if (!r.ok) { setErr(j.error || 'Could not save that date — please try another.'); setBusy(false); return; }
+      logEvent('set', { value: date });
+      localStorage.setItem('e2CardDone', '1');
+      setState('done');
+    } catch {
+      setErr('Network error — please try again.'); setBusy(false);
+    }
+  };
+
+  const skip = () => { logEvent('skip'); setState('closed'); };
+
+  return (
+    <div className="survey-overlay" role="dialog" aria-modal="true" aria-labelledby="e2-title">
+      <div className="survey-modal e2-card">
+        {state === 'done' ? (
+          <>
+            <div className="survey-head">
+              <h2 id="e2-title">Goal set 🎯</h2>
+              <p>
+                Your target date is saved{e2.sp > 0 ? ` and your +${e2.sp} SP will appear with the next points refresh` : ''}.
+                Track your pace any time in the <strong>My Journey</strong> tab.
+              </p>
+            </div>
+            <div className="survey-actions">
+              <button type="button" className="survey-primary" onClick={() => setState('closed')}>Done</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="survey-head">
+              <h2 id="e2-title">Set your goal 🎯</h2>
+              <p>
+                Pick your own target date for {pick.label}. The pace bar in
+                <strong> My Journey</strong> will then show exactly what "on track"
+                means for you each week.
+              </p>
+              {e2.sp > 0 && (
+                <p className="e2-sp">Set it now and earn a one-time <strong>+{e2.sp} SP</strong>.</p>
+              )}
+            </div>
+            {pick.goal.progressPct != null && (
+              <div className="e2-progress">
+                <span className="jr-goal-meta">
+                  {pick.goal.unit === '%'
+                    ? `You're at ${pick.goal.progressPct}% — ${pick.goal.remainingPct}% to go.`
+                    : `You have ${pick.goal.current} of ${pick.goal.target} ${pick.goal.unit} — ${pick.goal.remaining} ${pick.goal.unit} to go.`}
+                </span>
+                <div className="jr-progress"><i style={{ width: `${pick.goal.progressPct}%` }} /></div>
+              </div>
+            )}
+            <div className="e2-row">
+              <input
+                type="date"
+                min={pick.goal.minDate || undefined}
+                max={pick.goal.maxDate || undefined}
+                value={date}
+                onChange={e => setDate(e.target.value)}
+              />
+              <button type="button" className="survey-primary" disabled={!date || busy} onClick={save}>
+                {busy ? 'Saving…' : 'Set my goal'}
+              </button>
+            </div>
+            {pick.goal.minDate && (
+              <span className="jr-goal-hint">
+                Earliest realistic finish: {fmtDate(pick.goal.minDate)} — earlier dates can't be picked.
+                {pick.goal.paceHint ? ` ${pick.goal.paceHint}` : ''}
+              </span>
+            )}
+            {err && <p className="survey-note">{err}</p>}
+            <div className="survey-actions">
+              <button type="button" className="survey-ghost" onClick={skip}>Skip for now</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', completedKey = 'surveyCompleted' }) {
   const [checking, setChecking] = useState(false);

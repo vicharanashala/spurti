@@ -865,3 +865,12 @@ tr.step-alert td { border-color: #f3c9c5; }
 .sp-deduct-head { margin: 12px 0 4px; font-weight: 600; }
 .sp-deduct { margin: 0 0 4px 18px; color: var(--muted); font-size: 13px; }
 .sp-deduct li { margin: 3px 0; }
+
+/* E2 goal card (experiment, pre-reg 2026-09-07) — reuses the survey modal shell */
+.survey-modal.e2-card { max-width: 440px; }
+.e2-card .e2-row { display: flex; gap: 10px; align-items: center; margin: 14px 0 6px; }
+.e2-card .e2-row input[type="date"] { flex: 1; min-width: 0; padding: 10px; border-radius: 8px; border: 1px solid rgba(127,127,127,.35); background: transparent; color: inherit; font: inherit; }
+.e2-card .e2-sp { font-weight: 600; }
+.e2-card .jr-goal-hint { display: block; margin-top: 4px; opacity: .75; font-size: .85em; }
+.e2-card .e2-progress { margin: 12px 0 2px; display: block; }
+.e2-card .e2-progress .jr-goal-meta { display: block; margin-bottom: 6px; }

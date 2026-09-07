@@ -125,6 +125,16 @@ const SPA_GOOD = ['approved', 'audit_passed'];
 // reviewedAt keeps the EARLIER rejection date on resubmitted projects.
 const PROJECT_SP = 500;
 
+// ── E2 goal-card incentive (arm C only; pre-reg 2026-09-07) ──────────────────
+// One-time +10 when an arm-C student of the E2 goal-card experiment sets their
+// first My Journey goal inside the launch window. Arm membership comes from the
+// launch assignment CSV (server-side file, has emails). Missing E2_START or a
+// missing CSV makes the whole category a silent no-op — safe on every host.
+const E2_GOAL_SP = 10;
+const E2_ASSIGN_CSV = process.env.E2_ASSIGN_CSV || `${process.env.HOME}/spurti/e2_assignment_2026-09-07.csv`;
+const E2_START_ENV = process.env.E2_START || '';
+const E2_DAYS_ENV = Number(process.env.E2_DAYS || 7);
+
 // ── Certificate-locked students ──────────────────────────────────────────────
 // Their certificate is fully processed and issued — printed numbers must never
 // move. They keep the exact rule-set in force at print time: no 'project'
@@ -462,6 +472,30 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     if (!prev || date < prev) projectByCanon.set(c, date);
   }
 
+  // 3e2. E2 goal-card: arm-C students who set their first journey goal inside the
+  //      experiment window -> canon -> YYYY-MM-DD of the plan's creation. No-op
+  //      unless E2_START is set and the assignment CSV exists on this host.
+  const e2GoalByCanon = new Map();
+  if (E2_START_ENV && fs.existsSync(E2_ASSIGN_CSV)) {
+    try {
+      const armC = new Set(fs.readFileSync(E2_ASSIGN_CSV, 'utf8').trim().split('\n').slice(1)
+        .map(l => l.split(',')).filter(p => (p[2] || '').trim() === 'C')
+        .map(p => canonOf(p[0].toLowerCase().trim())));
+      const startMs = new Date(E2_START_ENV).getTime();
+      const endMs = startMs + E2_DAYS_ENV * 86400000;
+      for (const jp of await sak.collection('journeyplans').find({},
+            { projection: { email: 1, createdAt: 1, standupBy: 1, vibeBy: 1, spaBy: 1, projectBy: 1 } }).toArray()) {
+        const c = canonOf(String(jp.email || '').toLowerCase().trim());
+        if (!armC.has(c)) continue;
+        if (!(jp.standupBy || jp.vibeBy || jp.spaBy || jp.projectBy)) continue;
+        const t = jp.createdAt ? new Date(jp.createdAt).getTime() : NaN;
+        if (!(t >= startMs && t < endMs)) continue;
+        e2GoalByCanon.set(c, dstr(jp.createdAt) || TODAY);
+      }
+      console.log(`E2 goal-card: ${e2GoalByCanon.size} arm-C setter(s) in window`);
+    } catch (e) { console.error('E2 goal-card scan skipped:', e.message); }
+  }
+
   // 3f. PRESERVED rows (manual/peer_faq) — read BEFORE the wipe and fold into each
   //     student's ledger so commitment/admin SP survives the rebuild. Re-created with
   //     the same delta/date/reason (metadata like original createdAt is not retained).
@@ -560,6 +594,12 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     if (projDate && !CERT_LOCKED.has(cand)) {
       rows.push({ date: projDate, order: 7, cat: 'project', delta: PROJECT_SP,
         reason: `Project (${ddmon(projDate)}): mentor review of your project PR completed -> +${PROJECT_SP} SP.` });
+    }
+    // E2 goal-card row: one-time +10, arm C only, first goal set inside the window.
+    const e2Date = e2GoalByCanon.get(cand);
+    if (e2Date && !CERT_LOCKED.has(cand)) {
+      rows.push({ date: e2Date, order: 7, cat: 'goal', delta: E2_GOAL_SP,
+        reason: `Goal set (${ddmon(e2Date)}): first My Journey target date set during the goal-card week -> +${E2_GOAL_SP} SP (one-time).` });
     }
     // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
     for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
