@@ -62,7 +62,7 @@ export function withSp(studentDoc) {
 
   // Poll SP from transaction log
   const pollTxns = (raw._txns || []).filter(t => t.category === 'poll');
-  const pollSp = pollTxns.reduce((sum, t) => sum + Number(t.delta || 0), 0);
+  const pollSp = pollTxns.reduce((sum, t) => sum + Number(t.appliedDelta || 0), 0);
 
   const activitySp = 0;
 
@@ -119,10 +119,6 @@ export function publicStudent(studentDoc) {
 
 export function summary(students) {
   const rows = students.map(s => ({ name: s.name, sp: { total: s.totalSp ?? 100 } }));
-  const activeRows = rows.filter(r => {
-    const doc = students.find(s => (s.totalSp ?? 100) === r.sp.total);
-    return doc && (doc.sessions && Object.values(doc.sessions).some(v => v > 0));
-  });
   const totalSp = rows.reduce((sum, student) => sum + student.sp.total, 0);
   return {
     students: rows.length,

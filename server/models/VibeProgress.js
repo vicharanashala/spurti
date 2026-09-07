@@ -5,9 +5,9 @@ import mongoose from 'mongoose';
 // the module can run locally without the live snapshot cron.
 const vibeProgressSchema = new mongoose.Schema({
   email: { type: String, lowercase: true, trim: true, required: true, index: true },
-  course: { type: String, required: true },          // 'onboarding' | 'ai' | 'mern'
-  pct: { type: Number, default: 0 },                 // completionPercentage 0–100 (from ViBe)
-  weekHours: { type: Number, default: 0 },           // content-hours done this week (for the floor)
+  course: { type: String, required: true, enum: ['onboarding', 'ai', 'mern'] },
+  pct: { type: Number, default: 0, min: 0, max: 100 },
+  weekHours: { type: Number, default: 0, min: 0 },
   priorCompleted: { type: Boolean, default: false }  // credited from a prior program (sheet crosswalk)
 }, { timestamps: true });
 

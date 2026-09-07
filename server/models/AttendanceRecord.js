@@ -4,9 +4,9 @@ const attendanceRecordSchema = new mongoose.Schema({
   email: { type: String, required: true, lowercase: true, trim: true, index: true },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', index: true },
   sessionLabel: { type: String, required: true, index: true },
-  attendedMinutes: { type: Number, default: 0 },
-  totalSessionMinutes: { type: Number, required: true },
-  attendancePercentage: { type: Number, default: 0 },
+  attendedMinutes: { type: Number, default: 0, min: 0 },
+  totalSessionMinutes: { type: Number, required: true, min: 1 },
+  attendancePercentage: { type: Number, default: 0, min: 0, max: 100 },
   qualified: { type: Boolean, default: false },
   transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'SPTransaction' }
 }, { timestamps: true });

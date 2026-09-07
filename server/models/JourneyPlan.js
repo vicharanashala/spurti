@@ -14,7 +14,7 @@ const journeyPlanSchema = new mongoose.Schema({
   // lets a future goal-attainment reward tell a goal set at 40% done from one set
   // at 95% done — without it, near-completion goal-setting is indistinguishable
   // from a real commitment after the fact.
-  atSet: { type: mongoose.Schema.Types.Mixed, default: {} }
+  atSet: { type: mongoose.Schema.Types.Mixed, default: {}, minimize: false }
 }, { timestamps: true });
 
 export default mongoose.model('JourneyPlan', journeyPlanSchema);

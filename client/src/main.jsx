@@ -606,11 +606,12 @@ function ShareModal({ item, me, onClose }) {
   const [readSteps, setReadSteps] = useState(false);
 
   useEffect(() => {
+    let live = true;
     import('./shareCard.js').then(m => {
       const text = m.shareCaption(item, verifyUrl);
-      setCaption(text);
-      setGenerated(text);
+      if (live) { setCaption(text); setGenerated(text); }
     });
+    return () => { live = false; };
   }, [item.achId]);
 
   useEffect(() => {
@@ -1561,8 +1562,6 @@ function VibeGoals({ student }) {
               <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
               <div className="vg-betbtns">
                 {!editing && <button className="secondary" onClick={() => { setForm({ goalPct: data.active.goalPct, stake: data.active.stake, multiplier: data.active.multiplier, deadline: form.deadline }); setEditing(true); }}>Edit commitment</button>}
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
               </div>
             </div>
           </div>
@@ -1665,8 +1664,6 @@ function StandupGoals({ student }) {
             <div className="side">
               <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
               <div className="vg-betbtns">
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
               </div>
             </div>
           </div>
@@ -2139,6 +2136,11 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   const done = useRef(false);
 
   const enabled = survey?.enabled && survey.formUrl && student && !student[completedKey];
+
+  // Reset the done guard when the survey type changes (e.g. poll1 -> poll2).
+  // Without this, completing one survey locks out re-verification for others
+  // because the ref persists across renders.
+  useEffect(() => { done.current = false; }, [completedKey]);
 
   // Verify against the server. The completion flag is set ONLY by a real Google
   // submission (Apps Script webhook) or the server-side sheet sync — never by the
