@@ -1,10 +1,17 @@
+# >>> RETIRED (since 2026-06-28) <<<
+# This daily pipeline ran the old live-API sp-rubric-build.js APPLY scorer, which
+# is retired (it caused the 2026-06-27 regression). SP is now scored on the
+# sakshi side by sp-rubric-build-mirror.cjs via ~/spurti/sp-refresh.sh (root of
+# this repo). The sp-pipeline.sh stage-2 APPLY now REFUSES to run.
+#
+# Historical description:
 # Daily Spurti pipeline at 05:45 UTC = 11:15 IST, right after the 09:00-11:00 IST
 # mandatory session. Runs sp-pipeline.sh: #zoomupdate -> sp-rubric-build (APPLY)
 # -> sync-spurti-from-sakshi, so interns see the morning session's SP by
 # ~11:30 IST instead of next-day. flock keeps it single-instance.
 # Install: sudo install -o root -g root -m 644 \
 #            /var/samagama/server/sp-pipeline.cron /etc/cron.d/sp-pipeline
-# Added 2026-06-04.
+# Added 2026-06-04. Do NOT re-enable the APPLY stage.
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 45 5 * * * samagama /usr/bin/flock -n /tmp/sp-pipeline.lock /var/samagama/server/sp-pipeline.sh >> /var/samagama/server/logs/sp-pipeline.log 2>&1

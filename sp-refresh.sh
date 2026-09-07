@@ -166,6 +166,13 @@ run_step "sync-levels" fatal "SP applied but derived level fields may be stale" 
 run_step "sync-attendance-records" nonfatal "attendance minutes/3600 goal may be stale" \
   "$NODE" pipeline/sync-attendance-records.cjs || true
 
+# Step 2c: fold per-session poll detail into pollrecords (drives the My-Journey
+# poll view). The rubric awards poll SP from spandan_polls but this display
+# collection is what the app reads; without this step it stays frozen at whatever
+# the last run wrote. Non-fatal — poll SP itself is unaffected.
+run_step "sync-poll-records" nonfatal "poll detail may be stale" \
+  "$NODE" pipeline/sync-poll-records.cjs || true
+
 # Step 3: rebuild the SP-trajectory snapshot (cohort/group reference lines for the
 # student trajectory modal). Non-fatal — the student's own line is always live.
 run_step "trajectory snapshot" nonfatal "cohort lines may be stale" \

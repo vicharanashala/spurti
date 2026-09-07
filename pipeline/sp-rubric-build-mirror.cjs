@@ -569,7 +569,7 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     // never drive the student's total balance below zero.
     const qPens = queryPenByCanon.get(cand);
     if (qPens && qPens.length) {
-      let penBudget = QUERY_PEN_CAP, pensUsed = 0;
+      let penBudget = QUERY_PEN_CAP;
       const penByDay = new Map(); // date -> { rejected: n, marked_unworthy: n }
       for (const p of qPens) { const o = penByDay.get(p.date) || { rejected: 0, marked_unworthy: 0 }; o[p.action]++; penByDay.set(p.date, o); }
       for (const d of [...penByDay.keys()].sort()) {
@@ -577,11 +577,11 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
         const o = penByDay.get(d);
         // Clamp to SP actually held by the verdict date (same lesson as the SPA
         // penalty): the running balance must never dip below zero at this row.
-        const heldByD = rows.reduce((a, r) => a + (r.date <= d ? r.delta : 0), 0) - pensUsed;
+        const heldByD = rows.reduce((a, r) => a + (r.date <= d ? r.delta : 0), 0);
         let pen = o.rejected * QUERY_PEN.rejected + o.marked_unworthy * QUERY_PEN.marked_unworthy;
         pen = Math.min(pen, penBudget, Math.max(0, heldByD));
         if (pen <= 0) continue;
-        penBudget -= pen; pensUsed += pen;
+        penBudget -= pen;
         const parts = [];
         if (o.rejected) parts.push(`${o.rejected} rejected (-${QUERY_PEN.rejected} each)`);
         if (o.marked_unworthy) parts.push(`${o.marked_unworthy} marked unworthy (-${QUERY_PEN.marked_unworthy} each)`);
