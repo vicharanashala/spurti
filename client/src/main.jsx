@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import ReflectionWall from './reflectionWall.jsx';
 import './styles.css';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
@@ -20,8 +21,9 @@ function AppShell() {
   const [excused, setExcused] = useState(null);
   const [admin, setAdmin] = useState(null);
   const [adminAuth, setAdminAuth] = useState(null);
-  const [config, setConfig] = useState({ allowStudentSearch: true });
+  const [config, setConfig] = useState({ allowStudentSearch: true, devAuthEnabled: false });
   const [loading, setLoading] = useState(true);
+  const [devAuthOpen, setDevAuthOpen] = useState(false);
 
   useEffect(() => {
     if (!profile?.student) return;
@@ -112,20 +114,33 @@ function AppShell() {
   if (view === 'admin' && admin && adminAuth) {
     return <AdminView admin={admin} auth={adminAuth} onBack={() => setView('landing')} />;
   }
-  return <Landing config={config} onStudent={(data) => {
-    if (data?.excused) {
-      setExcused(data);
-      setProfile(null);
-      setView('excused');
-      return;
-    }
-    setProfile(data);
-    setExcused(null);
-    setView('student');
-  }} />;
+  return <>
+    <Landing config={config} onStudent={(data) => {
+      if (data?.excused) {
+        setExcused(data);
+        setProfile(null);
+        setView('excused');
+        return;
+      }
+      setProfile(data);
+      setExcused(null);
+      setView('student');
+    }} onOpenDevAuth={() => setDevAuthOpen(true)} />
+    {devAuthOpen && config.devAuthEnabled && <DevAuthModal onClose={() => setDevAuthOpen(false)} onSelected={async () => {
+      const meRes = await fetch(`${API}/me`);
+      if (!meRes.ok) return;
+      const data = await meRes.json();
+      if (data.authenticated && data.profile) {
+        setProfile(data.profile);
+        setExcused(null);
+        setView('student');
+        setDevAuthOpen(false);
+      }
+    }} />}
+  </>;
 }
 
-function Landing({ config, onStudent }) {
+function Landing({ config, onStudent, onOpenDevAuth }) {
   const [searchOpen, setSearchOpen] = useState(false);
 
   return (
@@ -141,7 +156,10 @@ function Landing({ config, onStudent }) {
             <Info title="Motive" text="To make consistency visible and help the cohort build disciplined learning habits." />
           </div>
           {config.allowStudentSearch ? (
-            <button className="primary" onClick={() => setSearchOpen(true)}>Find your Spurti points</button>
+            <>
+              <button className="primary" onClick={() => setSearchOpen(true)}>Find your Spurti points</button>
+              {config.devAuthEnabled && <button className="secondary dev-auth-button" onClick={onOpenDevAuth}>DEV / LOCAL TEST MODE</button>}
+            </>
           ) : (
             <div className="auth-card inline-auth">
               <h2>Please login from Samagama to view your Spurti Points.</h2>
@@ -213,6 +231,95 @@ function adminHeaders(auth) {
 
 function Info({ title, text }) {
   return <div className="info"><h3>{title}</h3><p>{text}</p></div>;
+}
+
+function DevAuthModal({ onClose, onSelected }) {
+  const [students, setStudents] = useState([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch(`${API}/dev-auth/students`);
+        if (!active) return;
+        if (!res.ok) {
+          setError('Dev auth is unavailable.');
+          return;
+        }
+        const data = await res.json();
+        setStudents(data.students || []);
+      } catch (err) {
+        setError('Unable to load dev students.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
+  const selectStudent = async () => {
+    setError('');
+    if (!selectedId) {
+      setError('Choose a dummy student.');
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/dev-auth/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: selectedId })
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setError(body.error || 'Unable to select student.');
+        return;
+      }
+      await onSelected();
+    } catch {
+      setError('Unable to select student.');
+    }
+  };
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <section className="modal dev-auth-modal">
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">DEV / LOCAL TEST MODE</p>
+            <h1>Select a dummy student</h1>
+          </div>
+          <button className="icon" onClick={onClose}>x</button>
+        </div>
+        <p className="muted">This mode is enabled only when <code>DEV_AUTH_ENABLED=1</code> and is for local testing only.</p>
+        {loading ? (
+          <p className="muted">Loading dev students…</p>
+        ) : error ? (
+          <p className="error">{error}</p>
+        ) : (
+          <div className="dev-auth-grid">
+            {students.map(student => (
+              <button
+                key={student.id}
+                className={`dev-auth-card ${selectedId === student.id ? 'selected' : ''}`}
+                onClick={() => setSelectedId(student.id)}
+                type="button"
+              >
+                <strong>{student.name}</strong>
+                <span>{student.email}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="modal-actions">
+          <button className="secondary" onClick={onClose}>Close</button>
+          <button className="primary" onClick={selectStudent} disabled={loading || !students.length}>Continue as selected student</button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function SearchModal({ onClose, onStudent }) {
@@ -311,6 +418,7 @@ function StudentView({ profile, onBack }) {
         ['journey','My Journey'],
         ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
         ['spa','SPA Points'],
+        ['reflection','Reflection Wall'],
         ...(ach?.visible ? [['achievements','Achievements', unseenAchievements]] : []),
         ['leaderboard','Leaderboard'],
         ['faq','FAQ']]} />
@@ -318,8 +426,9 @@ function StudentView({ profile, onBack }) {
       {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
+      {tab === 'reflection' && <ReflectionWall />}
       {tab === 'achievements' && ach?.visible && <AchievementsPanel student={student} data={ach} />}
-      {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
+      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
       {tab === 'faq' && <FaqTab />}
     </main>
   );
@@ -404,6 +513,32 @@ function SpaModule({ student }) {
         </p>
       </section>
     </div>
+  );
+}
+
+function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
+  const [type, setType] = useState('overall');
+  const rows = type === 'overall' ? overall : group;
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Leaderboard</h2>
+        <select value={type} onChange={e => setType(e.target.value)}>
+          <option value="overall">Overall Leaderboard</option>
+          <option value="my_onboarding_group">My Onboarding Group</option>
+        </select>
+      </div>
+      {type === 'my_onboarding_group' && groupLabel &&
+        <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
+      <table className="table">
+        <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
+        <tbody>{rows.map(row => (
+          <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
+            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </section>
   );
 }
 

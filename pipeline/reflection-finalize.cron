@@ -1,0 +1,13 @@
+# Reflection finalization cron (install on the samagama host)
+# Run every 5 minutes to finalize any reflection weeks whose voting has ended.
+# Install on the production host with:
+# sudo install -o root -g root -m 644 pipeline/reflection-finalize.cron /etc/cron.d/reflection-finalize
+# Create log directory if missing and ensure the cron runs as the 'samagama' user.
+# Cron entries in this repo are not auto-installed by this script; the maintainer
+# should review and install to the host's /etc/cron.d directory.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Run as the samagama user every 5 minutes. Adjust path to match deployment root.
+*/5 * * * * samagama /usr/bin/node /var/samagama/server/scripts/finalizeReflectionWeeksCron.js >> /var/samagama/server/logs/reflection-finalize.log 2>&1
