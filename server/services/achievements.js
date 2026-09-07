@@ -42,14 +42,15 @@ function milestoneSpecs(student, mins) {
     remaining: `${Math.max(0, 1500 - hi)} SP to go`
   });
 
-  const reached = LEVEL_MILESTONES.find((m) => level >= m);
+  const reached = LEVEL_MILESTONES.filter((m) => level >= m);
   const next = [...LEVEL_MILESTONES].reverse().find((m) => level < m);
-  if (reached) {
+  for (const lv of reached) {
     specs.push({
-      achId: `ms:level:${reached}`, icon: '⭐', title: `Reached Level ${reached}`,
-      period: 'All-time', earned: true, detail: `${reached * 100}+ Spurti Points`
+      achId: `ms:level:${lv}`, icon: '⭐', title: `Reached Level ${lv}`,
+      period: 'All-time', earned: true, detail: `${lv * 100}+ Spurti Points`
     });
-  } else if (next) {
+  }
+  if (next) {
     specs.push({
       achId: `ms:level:${next}`, icon: '⭐', title: `Reach Level ${next}`, period: 'All-time',
       earned: false, detail: `${next * 100} Spurti Points`, remaining: `${next * 100 - hi} SP to go`

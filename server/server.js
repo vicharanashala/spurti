@@ -169,8 +169,43 @@ app.set('trust proxy', 1);
 const api = express.Router();
 const liveViewers = new Map();
 
-app.use(cors());
+// CORS: allow the Samagama origin (same host, different path) and the dev
+// server. Blanket `cors()` would let any website read API responses.
+const ALLOWED_ORIGINS = [
+  'https://samagama.in',
+  'http://localhost:5003',
+  'http://localhost:5173'
+];
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    cb(null, false);
+  }
+}));
 app.use(express.json({ limit: '2mb' }));
+
+// Simple in-memory rate limiter. Tracks request counts per IP per window.
+// Enough to slow down brute-force / enumeration without external dependencies.
+const rateBuckets = new Map();
+function rateLimit(windowMs, max) {
+  return (req, res, next) => {
+    const key = req.ip;
+    const now = Date.now();
+    const bucket = rateBuckets.get(key);
+    if (!bucket || now - bucket.start > windowMs) {
+      rateBuckets.set(key, { start: now, count: 1 });
+      return next();
+    }
+    bucket.count++;
+    if (bucket.count > max) return res.status(429).json({ error: 'Too many requests. Please slow down.' });
+    next();
+  };
+}
+// Evict stale buckets every 5 minutes to prevent memory leak.
+setInterval(() => {
+  const cutoff = Date.now() - 300_000;
+  for (const [k, v] of rateBuckets) { if (v.start < cutoff) rateBuckets.delete(k); }
+}, 300_000).unref();
 
 // Express 4 does not catch rejected promises from async route handlers.
 // This wrapper catches rejections and forwards them to the error handler.
@@ -462,7 +497,7 @@ api.put('/journey/plan', async (req, res) => {
   res.json(await buildJourneyState(student));
 });
 
-api.get('/search', async (req, res) => {
+api.get('/search', rateLimit(60_000, 30), async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ exact: false, matches: [] });
@@ -486,7 +521,7 @@ api.get('/search', async (req, res) => {
   res.json({ exact: false, matches: matches.map(publicStudent) });
 });
 
-api.post('/confirm', async (req, res) => {
+api.post('/confirm', rateLimit(60_000, 15), async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const { studentId, email } = req.body || {};
   const typed = normalizeEmail(email);
@@ -700,7 +735,7 @@ function logAchievementView(req, code, result) {
 // client hands it over. It's stored once per achievement purely so the verify
 // page has an og:image — that's what makes a posted link show the card without
 // the student uploading anything.
-api.post('/share/card', async (req, res) => {
+api.post('/share/card', rateLimit(60_000, 10), async (req, res) => {
   const { achId, dataUrl } = req.body || {};
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
@@ -748,19 +783,22 @@ api.post('/share/track', async (req, res) => {
   res.json({ ok: true });
 });
 
-api.post('/ping', async (req, res) => {
+api.post('/ping', rateLimit(60_000, 60), async (req, res) => {
   const { email, name, page } = req.body || {};
   const normalized = normalizeEmail(email);
   if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
-  // Telemetry is best-effort: an unknown page value (e.g. a new admin sub-page
-  // not yet in the enum) must never crash the request or leak an unhandled
-  // rejection. Drop the write and carry on.
-  try {
-    await SessionEvent.create({ email: normalized, name, event: 'page_view', page });
-  } catch (err) {
-    if (err?.name !== 'ValidationError') console.error('ping log failed:', err?.message);
+  // Admin pings are not student telemetry — don't store them in sessionevents
+  // or liveViewers. This prevents admin email leakage to the active-viewers
+  // dashboard and the sessionevents audit log.
+  const isAdminPage = typeof page === 'string' && page.startsWith('admin');
+  if (!isAdminPage) {
+    try {
+      await SessionEvent.create({ email: normalized, name, event: 'page_view', page });
+    } catch (err) {
+      if (err?.name !== 'ValidationError') console.error('ping log failed:', err?.message);
+    }
   }
-  if (page === 'record' || (typeof page === 'string' && page.startsWith('admin'))) {
+  if (page === 'record') {
     liveViewers.set(normalized, { name, page, lastSeen: new Date() });
   }
   res.json({ ok: true });
@@ -863,9 +901,9 @@ api.get('/admin/leaderboard', adminGuard, async (req, res) => {
 
 api.get('/admin/attendance', adminGuard, async (_req, res) => {
   const [sessions, students, records] = await Promise.all([
-    Session.find().sort({ endDateTime: 1 }).lean(),
-    Student.find({ status: 'active' }).sort({ name: 1 }).lean(),
-    AttendanceRecord.find().lean()
+    Session.find({}, { label: 1, totalMinutes: 1 }).sort({ endDateTime: 1 }).lean(),
+    Student.find({ status: 'active' }, { name: 1, email: 1, totalSp: 1 }).sort({ name: 1 }).lean(),
+    AttendanceRecord.find({}, { email: 1, sessionLabel: 1, attendedMinutes: 1, totalSessionMinutes: 1, qualified: 1, attendancePercentage: 1 }).lean()
   ]);
   const byStudent = new Map();
   for (const record of records) byStudent.set(`${record.email}|${record.sessionLabel}`, record);
@@ -922,17 +960,15 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   const [allStudents, sessions, attendance, transactions, events, shares, achievements, views, reigns] = await Promise.all([
-    Student.find().lean(),
-    Session.find().sort({ endDateTime: 1 }).lean(),
-    AttendanceRecord.find().lean(),
-    SPTransaction.find().lean(),
-    SessionEvent.find({ timestamp: { $gte: last30Days } }).lean(),
-    ShareEvent.find().lean(),
-    // The full rows, not a count: per-category share rates need the cards HELD
-    // in each category as their denominator.
+    Student.find({}, { email: 1, status: 1, totalSp: 1, name: 1 }).lean(),
+    Session.find({}, { label: 1, totalMinutes: 1, endDateTime: 1 }).sort({ endDateTime: 1 }).lean(),
+    AttendanceRecord.find({}, { email: 1, sessionLabel: 1, qualified: 1, attendedMinutes: 1, totalSessionMinutes: 1, attendancePercentage: 1 }).lean(),
+    SPTransaction.find({}, { email: 1, category: 1, appliedDelta: 1 }).lean(),
+    SessionEvent.find({ timestamp: { $gte: last30Days } }, { email: 1, timestamp: 1 }).lean(),
+    ShareEvent.find({}, { achId: 1, platform: 1, studentId: 1 }).lean(),
     Achievement.find({}, { achId: 1, kind: 1, board: 1, place: 1, studentId: 1, earnedAt: 1 }).lean(),
     AchievementView.find({}, { bot: 1, board: 1, kind: 1, ref: 1, viewerDay: 1, found: 1 }).lean(),
-    BoardReign.find().sort({ from: -1 }).lean()
+    BoardReign.find({}, { board: 1, studentId: 1, from: 1, to: 1, peakSp: 1 }).sort({ from: -1 }).lean()
   ]);
   const statusCounts = { active: 0, 'yet to onboard': 0, excused: 0 };
   for (const s of allStudents) { if (s.status in statusCounts) statusCounts[s.status]++; }
