@@ -96,6 +96,9 @@ _health_set() {
 }
 
 # run_step <name> <fatal|nonfatal> <note-on-failure> <command...>
+# STEP_TIMEOUT: max seconds per step before it is killed (default 600 = 10 min).
+# Prevents a hung process from blocking all future refreshes.
+STEP_TIMEOUT="${STEP_TIMEOUT:-600}"
 run_step() {
   local name="$1" mode="$2" note="$3"; shift 3
   local prev fails lastok
@@ -104,7 +107,7 @@ run_step() {
   [ -n "$fails" ] || fails=0
   [ "$fails" = "$prev" ] && lastok=""
 
-  if "$@" >> "$LOG" 2>&1; then
+  if timeout "$STEP_TIMEOUT" "$@" >> "$LOG" 2>&1; then
     log "$name ok"
     _health_set "$name" ok 0 "$(date -u +%FT%TZ)"
     return 0

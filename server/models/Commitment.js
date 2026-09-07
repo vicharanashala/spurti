@@ -29,7 +29,7 @@ const commitmentSchema = new mongoose.Schema({
   baselinePct: { type: Number, default: 0 },          // completion % at commit time
 
   // Standup-specific
-  tier: { type: String, default: '' },                // '81-90' | '91-100'
+  tier: { type: String, default: '', enum: ['', '81-90', '91-100'] },
   tierFloor: { type: Number, default: 0 },            // min average attendance % to hit (81 | 91)
   sessionsTarget: { type: Number, default: 0 },       // sessions to attend this week (full week Y)
   weekStart: { type: Date, default: null },
@@ -37,5 +37,10 @@ const commitmentSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 commitmentSchema.index({ email: 1, type: 1, status: 1 });
+// Prevent two active commitments of the same type per student at the DB level.
+commitmentSchema.index(
+  { email: 1, type: 1 },
+  { unique: true, partialFilterExpression: { status: 'active' } }
+);
 
 export default mongoose.model('Commitment', commitmentSchema);

@@ -85,7 +85,9 @@ export async function awardAchievements(specs, attempts = 5) {
         const info = we.err || we;
         if (info.code !== 11000) throw err;
         // Re-roll only the code clashes; the achId clash is a benign race.
-        if (/verifyId/.test(info.errmsg || '')) clashed.push(pending[info.index]);
+        if (/verifyId/.test(info.errmsg || '') && info.index != null && pending[info.index]) {
+          clashed.push(pending[info.index]);
+        }
       }
       pending = clashed.map((s) => ({ ...s, doc: { ...s.doc, verifyId: newVerifyId() } }));
     }

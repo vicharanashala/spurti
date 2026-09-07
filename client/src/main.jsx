@@ -334,10 +334,14 @@ function SpaModule({ student }) {
   const [data, setData] = useState(null);
 
   useEffect(() => {
+    let live = true;
     (async () => {
-      const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
-      setData(await r.json());
+      try {
+        const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
+        if (r.ok && live) setData(await r.json());
+      } catch { /* keep data null → "Loading your SPA points…" instead of unhandled rejection */ }
     })();
+    return () => { live = false; };
   }, [email]);
 
   if (!data) return <section className="panel">Loading your SPA points…</section>;
@@ -805,7 +809,7 @@ function LeaderboardPanel({ student }) {
     let live = true;
     setLoading(true);
     fetch(`${API}/leaderboard/board?window=${preset.window}&category=${preset.category}&scope=${preset.scope}&email=${encodeURIComponent(student.email)}`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(d => { if (live) { setData(d); setLoading(false); } })
       .catch(() => { if (live) setLoading(false); });
     return () => { live = false; };
@@ -849,7 +853,12 @@ function LeaderboardPanel({ student }) {
 function TrajectoryModal({ student, onClose }) {
   const [data, setData] = useState(null);
   useEffect(() => {
-    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`).then(r => r.json()).then(setData);
+    let live = true;
+    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`)
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(d => { if (live) setData(d); })
+      .catch(() => { if (live) setData({}); });
+    return () => { live = false; };
   }, [student.email]);
 
   const series = data ? [
@@ -1280,11 +1289,13 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
   const [showTraj, setShowTraj] = useState(false);
   const [err, setErr] = useState(null);
 
-  const load = async () => {
-    const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`);
-    setData(await r.json());
+  const load = async (live = () => true) => {
+    try {
+      const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`);
+      if (r.ok && live()) setData(await r.json());
+    } catch { /* keep data null → "Loading your journey…" */ }
   };
-  useEffect(() => { load(); }, [email]);
+  useEffect(() => { let live = true; load(() => live); return () => { live = false; }; }, [email]);
 
   if (!data) return <section className="panel">Loading your journey…</section>;
   if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
@@ -1423,14 +1434,17 @@ function VibeGoals({ student }) {
   const [editing, setEditing] = useState(false);
   const [err, setErr] = useState(null);
 
-  const load = async () => {
-    const r = await fetch(`${API}/vibe/state?email=${encodeURIComponent(email)}`);
-    setData(await r.json());
+  const load = async (live = () => true) => {
+    try {
+      const r = await fetch(`${API}/vibe/state?email=${encodeURIComponent(email)}`);
+      if (r.ok && live()) setData(await r.json());
+    } catch { /* keep data null → "Loading ViBe Goals…" */ }
   };
   useEffect(() => {
-    load();
+    let live = true; load(() => live);
     const d = new Date(); d.setDate(d.getDate() + 2);
     setForm(f => ({ ...f, deadline: d.toISOString().slice(0, 10) }));
+    return () => { live = false; };
   }, [email]);
 
   if (!data) return <section className="panel">Loading ViBe Goals…</section>;
@@ -1561,8 +1575,8 @@ function VibeGoals({ student }) {
               <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
               <div className="vg-betbtns">
                 {!editing && <button className="secondary" onClick={() => { setForm({ goalPct: data.active.goalPct, stake: data.active.stake, multiplier: data.active.multiplier, deadline: form.deadline }); setEditing(true); }}>Edit commitment</button>}
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
+                <button className="secondary" onClick={() => { if (window.confirm('Settle this commitment as HIT? This will permanently change SP.')) settle('won'); }}>Demo: Hit</button>
+                <button className="secondary" onClick={() => { if (window.confirm('Settle this commitment as MISS? This will permanently deduct SP.')) settle('lost'); }}>Demo: Miss</button>
               </div>
             </div>
           </div>
@@ -1594,11 +1608,13 @@ function StandupGoals({ student }) {
   const [multiplier, setMultiplier] = useState(4);
   const [err, setErr] = useState(null);
 
-  const load = async () => {
-    const r = await fetch(`${API}/standup/state?email=${encodeURIComponent(email)}`);
-    setData(await r.json());
+  const load = async (live = () => true) => {
+    try {
+      const r = await fetch(`${API}/standup/state?email=${encodeURIComponent(email)}`);
+      if (r.ok && live()) setData(await r.json());
+    } catch { /* keep data null → "Loading standups…" */ }
   };
-  useEffect(() => { load(); }, [email]);
+  useEffect(() => { let live = true; load(() => live); return () => { live = false; }; }, [email]);
 
   if (!data) return <section className="panel">Loading standups…</section>;
   if (!data.eligible) return <section className="panel empty">Standup commitments aren’t available for your cohort yet.</section>;
@@ -1665,8 +1681,8 @@ function StandupGoals({ student }) {
             <div className="side">
               <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
               <div className="vg-betbtns">
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
+                <button className="secondary" onClick={() => { if (window.confirm('Settle this commitment as HIT? This will permanently change SP.')) settle('won'); }}>Demo: Hit</button>
+                <button className="secondary" onClick={() => { if (window.confirm('Settle this commitment as MISS? This will permanently deduct SP.')) settle('lost'); }}>Demo: Miss</button>
               </div>
             </div>
           </div>
@@ -1713,24 +1729,36 @@ function AdminView({ admin, auth, onBack }) {
     return () => clearInterval(id);
   }, [admin]);
   const loadLeaderboard = async (limit = leaderLimit) => {
-    const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers });
-    setLeaderboard(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers });
+      if (res.ok) setLeaderboard(await res.json());
+    } catch { /* leaderboard stays as-is */ }
   };
   const loadAttendance = async () => {
-    const res = await fetch(`${API}/admin/attendance`, { headers });
-    setAttendance(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/attendance`, { headers });
+      if (res.ok) setAttendance(await res.json());
+    } catch { /* attendance stays as-is */ }
   };
   const loadStudent = async (id) => {
-    const res = await fetch(`${API}/admin/student/${id}`, { headers });
-    setStudentProfile(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/student/${id}`, { headers });
+      const data = await res.json();
+      if (res.ok && data.student) setStudentProfile(data);
+      else setStudentProfile(null);
+    } catch { setStudentProfile(null); }
   };
   const loadActive = async () => {
-    const res = await fetch(`${API}/admin/active`, { headers });
-    setActive(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/active`, { headers });
+      if (res.ok) setActive(await res.json());
+    } catch { /* active stays as-is */ }
   };
   const loadAnalytics = async () => {
-    const res = await fetch(`${API}/admin/analytics`, { headers });
-    setAnalytics(await res.json());
+    try {
+      const res = await fetch(`${API}/admin/analytics`, { headers });
+      if (res.ok) setAnalytics(await res.json());
+    } catch { /* analytics stays as-is */ }
   };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
