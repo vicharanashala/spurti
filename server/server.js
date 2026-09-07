@@ -19,6 +19,8 @@ import AchievementView, { isBot, uaFamilyOf, viewerDayHash } from './models/Achi
 import BoardReign from './models/BoardReign.js';
 import Announcement from './models/Announcement.js';
 import AnnouncementAck from './models/AnnouncementAck.js';
+import JourneyPlan from './models/JourneyPlan.js';
+import E2CardEvent from './models/E2CardEvent.js';
 import { buildAchievementState, verifyAchievement } from './services/achievements.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
@@ -274,6 +276,14 @@ async function studentPayload(student) {
     level: levelFor(Math.max(Number(row.highestSpEver) || 0, Number(row.totalSp) || 0)),
     isCurrentStudent: row.email === email
   });
+  // E2 goal card: arms B/C, window open, and no goal set yet — the moment a
+  // journey goal exists the card's premise is gone and it stops for good.
+  let e2Card = null;
+  if ((student.e2Arm === 'B' || student.e2Arm === 'C') && e2WindowOpen()) {
+    const plan = await JourneyPlan.findOne({ email: student.email }).lean();
+    const hasGoal = plan && (plan.standupBy || plan.vibeBy || plan.spaBy || plan.projectBy);
+    if (!hasGoal) e2Card = { arm: student.e2Arm, sp: student.e2Arm === 'C' ? 10 : 0 };
+  }
   return {
     student: {
       _id: String(student._id),
@@ -297,7 +307,8 @@ async function studentPayload(student) {
       surveyCompleted: Boolean(student.surveyCompleted),
       poll2Completed: Boolean(student.poll2Completed),
       poll3Completed: Boolean(student.poll3Completed),
-      eligibleForVibeGoals: isVibeEligible(student)
+      eligibleForVibeGoals: isVibeEligible(student),
+      e2Card
     },
     transactions,
     polls,
@@ -312,6 +323,19 @@ async function studentPayload(student) {
     leaderboard: leaderboard.map(mapRow),
     groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
   };
+}
+
+// ── E2 goal-card experiment window (pre-reg 2026-09-07) ──────────────────────
+// The card renders for arms B/C only between E2_START and E2_START + E2_DAYS.
+// The gate lives server-side so a stale client build can never extend the
+// experiment; arm assignment sits on the student doc (e2Arm), written once by
+// pipeline/assign-arms-e2.mjs. Unset E2_START = experiment off everywhere.
+const E2_START = process.env.E2_START ? new Date(process.env.E2_START) : null;
+const E2_DAYS = Number(process.env.E2_DAYS || 7);
+function e2WindowOpen() {
+  if (!E2_START || Number.isNaN(E2_START.getTime())) return false;
+  const now = Date.now();
+  return now >= E2_START.getTime() && now < E2_START.getTime() + E2_DAYS * 86400000;
 }
 
 function isAdmin(req) {
@@ -742,6 +766,29 @@ api.post('/share/track', async (req, res) => {
     captionEdited: !!captionEdited, captionChars: Number(captionChars) || 0,
     platform
   });
+  res.json({ ok: true });
+});
+
+// E2 goal-card telemetry: one row per impression / skip / set. Cookie-only auth
+// on purpose (unlike vibeStudent): a client-supplied email must never let anyone
+// write experiment rows for someone else. Log failures are swallowed — telemetry
+// must not break the card.
+api.post('/e2/card-event', async (req, res) => {
+  const { event, phase, value } = req.body || {};
+  if (!['impression', 'skip', 'set'].includes(event)) return res.status(400).json({ error: 'bad event' });
+  const email = await studentEmailFromRequest(req);
+  const student = email ? await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean() : null;
+  if (!student || (student.e2Arm !== 'B' && student.e2Arm !== 'C')) {
+    return res.status(403).json({ error: 'not in experiment' });
+  }
+  try {
+    await E2CardEvent.create({
+      email: student.email, arm: student.e2Arm, event,
+      phase: String(phase || ''), value: String(value || '')
+    });
+  } catch (err) {
+    console.error('e2 card-event log failed:', err?.message);
+  }
   res.json({ ok: true });
 });
 

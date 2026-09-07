@@ -111,9 +111,38 @@ const STAFF = new Set([
 // never used. Two capped tracks + a one-time integrity penalty on current SP.
 // Source: act_spa_endorsements + act_spa_transactions (mirrored 6-hourly).
 const SPA_LEARN_UNIT = 5, SPA_LEARN_CAP = 50;   // +5 SP / validated question learned, cap 50 → max 250
-const SPA_TEACH_UNIT = 8, SPA_TEACH_CAP = 30;   // +8 SP / validated peer taught,     cap 30 → max 240
+const SPA_TEACH_UNIT = 10, SPA_TEACH_CAP = 25;  // +10 SP / validated peer taught,    cap 25 → max 250
+// Certificate-scale rescore (2026-09-05, per HANDOFF_CERTIFICATE_DATA.md): teach
+// 8×30 → 10×25, strictly upward at every count ≤25; counts 26-30 kept ≥ old pay
+// by the cap math (old max 240 < new max 250).
 const SPA_FRAUD_RATE = 0.5, SPA_AUDIT_RATE = 0.2;
 const SPA_GOOD = ['approved', 'audit_passed'];
+
+// ── Project → SP (mentor-reviewed PR; certificate scale) ─────────────────────
+// One-time +500 when the mentor review of the student's project PR is
+// 'completed' (act_pr_reviews.reviewStatus). 'rejected', 'pending' and
+// 'pending_reevaluation' earn nothing. Dated resubmittedAt || reviewedAt —
+// reviewedAt keeps the EARLIER rejection date on resubmitted projects.
+const PROJECT_SP = 500;
+
+// ── E2 goal-card incentive (arm C only; pre-reg 2026-09-07) ──────────────────
+// One-time +10 when an arm-C student of the E2 goal-card experiment sets their
+// first My Journey goal inside the launch window. Arm membership comes from the
+// launch assignment CSV (server-side file, has emails). Missing E2_START or a
+// missing CSV makes the whole category a silent no-op — safe on every host.
+const E2_GOAL_SP = 10;
+const E2_ASSIGN_CSV = process.env.E2_ASSIGN_CSV || `${process.env.HOME}/spurti/e2_assignment_2026-09-07.csv`;
+const E2_START_ENV = process.env.E2_START || '';
+const E2_DAYS_ENV = Number(process.env.E2_DAYS || 7);
+
+// ── Certificate-locked students ──────────────────────────────────────────────
+// Their certificate is fully processed and issued — printed numbers must never
+// move. They keep the exact rule-set in force at print time: no 'project'
+// category, SPA teach at the legacy 8×30. Everyone still in the signing queue
+// gets the new rules and a regenerated certificate.
+// 2026-09-05: Yaradla Yaswanth Reddy (the only fully-processed certificate).
+const CERT_LOCKED = new Set(['yaswanthreddythb@gmail.com']);
+const SPA_TEACH_UNIT_LEGACY = 8, SPA_TEACH_CAP_LEGACY = 30;
 
 // ── Query answering → SP (Pattern A: rubric-recomputed) ──────────────────────
 // +5 SP per DISTINCT peer query a student answered (from
@@ -315,6 +344,25 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   // attendance for these dates was skipped above, so no double credit.
   for (const [, sp] of spandanAttByDate) scoreSpandanAttendance(sp, 'Day ' + sp.dayNumber);
 
+  // V-Talk attendance pass: special synchronous sessions from the
+  // vtalk_attendance mirror (built by pipeline/vtalk-attendance-build.cjs from
+  // Zoom meeting/webinar reports; webinar rows are strict name->student matches,
+  // unique only). Scored OUTSIDE the per-day session cascade because V-Talks
+  // co-exist with standups on the same date. V-Talk 07 is deliberately absent
+  // (it ran inside Spandan and is already scored as "Day 78 (14 Aug)").
+  // Reason carries "present X of Y min (Z%)" so sync-attendance-records.cjs
+  // folds the minutes into attendancerecords / the 3600 journey goal.
+  for (const v of await sak.collection('vtalk_attendance').find({}).toArray()) {
+    const e = String(v.email || '').toLowerCase().trim(); if (!e) continue;
+    const W = v.windowMinutes || ATT_SESSION_MIN;
+    const mins = Math.min(W, Math.round(v.attendedMinutes || 0));
+    const pct = W ? Math.round(mins / W * 1000) / 10 : 0;
+    const d = tier(pct);
+    touch(e, v.name).rows.push({ date: v.date, order: 1, cat: 'attendance', delta: d,
+      reason: `${v.label} (${ddmon(v.date)}): present ${mins} of ${W} min (${pct}%) -> ${d > 0 ? '+' : ''}${d} SP.` });
+    const o = students.get(e); if (!o.firstAtt || v.date < o.firstAtt) o.firstAtt = v.date;
+  }
+
   // 3b. SPA → per-canon validated learn/teach events (dated) + integrity flags.
   //     emailToCanon is fully built by now, so we can fold aliases correctly.
   const spaByCanon = new Map(); // canon -> { learn:[YYYY-MM-DD...], teach:[...] }
@@ -413,7 +461,42 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     }
   }
 
-  // 3e. PRESERVED rows (manual/peer_faq) — read BEFORE the wipe and fold into each
+  // 3e. Project → per-canon completed mentor review (earliest completion date).
+  const projectByCanon = new Map(); // canon -> YYYY-MM-DD of review completion
+  for (const r of await sak.collection('act_pr_reviews').find(
+        { reviewStatus: 'completed' }, { projection: { email: 1, reviewedAt: 1, resubmittedAt: 1 } }).toArray()) {
+    const e = String(r.email || '').toLowerCase().trim(); if (!e) continue;
+    const c = canonOf(e);
+    const date = dstr(r.resubmittedAt) || dstr(r.reviewedAt) || TODAY;
+    const prev = projectByCanon.get(c);
+    if (!prev || date < prev) projectByCanon.set(c, date);
+  }
+
+  // 3e2. E2 goal-card: arm-C students who set their first journey goal inside the
+  //      experiment window -> canon -> YYYY-MM-DD of the plan's creation. No-op
+  //      unless E2_START is set and the assignment CSV exists on this host.
+  const e2GoalByCanon = new Map();
+  if (E2_START_ENV && fs.existsSync(E2_ASSIGN_CSV)) {
+    try {
+      const armC = new Set(fs.readFileSync(E2_ASSIGN_CSV, 'utf8').trim().split('\n').slice(1)
+        .map(l => l.split(',')).filter(p => (p[2] || '').trim() === 'C')
+        .map(p => canonOf(p[0].toLowerCase().trim())));
+      const startMs = new Date(E2_START_ENV).getTime();
+      const endMs = startMs + E2_DAYS_ENV * 86400000;
+      for (const jp of await sak.collection('journeyplans').find({},
+            { projection: { email: 1, createdAt: 1, standupBy: 1, vibeBy: 1, spaBy: 1, projectBy: 1 } }).toArray()) {
+        const c = canonOf(String(jp.email || '').toLowerCase().trim());
+        if (!armC.has(c)) continue;
+        if (!(jp.standupBy || jp.vibeBy || jp.spaBy || jp.projectBy)) continue;
+        const t = jp.createdAt ? new Date(jp.createdAt).getTime() : NaN;
+        if (!(t >= startMs && t < endMs)) continue;
+        e2GoalByCanon.set(c, dstr(jp.createdAt) || TODAY);
+      }
+      console.log(`E2 goal-card: ${e2GoalByCanon.size} arm-C setter(s) in window`);
+    } catch (e) { console.error('E2 goal-card scan skipped:', e.message); }
+  }
+
+  // 3f. PRESERVED rows (manual/peer_faq) — read BEFORE the wipe and fold into each
   //     student's ledger so commitment/admin SP survives the rebuild. Re-created with
   //     the same delta/date/reason (metadata like original createdAt is not retained).
   const preservedByCanon = new Map(); // canon -> [{ date, order, cat, delta, reason }]
@@ -452,13 +535,16 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     // SPA rows (Pattern A): one consolidated 'spa' row per day, cumulative caps
     // across days. These bypass the (date|cat) best-dedup by being pushed directly.
     const spa = spaByCanon.get(cand); const flags = spaFlag.get(cand) || {};
+    // CERT_LOCKED students keep the legacy teach pay (rules at certificate print time).
+    const teachUnit = CERT_LOCKED.has(cand) ? SPA_TEACH_UNIT_LEGACY : SPA_TEACH_UNIT;
+    const teachCap = CERT_LOCKED.has(cand) ? SPA_TEACH_CAP_LEGACY : SPA_TEACH_CAP;
     let spaLearnUsed = 0, spaTeachUsed = 0;
     if (spa) {
       const byDay = new Map(); // date -> { learn, teach }
       for (const d of spa.learn.slice().sort()) { if (spaLearnUsed >= SPA_LEARN_CAP) break; spaLearnUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.learn++; byDay.set(d, o); }
-      for (const d of spa.teach.slice().sort()) { if (spaTeachUsed >= SPA_TEACH_CAP) break; spaTeachUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.teach++; byDay.set(d, o); }
+      for (const d of spa.teach.slice().sort()) { if (spaTeachUsed >= teachCap) break; spaTeachUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.teach++; byDay.set(d, o); }
       for (const [d, o] of byDay) {
-        const delta = o.learn * SPA_LEARN_UNIT + o.teach * SPA_TEACH_UNIT; if (!delta) continue;
+        const delta = o.learn * SPA_LEARN_UNIT + o.teach * teachUnit; if (!delta) continue;
         const parts = []; if (o.learn) parts.push(`${o.learn} learned`); if (o.teach) parts.push(`${o.teach} taught`);
         rows.push({ date: d, order: 3, cat: 'spa', delta, reason: `SPA (${ddmon(d)}): ${parts.join(' + ')} (validated) -> +${delta} SP.` });
       }
@@ -501,6 +587,19 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
         rows.push({ date: d, order: 4, cat: 'query', delta,
           reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${delta} SP${capNote}.` });
       }
+    }
+    // Project row: one-time +PROJECT_SP on mentor-completed review (Pattern A,
+    // rubric-recomputed). CERT_LOCKED students keep their issued numbers.
+    const projDate = projectByCanon.get(cand);
+    if (projDate && !CERT_LOCKED.has(cand)) {
+      rows.push({ date: projDate, order: 7, cat: 'project', delta: PROJECT_SP,
+        reason: `Project (${ddmon(projDate)}): mentor review of your project PR completed -> +${PROJECT_SP} SP.` });
+    }
+    // E2 goal-card row: one-time +10, arm C only, first goal set inside the window.
+    const e2Date = e2GoalByCanon.get(cand);
+    if (e2Date && !CERT_LOCKED.has(cand)) {
+      rows.push({ date: e2Date, order: 7, cat: 'goal', delta: E2_GOAL_SP,
+        reason: `Goal set (${ddmon(e2Date)}): first My Journey target date set during the goal-card week -> +${E2_GOAL_SP} SP (one-time).` });
     }
     // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
     for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);

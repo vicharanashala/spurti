@@ -76,9 +76,17 @@ function AppShell() {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
   }
   if (view === 'student' && profile) {
+    // The E2 goal card must never stack on top of a mandatory survey pop-up —
+    // same gate conditions the three SurveyModals use below.
+    const surveyBlocking = [
+      [config.survey, 'surveyCompleted'],
+      [config.poll2, 'poll2Completed'],
+      [config.poll3, 'poll3Completed']
+    ].some(([cfg, key]) => cfg?.enabled && cfg.formUrl && profile.student && !profile.student[key]);
     return (
       <>
         <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <GoalCardModal student={profile.student} surveyBlocking={surveyBlocking} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -1144,11 +1152,44 @@ const FAQ_ITEMS = [
   { q: 'Why can’t I search my SP directly?', a: 'For privacy and security, direct student search is disabled in production. Instead, open Spurti from your Samagama dashboard — the same login you already use — and it will show only your own record. This is what ensures no one can look up another student’s SP, and it’s why you normally reach Spurti through the official programme link rather than searching by name or email.' },
 ];
 
+// SP rates at a glance — keep in sync with the live rubric
+// (pipeline/sp-rubric-build-mirror.cjs) and FAQ_SP.md.
+const SP_RATES = [
+  { src: 'Initial', how: 'one-time credit on your official start date', sp: '+100', cap: '100' },
+  { src: 'Attendance', how: 'standup presence: ≥90% / 75–89% / 50–74% of the window', sp: '+10 / +5 / +3 per session', cap: 'Not capped' },
+  { src: 'Polls', how: 'your day’s score vs the day’s top scorer, same bands', sp: '+10 / +5 / +3 per day', cap: 'Not capped' },
+  { src: 'SPA — learn', how: 'each validated question you learn', sp: '+5', cap: '250 (50 questions)' },
+  { src: 'SPA — teach', how: 'each validated peer you teach', sp: '+10', cap: '250 (25 peers)' },
+  { src: 'Query answering', how: 'each distinct peer query you genuinely answer', sp: '+5', cap: '200 (40 queries)' },
+  { src: 'Project', how: 'your project PR passes the mentor review', sp: '+500 one-time', cap: '500' },
+];
+const SP_DEDUCTIONS = [
+  'SPA integrity: confirmed fraud −50% / failed audit −20% of the SP earned up to that date (one-time).',
+  'Query review: an answer the admins reject −10, marked unworthy −5 (only for queries raised on/after 22 Aug; capped at −200 overall).',
+  'ViBe commitments: missing a goal you staked SP on loses the stake × penalty (only if you chose to stake).',
+];
+
 function FaqTab() {
   const [open, setOpen] = useState(0);
   return (
     <section className="panel">
       <div className="panel-head"><h2>FAQ</h2></div>
+      <div className="sp-table-wrap">
+        <h3>SP at a glance</h3>
+        <table className="sp-table">
+          <thead><tr><th>Source</th><th>How you earn</th><th>SP</th><th>Cap</th></tr></thead>
+          <tbody>
+            {SP_RATES.map(r => (
+              <tr key={r.src}><td>{r.src}</td><td>{r.how}</td><td>{r.sp}</td><td>{r.cap}</td></tr>
+            ))}
+            <tr className="sp-total"><td><b>Total (earnable SP)</b></td><td className="muted">attendance and polls counted at their 600 design value (60 sessions × 10)</td><td colSpan={2}><b>2,500</b></td></tr>
+          </tbody>
+        </table>
+        <p className="muted sp-deduct-head">Where SP can reduce:</p>
+        <ul className="sp-deduct">
+          {SP_DEDUCTIONS.map((d, i) => <li key={i}>{d}</li>)}
+        </ul>
+      </div>
       <p className="muted faq-intro">Tap a question to see the answer.</p>
       <div className="faq-list">
         {FAQ_ITEMS.map((item, i) => (
@@ -1349,7 +1390,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
   if (!data) return <section className="panel">Loading your journey…</section>;
   if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
 
-  const { standups, vibe, goals } = data;
+  const { standups, vibe, spa, projects, goals } = data;
 
   const saveTarget = async (field, value) => {
     const r = await fetch(`${API}/journey/plan`, {
@@ -1404,17 +1445,24 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
           {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('vibe')}>🎲 Stake SP →</button></div>}
         </section>
 
-        {/* SPA — goal (date) works now; progress data + commitment coming soon */}
+        {/* SPA — live progress from the rubric summary (same source as the SPA Points tab) */}
         <section className="jr-card phase-spa">
-          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-soon">Data soon</span></div>
-          <p className="jr-sub">53-problem set · progress data coming soon</p>
+          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-sp">+{spa.sp} SP</span></div>
+          <p className="jr-sub">{spa.solved}/{spa.total} problems solved · full breakdown in the SPA Points tab</p>
+          <div className="jr-stats">
+            <div><strong>{spa.solved}</strong><span>problems solved</span></div>
+            <div><strong>{spa.taught}</strong><span>peers taught</span></div>
+          </div>
           <PhaseGoal phaseKey="spa" field="spaBy" goal={goals.spa} targetText="solve all 53 problems" {...gp} />
         </section>
 
-        {/* Projects — goal (date) works now; progress data coming soon */}
+        {/* Projects — live from the PR submission + review mirrors; SP rule still TBD */}
         <section className="jr-card phase-project">
-          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">Data soon</span></div>
-          <p className="jr-sub">Pull requests · progress data coming soon</p>
+          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-sp">+{projects.sp} SP</span></div>
+          <p className="jr-sub">{projects.submitted ? `${projects.prsRaised} PR${projects.prsRaised === 1 ? '' : 's'} submitted` : 'Pull requests — none submitted yet'}</p>
+          {projects.reviewStatus && (
+            <div className="jr-splits"><span className="jr-pill">Review: {projects.reviewStatus}</span></div>
+          )}
           <PhaseGoal phaseKey="project" field="projectBy" goal={goals.project} targetText="raise your first PR" {...gp} />
         </section>
       </div>
@@ -2185,6 +2233,158 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   );
 }
 
+
+// ── E2 goal-card (experiment, pre-reg 2026-09-07) ────────────────────────────
+// Pop-up shown to arms B/C at login while the experiment window is open and the
+// student has no journey goal yet (all gated server-side via student.e2Card).
+// Asks for ONE date — the student's current active phase — settable in one tap,
+// skippable in one tap. Shown at most once per calendar day (localStorage),
+// permanently gone once any goal is set. Every impression/skip/set is logged
+// server-side; the log write never blocks the UI.
+const E2_PHASES = [
+  ['standup', 'standupBy', 'your Stand-ups'],
+  ['vibe', 'vibeBy', 'your ViBe courses'],
+  ['spa', 'spaBy', 'your SPA practice'],
+  ['project', 'projectBy', 'your Project']
+];
+
+function GoalCardModal({ student, surveyBlocking }) {
+  const e2 = student?.e2Card;
+  const [state, setState] = useState('idle'); // idle | open | done | closed
+  const [pick, setPick] = useState(null);
+  const [date, setDate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const logEvent = (event, extra = {}) => {
+    fetch(`${API}/e2/card-event`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, phase: pick?.phaseKey, ...extra })
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!e2 || surveyBlocking) return;
+    const todayKey = `e2CardShown:${new Date().toISOString().slice(0, 10)}`;
+    if (localStorage.getItem('e2CardDone') || localStorage.getItem(todayKey)) return;
+    let active = true;
+    (async () => {
+      try {
+        const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(student.email)}`);
+        const j = await r.json();
+        if (!active || !j?.eligible) return;
+        // First phase with no goal yet and still settable (not achieved/active).
+        const next = E2_PHASES
+          .map(([phaseKey, field, label]) => ({ phaseKey, field, label, goal: j.goals?.[phaseKey] }))
+          .find(p => p.goal && !j.plan?.[p.field] && p.goal.status !== 'achieved' && p.goal.status !== 'active');
+        if (!next) { localStorage.setItem('e2CardDone', '1'); return; }
+        setPick(next);
+        setState('open');
+        localStorage.setItem(todayKey, '1');
+        fetch(`${API}/e2/card-event`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'impression', phase: next.phaseKey })
+        }).catch(() => {});
+      } catch { /* any failure -> no card today */ }
+    })();
+    return () => { active = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (state !== 'open' && state !== 'done') return null;
+
+  const save = async () => {
+    if (!pick || !date) return;
+    // The picker's min already blocks earlier dates, but a typed date can slip
+    // past it on some browsers — enforce the realistic minimum here too.
+    if (pick.goal.minDate && date < pick.goal.minDate) {
+      setErr(`That date is earlier than realistically possible — the earliest is ${fmtDate(pick.goal.minDate)}.`);
+      return;
+    }
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`${API}/journey/plan`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: student.email, [pick.field]: date })
+      });
+      const j = await r.json();
+      if (!r.ok) { setErr(j.error || 'Could not save that date — please try another.'); setBusy(false); return; }
+      logEvent('set', { value: date });
+      localStorage.setItem('e2CardDone', '1');
+      setState('done');
+    } catch {
+      setErr('Network error — please try again.'); setBusy(false);
+    }
+  };
+
+  const skip = () => { logEvent('skip'); setState('closed'); };
+
+  return (
+    <div className="survey-overlay" role="dialog" aria-modal="true" aria-labelledby="e2-title">
+      <div className="survey-modal e2-card">
+        {state === 'done' ? (
+          <>
+            <div className="survey-head">
+              <h2 id="e2-title">Goal set 🎯</h2>
+              <p>
+                Your target date is saved{e2.sp > 0 ? ` and your +${e2.sp} SP will appear with the next points refresh` : ''}.
+                Track your pace any time in the <strong>My Journey</strong> tab.
+              </p>
+            </div>
+            <div className="survey-actions">
+              <button type="button" className="survey-primary" onClick={() => setState('closed')}>Done</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="survey-head">
+              <h2 id="e2-title">Set your goal 🎯</h2>
+              <p>
+                Pick your own target date for {pick.label}. The pace bar in
+                <strong> My Journey</strong> will then show exactly what "on track"
+                means for you each week.
+              </p>
+              {e2.sp > 0 && (
+                <p className="e2-sp">Set it now and earn a one-time <strong>+{e2.sp} SP</strong>.</p>
+              )}
+            </div>
+            {pick.goal.progressPct != null && (
+              <div className="e2-progress">
+                <span className="jr-goal-meta">
+                  {pick.goal.unit === '%'
+                    ? `You're at ${pick.goal.progressPct}% — ${pick.goal.remainingPct}% to go.`
+                    : `You have ${pick.goal.current} of ${pick.goal.target} ${pick.goal.unit} — ${pick.goal.remaining} ${pick.goal.unit} to go.`}
+                </span>
+                <div className="jr-progress"><i style={{ width: `${pick.goal.progressPct}%` }} /></div>
+              </div>
+            )}
+            <div className="e2-row">
+              <input
+                type="date"
+                min={pick.goal.minDate || undefined}
+                max={pick.goal.maxDate || undefined}
+                value={date}
+                onChange={e => setDate(e.target.value)}
+              />
+              <button type="button" className="survey-primary" disabled={!date || busy} onClick={save}>
+                {busy ? 'Saving…' : 'Set my goal'}
+              </button>
+            </div>
+            {pick.goal.minDate && (
+              <span className="jr-goal-hint">
+                Earliest realistic finish: {fmtDate(pick.goal.minDate)} — earlier dates can't be picked.
+                {pick.goal.paceHint ? ` ${pick.goal.paceHint}` : ''}
+              </span>
+            )}
+            {err && <p className="survey-note">{err}</p>}
+            <div className="survey-actions">
+              <button type="button" className="survey-ghost" onClick={skip}>Skip for now</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', completedKey = 'surveyCompleted' }) {
   const [checking, setChecking] = useState(false);
