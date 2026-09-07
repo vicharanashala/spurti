@@ -357,6 +357,7 @@ input {
 .empty { color: var(--muted); }
 
 .bank { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.bank-sub { margin: 4px 0 0; font-size: 13px; font-weight: normal; }
 .bank-controls { display: flex; gap: 10px; align-items: center; }
 .bank-controls label { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); font-weight: 700; }
 .bank-controls select { min-height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; }
@@ -374,6 +375,210 @@ input {
 .bank-row p { margin: 0; color: #334155; line-height: 1.4; }
 .credit { color: var(--green); }
 .debit { color: var(--red); }
+
+/* --- SP Bank Enhanced Filter Suite & Chips -------------------------------- */
+.bank-filter-suite {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #fbfdff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+.bank-search-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.bank-search-wrap {
+  position: relative;
+  flex: 1 1 280px;
+  display: flex;
+  align-items: center;
+}
+.bank-search-wrap .search-icon {
+  position: absolute;
+  left: 10px;
+  font-size: 13px;
+  opacity: 0.6;
+  pointer-events: none;
+}
+.bank-search-input {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 30px 6px 32px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 13px;
+  background: #fff;
+}
+.bank-search-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(23, 107, 135, 0.15);
+}
+.bank-clear-input {
+  position: absolute;
+  right: 8px;
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.bank-type-select select {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 10px;
+  font-size: 13px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 600;
+}
+.bank-category-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.bank-pill {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.bank-pill:hover {
+  border-color: var(--primary);
+  color: var(--text);
+}
+.bank-pill.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.bank-pill-reset {
+  border: 1px dashed var(--muted);
+  background: transparent;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-weight: 600;
+  cursor: pointer;
+  margin-left: 4px;
+}
+.bank-pill-reset:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+.bank-metrics-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid #edf2f7;
+}
+.bank-stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: #f1f5f9;
+  color: #475569;
+}
+.bank-stat-chip.credit {
+  background: #ecfdf5;
+  color: var(--green);
+}
+.bank-stat-chip.debit {
+  background: #fef2f2;
+  color: var(--red);
+}
+.bank-stat-chip.net.pos {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.bank-stat-chip.net.neg {
+  background: #fff1f2;
+  color: #be123c;
+}
+.bank-stat-chip.count {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: transparent;
+}
+.bank-empty-state {
+  padding: 36px 16px;
+  text-align: center;
+  color: var(--muted);
+}
+.bank-empty-state p {
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.bank-reason-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bank-cat-tag {
+  display: inline-block;
+  align-self: flex-start;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #475569;
+}
+.bank-cat-tag.cat-attendance { background: #e0f2fe; color: #0369a1; }
+.bank-cat-tag.cat-poll { background: #fef3c7; color: #b45309; }
+.bank-cat-tag.cat-spa { background: #ede9fe; color: #6d28d9; }
+.bank-cat-tag.cat-query { background: #dcfce7; color: #15803d; }
+.bank-cat-tag.cat-vibe, .bank-cat-tag.cat-standup { background: #fae8ff; color: #86198f; }
+.bank-cat-tag.cat-initial { background: #f1f5f9; color: #334155; }
+
+/* Admin student search */
+.admin-search-wrap {
+  display: flex;
+  align-items: center;
+  position: relative;
+  max-width: 280px;
+  width: 100%;
+}
+.admin-search-input {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 26px 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 13px;
+}
+.admin-search-wrap .clear-btn {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+
 
 .cards { display: grid; gap: 12px; }
 .card {

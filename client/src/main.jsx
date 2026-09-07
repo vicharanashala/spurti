@@ -1125,49 +1125,223 @@ function Tabs({ tab, setTab, tabs }) {
 
 function SpBank({ transactions }) {
   const [size, setSize] = useState(10);
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('all');
+  const [deltaFilter, setDeltaFilter] = useState('all');
+
   // Server sends oldest→newest (sorted dateTime asc); show newest first.
-  const rows = useMemo(() => [...transactions].reverse(), [transactions]);
-  const shown = rows.slice(0, size);
-  const downloadCsv = () => {
+  const allRows = useMemo(() => [...(transactions || [])].reverse(), [transactions]);
+
+  // Filtered rows based on search, category and delta type
+  const filteredRows = useMemo(() => {
+    return allRows.filter(tx => {
+      // Delta filter (credits vs debits)
+      if (deltaFilter === 'credit' && tx.appliedDelta <= 0) return false;
+      if (deltaFilter === 'debit' && tx.appliedDelta >= 0) return false;
+
+      // Category filter
+      if (category !== 'all') {
+        const cat = (tx.category || '').toLowerCase();
+        const reason = (tx.reason || '').toLowerCase();
+        if (category === 'vibe') {
+          const isVibe = cat.includes('vibe') || cat.includes('bet') || cat.includes('standup') || reason.includes('vibe') || reason.includes('pledge') || reason.includes('stake');
+          if (!isVibe) return false;
+        } else if (!cat.includes(category) && !reason.includes(category)) {
+          return false;
+        }
+      }
+
+      // Live search across reason, session label, category, date, and delta amount
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        const r = (tx.reason || '').toLowerCase();
+        const s = (tx.sessionLabel || '').toLowerCase();
+        const c = (tx.category || '').toLowerCase();
+        const d = new Date(tx.dateTime).toLocaleString().toLowerCase();
+        const delta = String(tx.appliedDelta || '');
+        if (!r.includes(q) && !s.includes(q) && !c.includes(q) && !d.includes(q) && !delta.includes(q)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [allRows, search, category, deltaFilter]);
+
+  const shown = size === 'all' ? filteredRows : filteredRows.slice(0, Number(size));
+
+  // Dynamic summary calculations for the currently filtered view
+  const stats = useMemo(() => {
+    let credits = 0;
+    let debits = 0;
+    for (const tx of filteredRows) {
+      if (tx.appliedDelta > 0) credits += tx.appliedDelta;
+      else if (tx.appliedDelta < 0) debits += Math.abs(tx.appliedDelta);
+    }
+    return {
+      credits,
+      debits,
+      net: credits - debits,
+      totalCount: allRows.length,
+      filteredCount: filteredRows.length
+    };
+  }, [filteredRows, allRows]);
+
+  const hasFilters = Boolean(search.trim() || category !== 'all' || deltaFilter !== 'all');
+  const clearFilters = () => {
+    setSearch('');
+    setCategory('all');
+    setDeltaFilter('all');
+  };
+
+  const downloadCsv = (exportOnlyFiltered = false) => {
+    const dataToExport = exportOnlyFiltered ? filteredRows : allRows;
     const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const lines = [['Date & time', 'Credit', 'Debit', 'Balance', 'Reason'].join(',')].concat(
-      rows.map(tx => [
+    const lines = [['Date & time', 'Category', 'Credit', 'Debit', 'Balance', 'Reason'].join(',')].concat(
+      dataToExport.map(tx => [
         new Date(tx.dateTime).toLocaleString(),
+        tx.category || '',
         tx.appliedDelta > 0 ? tx.appliedDelta : '',
         tx.appliedDelta < 0 ? tx.appliedDelta : '',
-        tx.balanceAfter, tx.reason
+        tx.balanceAfter,
+        tx.reason
       ].map(esc).join(',')));
     const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
     const a = document.createElement('a');
-    a.href = url; a.download = 'sp-bank-statement.csv'; a.click();
+    a.href = url;
+    a.download = exportOnlyFiltered && hasFilters ? 'sp-bank-filtered.csv' : 'sp-bank-statement.csv';
+    a.click();
     URL.revokeObjectURL(url);
   };
+
+  const categories = [
+    { key: 'all', label: 'All Categories' },
+    { key: 'attendance', label: 'Attendance' },
+    { key: 'poll', label: 'Polls' },
+    { key: 'spa', label: 'SPA' },
+    { key: 'query', label: 'Queries' },
+    { key: 'vibe', label: 'Commitments' },
+    { key: 'initial', label: 'Initial' }
+  ];
+
   return (
     <section className="panel">
       <div className="panel-head">
-        <h2>SP Bank</h2>
+        <div>
+          <h2>SP Bank</h2>
+          <p className="muted bank-sub">Full auditable ledger of your Spurti Points balance and transactions.</p>
+        </div>
         <div className="bank-controls">
           <label>Show
-            <select value={size} onChange={e => setSize(Number(e.target.value))}>
-              <option value={10}>10</option><option value={20}>20</option><option value={50}>50</option>
+            <select value={size} onChange={e => setSize(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+              <option value="all">All</option>
             </select>
           </label>
-          <button className="secondary" onClick={downloadCsv}>Download CSV</button>
+          <button className="secondary" onClick={() => downloadCsv(hasFilters)}>
+            {hasFilters ? 'Export Filtered CSV' : 'Download CSV'}
+          </button>
         </div>
       </div>
-      <div className="bank">
-        <div className="bank-header"><span>Date & time</span><span>Credit</span><span>Debit</span><span>Balance</span><span>Reason</span></div>
-        {shown.map(tx => (
-          <div className="bank-row" key={tx._id}>
-            <span>{new Date(tx.dateTime).toLocaleString()}</span>
-            <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
-            <strong className="debit">{tx.appliedDelta < 0 ? tx.appliedDelta : ''}</strong>
-            <b>{tx.balanceAfter}</b>
-            <p>{tx.reason}</p>
+
+      {/* Interactive Filter Suite */}
+      <div className="bank-filter-suite">
+        <div className="bank-search-row">
+          <div className="bank-search-wrap">
+            <span className="search-icon">🔍</span>
+            <input
+              type="text"
+              placeholder="Search by reason, session name, date, or amount..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="bank-search-input"
+            />
+            {search && (
+              <button className="bank-clear-input" onClick={() => setSearch('')} title="Clear search">×</button>
+            )}
           </div>
-        ))}
+          <div className="bank-type-select">
+            <select value={deltaFilter} onChange={e => setDeltaFilter(e.target.value)}>
+              <option value="all">All Flow (Credits & Debits)</option>
+              <option value="credit">Credits Only (+ SP)</option>
+              <option value="debit">Debits Only (− SP)</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Category Pill Switcher */}
+        <div className="bank-category-pills">
+          {categories.map(c => (
+            <button
+              key={c.key}
+              className={`bank-pill ${category === c.key ? 'active' : ''}`}
+              onClick={() => setCategory(c.key)}
+            >
+              {c.label}
+            </button>
+          ))}
+          {hasFilters && (
+            <button className="bank-pill-reset" onClick={clearFilters}>
+              Reset Filters ↺
+            </button>
+          )}
+        </div>
+
+        {/* Quick Summary Metrics Bar */}
+        <div className="bank-metrics-bar">
+          <div className="bank-stat-chip credit">
+            <span>Credits:</span> <strong>+{stats.credits} SP</strong>
+          </div>
+          <div className="bank-stat-chip debit">
+            <span>Debits:</span> <strong>−{stats.debits} SP</strong>
+          </div>
+          <div className={`bank-stat-chip net ${stats.net >= 0 ? 'pos' : 'neg'}`}>
+            <span>Net in view:</span> <strong>{stats.net >= 0 ? `+${stats.net}` : stats.net} SP</strong>
+          </div>
+          <div className="bank-stat-chip count">
+            <span>Records:</span> <strong>{stats.filteredCount}</strong> of {stats.totalCount}
+          </div>
+        </div>
       </div>
-      <p className="muted bank-foot">Showing {Math.min(size, rows.length)} of {rows.length} — download CSV for the full statement.</p>
+
+      {/* Bank Table */}
+      <div className="bank">
+        <div className="bank-header">
+          <span>Date & time</span>
+          <span>Credit</span>
+          <span>Debit</span>
+          <span>Balance</span>
+          <span>Reason</span>
+        </div>
+        {shown.length === 0 ? (
+          <div className="bank-empty-state">
+            <p>No transactions match your search or filter criteria.</p>
+            {hasFilters && (
+              <button className="secondary" onClick={clearFilters}>Clear Filters</button>
+            )}
+          </div>
+        ) : (
+          shown.map(tx => (
+            <div className="bank-row" key={tx._id || `${tx.dateTime}-${tx.balanceAfter}`}>
+              <span>{new Date(tx.dateTime).toLocaleString()}</span>
+              <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
+              <strong className="debit">{tx.appliedDelta < 0 ? tx.appliedDelta : ''}</strong>
+              <b>{tx.balanceAfter}</b>
+              <div className="bank-reason-cell">
+                {tx.category && <span className={`bank-cat-tag cat-${tx.category.toLowerCase()}`}>{tx.category}</span>}
+                <p>{tx.reason}</p>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <p className="muted bank-foot">
+        Showing {shown.length} of {filteredRows.length} matching transactions
+        {allRows.length !== filteredRows.length ? ` (filtered from ${allRows.length} total)` : ''} — download CSV for statement.
+      </p>
     </section>
   );
 }
@@ -2106,6 +2280,7 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   const [activeTab, setActiveTab] = useState('yetToOnboard');
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState('');
   const headers = adminHeaders(auth);
 
   const loadList = async (status) => {
@@ -2120,20 +2295,48 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
 
   useEffect(() => { loadList(activeTab); }, [activeTab]);
 
+  const filtered = useMemo(() => {
+    if (!search.trim()) return list;
+    const q = search.trim().toLowerCase();
+    return list.filter(s => (s.name || '').toLowerCase().includes(q) || (s.email || '').toLowerCase().includes(q));
+  }, [list, search]);
+
   return (
     <section className="panel">
       <div className="panel-head">
-        <h2>All Students</h2>
+        <div>
+          <h2>All Students</h2>
+          <p className="muted" style={{ margin: '4px 0 0', fontSize: '13px' }}>View and filter student roster across onboarding and activity status.</p>
+        </div>
+        <div className="admin-search-wrap">
+          <input
+            className="admin-search-input"
+            type="text"
+            placeholder="Filter by name or email..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          {search && <button className="clear-btn" onClick={() => setSearch('')}>×</button>}
+        </div>
       </div>
       <div className="tab-bar">
-        <button className={activeTab === 'yetToOnboard' ? 'active' : ''} onClick={() => { setActiveTab('yetToOnboard'); }}>Yet to Onboard ({stats?.yetToOnboard ?? 0})</button>
-        <button className={activeTab === 'active' ? 'active' : ''} onClick={() => { setActiveTab('active'); }}>Active ({stats?.activeStudents ?? 0})</button>
-        <button className={activeTab === 'excused' ? 'active' : ''} onClick={() => { setActiveTab('excused'); }}>Excused ({stats?.excusedStudents ?? 0})</button>
+        <button className={activeTab === 'yetToOnboard' ? 'active' : ''} onClick={() => { setActiveTab('yetToOnboard'); setSearch(''); }}>Yet to Onboard ({stats?.yetToOnboard ?? 0})</button>
+        <button className={activeTab === 'active' ? 'active' : ''} onClick={() => { setActiveTab('active'); setSearch(''); }}>Active ({stats?.activeStudents ?? 0})</button>
+        <button className={activeTab === 'excused' ? 'active' : ''} onClick={() => { setActiveTab('excused'); setSearch(''); }}>Excused ({stats?.excusedStudents ?? 0})</button>
       </div>
-      {loading ? <p>Loading...</p> : list.length === 0 ? <p className="empty">No students in this category.</p> : (
+      {search.trim() && (
+        <p className="muted" style={{ margin: '10px 0 6px', fontSize: '13px' }}>
+          Showing <b>{filtered.length}</b> of <b>{list.length}</b> students matching "{search}"
+        </p>
+      )}
+      {loading ? <p>Loading...</p> : filtered.length === 0 ? (
+        <p className="empty">
+          {search ? `No students matching "${search}" in this category.` : 'No students in this category.'}
+        </p>
+      ) : (
         <table className="table">
           <thead><tr><th>Name</th><th>Email</th><th>SP</th><th>Start Date</th></tr></thead>
-          <tbody>{list.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{cursor:'pointer'}}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
+          <tbody>{filtered.map(s => <tr key={s._id} onClick={() => onStudent(s._id)} style={{cursor:'pointer'}}><td>{s.name}</td><td>{s.email}</td><td>{s.totalSp}</td><td>{s.internshipStartDate ? new Date(s.internshipStartDate).toLocaleDateString() : '—'}</td></tr>)}</tbody>
         </table>
       )}
     </section>
