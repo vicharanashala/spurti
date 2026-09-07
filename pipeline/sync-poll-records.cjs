@@ -64,7 +64,7 @@ const CUTOFF = process.env.SPANDAN_CUTOFF || '2026-07-16';
       if (!e) continue;
       spByEmailDate.set(e + '|' + day, {
         attempted: x.questionsAnswered || 0,
-        total: sp.totalQuestions || 0,
+        total: sp.totalQuestions || (sp.questions || []).length || 0,
       });
     }
   }

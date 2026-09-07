@@ -3,6 +3,7 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
@@ -31,6 +32,12 @@ import { buildTrajectoryState } from './services/trajectory.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
+// Cached index.html for the verify page — read once at startup instead of on
+// every request, which would block the event loop under viral share traffic.
+let cachedIndexHtml = null;
+if (fs.existsSync(clientDist)) {
+  cachedIndexHtml = fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8');
+}
 // Saved achievement cards live outside the repo tree's tracked files; they are
 // regenerable, so losing them only costs the next share's og:image.
 const CARD_DIR = process.env.CARD_DIR || path.join(rootDir, 'server', 'data', 'cards');
@@ -181,6 +188,9 @@ function maskEmail(email) {
   return `${start}${'*'.repeat(Math.max(3, name.length - start.length - end.length))}${end}@${domain}`;
 }
 
+// Validate that a string is a valid MongoDB ObjectId (24 hex chars).
+const isValidObjectId = (id) => /^[0-9a-f]{24}$/i.test(String(id));
+
 function publicStudent(student) {
   return {
     _id: String(student._id),
@@ -251,18 +261,17 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, allStudents] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
-  const top10Cutoff = allStudents[9]?.totalSp || null;
-  const top50Cutoff = allStudents[49]?.totalSp || null;
+  const top10Cutoff = allStudents[9]?.totalSp ?? null;
+  const top50Cutoff = allStudents[49]?.totalSp ?? null;
   const currentIndex = allStudents.findIndex(s => s.email === email);
   const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
   // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
@@ -312,7 +321,7 @@ async function studentPayload(student) {
       pointsToTop50: top50Cutoff === null ? null : Math.max(0, top50Cutoff - student.totalSp + 1),
       pointsToNextRank: nextStudent ? Math.max(1, nextStudent.totalSp - student.totalSp + 1) : 0
     },
-    leaderboard: leaderboard.map(mapRow),
+    leaderboard: allStudents.slice(0, 50).map(mapRow),
     groupLeaderboard: groupStudents.slice(0, 50).map(mapRow)
   };
 }
@@ -320,7 +329,8 @@ async function studentPayload(student) {
 function isAdmin(req) {
   if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false; // fail closed when admin creds aren't configured
   const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
-  const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
+  const token = String(req.headers['x-admin-token'] || '');
+  const tokenOk = token.length === ADMIN_TOKEN.length && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(ADMIN_TOKEN));
   return emailOk && tokenOk;
 }
 
@@ -569,6 +579,7 @@ api.post('/admin/announcements', adminGuard, async (req, res) => {
 });
 
 api.post('/admin/announcements/:id', adminGuard, async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid announcement ID' });
   const ann = await Announcement.findByIdAndUpdate(req.params.id,
     { $set: { active: !!req.body?.active } }, { new: true }).lean();
   if (!ann) return res.status(404).json({ error: 'Announcement not found' });
@@ -864,6 +875,7 @@ api.get('/admin/attendance', adminGuard, async (_req, res) => {
 });
 
 api.get('/admin/student/:id', adminGuard, async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid student ID' });
   const student = await Student.findById(req.params.id).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await studentPayload(student));
@@ -1219,7 +1231,7 @@ async function verifyPageHtml(req, code) {
   // against /spurti/verify/<code>/ and 404. This page is two levels deep, so the
   // asset paths have to be absolute.
   const mount = req.path.startsWith('/spurti') ? '/spurti' : '';
-  const html = fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8')
+  const html = (cachedIndexHtml || fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8'))
     .replace(/(src|href)="\.\/assets\//g, `$1="${mount}/assets/`);
   const result = await verifyAchievement(code, Student);
   const base = publicBaseUrl(req);

@@ -123,6 +123,7 @@ async function fetchPage(since) {
     lastCursor = data.nextCursor || lastCursor;
     if (!DRY && lastCursor) await sync.updateOne({ _id: 'cursor' }, { $set: { value: lastCursor, updatedAt: new Date() } }, { upsert: true });
     if (data.count < PAGE) break;        // last page
+    if (!data.nextCursor) break;          // no cursor — avoid infinite re-fetch
     since = data.nextCursor;
   }
 

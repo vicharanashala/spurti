@@ -17,7 +17,7 @@ export const CONFIG = {
   fraudRate: 0.5,                // genuine fraud  → -50% of current SP (one-time)
   auditRate: 0.2                 // audit failure  → -20% of current SP (one-time)
 };
-export const MAX_SPA_SP = CONFIG.learnUnit * CONFIG.learnCap + CONFIG.teachUnit * CONFIG.teachCap; // 490
+export const MAX_SPA_SP = CONFIG.learnUnit * CONFIG.learnCap + CONFIG.teachUnit * CONFIG.teachCap; // 500
 
 // Pure computation of the SP breakdown from a SpaProgress row (display).
 export function computeSpaSp(prog) {
