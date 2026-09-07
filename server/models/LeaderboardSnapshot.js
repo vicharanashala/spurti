@@ -13,7 +13,7 @@ const rowSchema = new mongoose.Schema({
 }, { _id: false });
 
 const leaderboardSnapshotSchema = new mongoose.Schema({
-  boardKey: { type: String, required: true, unique: true, index: true }, // e.g. week:total:all, all:query:all, week:total:group:<g>
+  boardKey: { type: String, required: true, unique: true }, // e.g. week:total:all, all:query:all, week:total:group:<g>
   window: { type: String, enum: ['week', 'all'], required: true },
   category: { type: String, enum: ['total', 'attendance', 'poll', 'spa', 'query'], required: true },
   scope: { type: String, enum: ['all', 'group'], required: true },

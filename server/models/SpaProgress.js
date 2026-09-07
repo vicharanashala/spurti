@@ -14,7 +14,7 @@ import mongoose from 'mongoose';
 // are watermarks of how many events have already been posted to the SP ledger,
 // so re-syncs only post the delta (idempotent). No student "claim" step.
 const spaProgressSchema = new mongoose.Schema({
-  email: { type: String, lowercase: true, trim: true, required: true, unique: true, index: true },
+  email: { type: String, lowercase: true, trim: true, required: true, unique: true },
   activity: { type: String, default: 'Activity 1: Linear Algebra' },
   learnValidated: { type: Number, default: 0 },     // good endorsements received (from mirror)
   teachValidated: { type: Number, default: 0 },     // good endorsements given (from mirror)
