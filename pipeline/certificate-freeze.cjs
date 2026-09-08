@@ -25,6 +25,19 @@
  * CERT_LOCKED students (certificate already issued) are frozen from their
  * locked ledger state and flagged certLocked:true.
  *
+ * SELF-SUFFICIENT completedAllAt (added 2026-09-08): when Samagama's
+ * eligibility row has completedAllAt null, it is derived here as
+ * max(standupCompletedAt, projectCompletedAt, spaCompletedAtDerived,
+ * vibeDate) where vibeDate uses the agreed fallback: a finished/100% course
+ * with no completedAt takes the first date our mirror observed it (row
+ * ObjectId timestamp). Rows carry completedAllAtSource ('samagama'|'derived')
+ * and vibeFallbackUsed for audit. Students with any phase underivable are
+ * skipped with a reason.
+ *
+ * CRON-SAFE: insert-only + idempotent; meant to run 6-hourly after the
+ * activity mirror so newly-completed students freeze automatically.
+ * Samagama reads certificate_finals verbatim for certificate generation.
+ *
  * DRY RUN by default (prints the table). APPLY=1 inserts missing rows only.
  */
 const fs = require('fs');
@@ -63,8 +76,11 @@ const dstr = (d) => { if (!d) return null; const x = new Date(d); return isNaN(x
   await Finals.createIndex({ email: 1 }, { unique: true });
   const existing = new Set((await Finals.find({}, { projection: { email: 1 } }).toArray()).map((d) => d.email));
 
+  // ALL eligible rows — completedAllAt is derived below when Samagama's is null
+  // (their compute job can't see ViBe dateless-100% records or SPA roster
+  // completion; ruling 2026-09-08: the freeze is self-sufficient).
   const elig = await sak.collection('act_certificate_eligibility')
-    .find({ completedAllAt: { $ne: null } }).toArray();
+    .find({ eligible: true }).toArray();
 
   // userId -> email crosswalk (for the unreviewed-query flag), same sources as the rubric.
   const uidToEmail = new Map();
@@ -89,9 +105,43 @@ const dstr = (d) => { if (!d) return null; const x = new Date(d); return isNaN(x
   const rows = [];
   for (const el of elig) {
     const email = String(el.email).toLowerCase().trim();
-    const cutDay = dstr(el.completedAllAt);
     const student = await sak.collection('students').findOne({ email });
     if (!student) { console.log(`SKIP ${email}: no students row`); continue; }
+
+    // ---- completedAllAt: Samagama's if set, else derived from the four phases.
+    // ViBe fallback (agreed 2026-09-08): a finished/100% course with no
+    // completedAt takes the first date OUR mirror observed it finished — the
+    // row's ObjectId timestamp. Earliest provable date; SP is cut there.
+    let completedAllAt = el.completedAllAt ? new Date(el.completedAllAt) : null;
+    let completedAllAtSource = completedAllAt ? 'samagama' : null;
+    let vibeFallbackUsed = false;
+    const vibeRows = await sak.collection('act_vibe_progress').find({ email }).toArray();
+    if (!completedAllAt) {
+      const spaLearnsEarly = (await sak.collection('act_spa_endorsements').find(
+        { learnerEmail: email, status: { $in: SPA_GOOD } },
+        { projection: { approvedAt: 1, createdAt: 1 } }).toArray())
+        .map((e) => new Date(e.approvedAt || e.createdAt)).filter((d) => !isNaN(d)).sort((a, b) => a - b);
+      const spaDate = spaLearnsEarly.length >= SPA_DONE_COUNT ? spaLearnsEarly[SPA_DONE_COUNT - 1] : null;
+      const needed = vibeRows.filter((v) => !v.exempt);
+      let vibeDate = null;
+      if (needed.length > 0 && needed.every((v) => v.finished || Math.round(v.completionPct || 0) >= 100)) {
+        vibeDate = new Date(Math.max(...needed.map((v) => {
+          if (v.completedAt && !isNaN(new Date(v.completedAt))) return new Date(v.completedAt).getTime();
+          vibeFallbackUsed = true;
+          return v._id.getTimestamp().getTime();
+        })));
+      }
+      const standupDate = el.standupCompletedAt ? new Date(el.standupCompletedAt) : null;
+      const projectDate = el.projectCompletedAt ? new Date(el.projectCompletedAt) : null;
+      if (standupDate && projectDate && spaDate && vibeDate) {
+        completedAllAt = new Date(Math.max(standupDate, projectDate, spaDate, vibeDate));
+        completedAllAtSource = 'derived';
+      } else {
+        console.log(`SKIP ${email}: phases incomplete (standup=${!!standupDate} project=${!!projectDate} spa=${!!spaDate} vibe=${!!vibeDate})`);
+        continue;
+      }
+    }
+    const cutDay = dstr(completedAllAt);
 
     const txns = await sak.collection('sptransactions').find({ email }).toArray();
     const upto = txns.filter((t) => dstr(t.dateTime) <= cutDay);
@@ -119,13 +169,13 @@ const dstr = (d) => { if (!d) return null; const x = new Date(d); return isNaN(x
     const spaCompletedAtDerived = learns.length >= SPA_DONE_COUNT ? learns[SPA_DONE_COUNT - 1] : null;
 
     const vibe = {};
-    for (const v of await sak.collection('act_vibe_progress').find({ email }).toArray())
+    for (const v of vibeRows)
       vibe[v.courseKey] = v.finished ? 100 : Math.round(v.completionPct || 0);
     const prRev = await sak.collection('act_pr_reviews').findOne({ email });
 
     rows.push({
       email, name: student.name,
-      completedAllAt: new Date(el.completedAllAt), frozenAt: new Date(),
+      completedAllAt, completedAllAtSource, vibeFallbackUsed, frozenAt: new Date(),
       certLocked: CERT_LOCKED.has(email),
       minutes, minutesGoalMet: minutes >= MINUTES_GOAL,
       rawSp, cappedSp, level, levelDisplay: `${level}/25`, league: leagueBand(rawSp),
@@ -145,7 +195,8 @@ const dstr = (d) => { if (!d) return null; const x = new Date(d); return isNaN(x
   }
   const fresh = rows.filter((r) => !r.alreadyFrozen);
   const flagged = fresh.filter((r) => r.queryUnreviewedCount > 0);
-  console.log(`\ncandidates: ${rows.length} | already frozen: ${rows.length - fresh.length} | to freeze: ${fresh.length} | with unreviewed query answers: ${flagged.length}`);
+  const derived = fresh.filter((r) => r.completedAllAtSource === 'derived');
+  console.log(`\ncandidates: ${rows.length} | already frozen: ${rows.length - fresh.length} | to freeze: ${fresh.length} (derived completedAllAt: ${derived.length}, vibe fallback: ${derived.filter((r) => r.vibeFallbackUsed).length}) | with unreviewed query answers: ${flagged.length}`);
 
   if (!APPLY) { console.log('\nDRY RUN — nothing written. Set APPLY=1 to insert the missing rows (insert-only).'); await conn.close(); return; }
 
