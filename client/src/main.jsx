@@ -286,6 +286,97 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
+function TodaysQuest() {
+  const [quest, setQuest] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/quest/today', { credentials: 'same-origin' })
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to load quest');
+        return res.json();
+      })
+      .then(data => setQuest(data))
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return null;
+
+  if (error) {
+    return (
+      <section className="quest-card">
+        <div className="quest-head">
+          <div>
+            <p className="eyebrow">Today's Quest</p>
+            <h2>Couldn’t load today’s missions</h2>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (quest?.excused) {
+    return (
+      <section className="quest-card">
+        <div className="quest-head">
+          <div>
+            <p className="eyebrow">Today's Quest</p>
+            <h2>Quest paused for today</h2>
+            <p>You’re excused from today’s missions.</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  const missions = quest?.missions || [];
+  const completed = quest?.completed || 0;
+  const total = quest?.total || missions.length || 3;
+  const percentage = total ? (completed / total) * 100 : 0;
+
+  return (
+    <section className="quest-card">
+      <div className="quest-head">
+        <div>
+          <p className="eyebrow">Today's Quest</p>
+          <h2>{quest?.headline || 'Complete your 3 missions'}</h2>
+        </div>
+        <strong>{completed}/{total}</strong>
+      </div>
+
+      <div className="quest-bar">
+        <span style={{ width: `${percentage}%` }} />
+      </div>
+
+      <div className="quest-list">
+        {missions.map(mission => (
+          <div
+            key={mission.code}
+            className={`quest-item ${mission.status === 'complete' ? 'done' : ''}`}
+          >
+            <span className="quest-icon">{mission.icon}</span>
+
+            <div>
+              <strong>{mission.title}</strong>
+              {mission.description && <p>{mission.description}</p>}
+            </div>
+
+            <span className="quest-status">
+              {mission.status === 'complete' ? '✓' : '○'}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {completed === total && (
+        <p className="quest-complete">🎉 Today’s Quest completed!</p>
+      )}
+    </section>
+  );
+}
+
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
   const [commitPhase, setCommitPhase] = useState('vibe');
@@ -309,6 +400,8 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <Announcements student={student} />
+      <TodaysQuest />
+      
       <StudentPulse
         profile={profile}
         newAchievements={unseenAchievements}
