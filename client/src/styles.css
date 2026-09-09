@@ -741,6 +741,48 @@ input {
 .lb-me { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); font-size: 13.5px; font-weight: 700; }
 .lb-me .muted { font-weight: 500; }
 
+/* ---- Achievement Passport ------------------------------------------------ */
+/* A summary card over the same achievements the tiles below show. */
+.passport { display: grid; gap: 14px; border-top: 4px solid var(--primary); }
+.passport-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.passport-id { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.passport-crest {
+  flex: 0 0 auto; width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center; font-size: 22px;
+  background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff;
+}
+.passport-eyebrow { margin: 0; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 800; }
+.passport-id h2 { margin: 2px 0 3px; font-size: 21px; overflow-wrap: anywhere; }
+.passport-id p.muted { margin: 0; font-size: 13px; }
+.passport-seal {
+  flex: 0 0 auto; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 800;
+  color: var(--green); border: 1px solid var(--green); border-radius: 999px; padding: 5px 12px;
+}
+.passport-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); gap: 10px; }
+.passport-tile { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fafdff; }
+.passport-tile span { display: block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.passport-tile strong { display: block; font-size: 20px; color: var(--primary); margin-top: 3px; overflow-wrap: anywhere; }
+.passport-toggle { justify-self: start; }
+.passport-detail { display: grid; gap: 16px; border-top: 1px solid var(--line); padding-top: 14px; }
+.passport-section h3 { margin: 0 0 9px; font-size: 15px; }
+.passport-cats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 10px; }
+.passport-cat { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #f6fafb; }
+.passport-cat-icon { font-size: 19px; }
+.passport-cat strong { display: block; font-size: 18px; color: var(--primary); }
+.passport-cat span { font-size: 12px; color: var(--muted); }
+.passport-timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.passport-timeline li { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-left: 3px solid var(--primary); border-radius: 9px; background: #fff; }
+.passport-tl-icon { flex: 0 0 auto; font-size: 18px; }
+.passport-tl-body { flex: 1; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.passport-tl-meta { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.passport-tl-body em { font-style: normal; font-size: 11.5px; color: var(--muted); }
+.passport-tl-verify { flex: 0 0 auto; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--primary); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
+.passport-tl-verify:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+.passport-verify p { margin: 0; font-size: 13px; line-height: 1.55; }
+@media (max-width: 620px) {
+  .passport-timeline li { flex-wrap: wrap; }
+  .passport-tl-verify { margin-left: 28px; }
+}
+
 /* ---- Achievements ------------------------------------------------------- */
 .ach { display: grid; gap: 16px; }
 .ach-head { display: grid; gap: 12px; }
