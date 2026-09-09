@@ -61,6 +61,7 @@ export async function buildJourneyState(student) {
   const vibe = {
     ladder,
     current: v.current,
+    weeklyFloor: v.weeklyFloor,
     clearedCount: ladder.filter(l => l.cleared).length,
     totalCourses: ladder.length,
     activeCommitment: v.active
@@ -120,7 +121,11 @@ export async function buildJourneyState(student) {
       standupBy: plan?.standupBy || null,
       vibeBy: plan?.vibeBy || null,
       spaBy: plan?.spaBy || null,
-      projectBy: plan?.projectBy || null
+      projectBy: plan?.projectBy || null,
+      // Read-only context for interpretation layers such as Progress Coach.
+      // These are the existing snapshots captured when a goal was set; they do
+      // not alter My Journey's target or completion semantics.
+      atSet: plan?.atSet || {}
     },
     goals,
     phaseSp: { standups: standups.sp, vibe: vibe.sp, spa: spa.sp, projects: projects.sp },

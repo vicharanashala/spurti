@@ -7,6 +7,7 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "seed": "node server/scripts/seed.js",
+    "seed-progress-coach-dev": "node server/scripts/seedProgressCoachDev.js",
     "rebuild": "node server/scripts/rebuild.js",
     "add-students": "node server/scripts/addStudents.js",
     "sync-students": "node server/scripts/syncStudents.js",
