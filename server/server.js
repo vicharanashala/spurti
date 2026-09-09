@@ -29,6 +29,8 @@ import { buildStandupState, placeStandup, settleStandupDemo } from './services/s
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 import { buildSpaState } from './services/spa.js';
 import { buildTrajectoryState } from './services/trajectory.js';
+import { buildProgressCoachState } from './services/progressCoachState.js';
+import { localDevAuthEmail } from './services/localDevAuth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -171,6 +173,14 @@ function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+// Local-only fixture identity for feature development without Samagama. This is
+// unavailable unless NODE_ENV is exactly "development" and an explicit email is
+// configured, so production continues to require the Samagama session cookie.
+const LOCAL_DEV_AUTH_EMAIL = localDevAuthEmail();
+if (LOCAL_DEV_AUTH_EMAIL) {
+  console.warn('[development] local fixture authentication is enabled');
+}
+
 function maskEmail(email) {
   const [name, domain] = String(email || '').split('@');
   if (!name || !domain) return 'hidden email';
@@ -215,6 +225,7 @@ async function getSamagamaUser(chatengineToken) {
 }
 
 async function studentEmailFromRequest(req) {
+  if (LOCAL_DEV_AUTH_EMAIL) return LOCAL_DEV_AUTH_EMAIL;
   const cookies = parseCookies(req.headers.cookie || '');
   const data = await getSamagamaUser(cookies.chatengine_token);
   // Samagama's /api/auth/me nests the user as { user: { email, ... } };
@@ -456,6 +467,31 @@ api.put('/journey/plan', async (req, res) => {
   if (!student) return res.status(404).json({ error: 'Student not found' });   // My Journey goals are universal (Phase 1)
   await saveJourneyPlan(student.email, req.body || {});
   res.json(await buildJourneyState(student));
+});
+
+// ---- Progress Coach (authenticated, read-only interpretation layer) ---------
+// Unlike older student-facing routes, this endpoint never accepts an email or
+// student id from the client. The student is derived from the Samagama session
+// cookie so a caller cannot ask for another student's private progress context.
+api.get('/progress-coach/state', async (req, res) => {
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Authentication required' });
+
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (student.status === 'excused') {
+    return res.status(403).json({ error: 'Progress Coach is available for active students only' });
+  }
+
+  res.set('Cache-Control', 'no-store');
+  try {
+    res.json(await buildProgressCoachState(student));
+  } catch (error) {
+    // A failed source must not become a false zero or a false warning. Keep the
+    // failure scoped to this read-only panel so My Journey can still render.
+    console.error('[progress-coach] state unavailable:', error?.message || error);
+    res.status(503).json({ error: 'Progress Coach is temporarily unavailable' });
+  }
 });
 
 api.get('/search', async (req, res) => {
@@ -1318,5 +1354,3 @@ mongoose.connect(MONGO_URI).then(() => {
   console.error(error);
   process.exit(1);
 });
-
-

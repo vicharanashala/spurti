@@ -101,6 +101,50 @@ identified by the `chatengine_token` cookie that **Samagama** sets, which Spurti
 locally you will not have a student session. For local work, keep `ALLOW_STUDENT_SEARCH=true` and
 look students up by email instead — that path is disabled in production on purpose.
 
+### Progress Coach fixture mode (local development only)
+
+The Progress Coach deliberately requires a student identity, so search mode cannot exercise it.
+To develop it locally without Samagama, use a fictional account in the dedicated `spurti_dev`
+database:
+
+```bash
+# .env
+MONGO_URI=mongodb://127.0.0.1:27017/spurti_dev
+NODE_ENV=development
+LOCAL_DEV_AUTH_EMAIL=dev.student@spurti.local
+
+npm run seed-progress-coach-dev
+npm start
+```
+
+Open `http://localhost:5290/spurti/`; the app treats every request as the fictional fixture
+student and the authenticated Progress Coach panel will render. The fixture command refuses to
+run for any database other than `spurti_dev` or any email outside `@spurti.local`, and the auth
+fallback is unavailable unless `NODE_ENV=development`. Do not set these variables in shared or
+production environments.
+
+### Progress Coach
+
+Progress Coach is a read-only action layer above **My Journey**. My Journey remains the source of
+truth for standup attendance, ViBe courses, SPA practice, project PRs, and student-set target
+dates. Progress Coach interprets those existing values and presents one status, a short reason,
+and at most one next action; it never awards SP or changes progress records.
+
+Authenticated students can read their own state at `GET /api/progress-coach/state`. The endpoint
+derives the student from the Samagama session cookie (or the strictly local fixture identity),
+never from a request email or student ID.
+
+- **Action required:** a target is overdue, due today with work remaining, or its required
+  standup pace exceeds the existing 60-minutes-per-working-day capacity.
+- **Needs attention:** progress is behind the linear pace calculated from the existing goal-set
+  snapshot and target date.
+- **On track:** active requirements are on pace; a completed journey shows no invented task.
+
+When several tracks qualify, the single recommendation is selected in this order: overdue,
+critical deadline, behind target pace, weekly pace (only where a real weekly deadline exists),
+almost complete, then a normal active activity. An unmet ViBe weekly floor is not treated as
+"behind" because the existing data does not define a weekly deadline for it.
+
 **Useful scripts:**
 
 ```bash

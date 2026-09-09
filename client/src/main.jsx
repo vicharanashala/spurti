@@ -1228,6 +1228,74 @@ function Leaderboard({ rows }) {
 const fmtDate = d => d ? new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '—';
 const toInput = d => d ? new Date(d).toISOString().slice(0, 10) : '';
 
+const COACH_STATUS_META = {
+  on_track: { label: 'ON TRACK', icon: '🟢', className: 'on-track' },
+  needs_attention: { label: 'NEEDS ATTENTION', icon: '🟡', className: 'needs-attention' },
+  action_required: { label: 'ACTION REQUIRED', icon: '🔴', className: 'action-required' },
+  neutral: { label: 'GETTING STARTED', icon: '🔵', className: 'neutral' },
+  unavailable: { label: 'TEMPORARILY UNAVAILABLE', icon: '⚪', className: 'unavailable' }
+};
+
+const COACH_TRACK_LABELS = {
+  standup: 'standup',
+  vibe: 'ViBe',
+  spa: 'SPA',
+  project: 'project'
+};
+
+function ProgressCoachPanel({ data, onViewTrack }) {
+  const meta = COACH_STATUS_META[data.status] || COACH_STATUS_META.neutral;
+  const action = data.nextAction;
+  const trackLabel = COACH_TRACK_LABELS[action?.trackKey] || 'journey';
+
+  return (
+    <section className={`panel jr-coach jr-coach-${meta.className}`} role="status" aria-live="polite" aria-labelledby="progress-coach-title">
+      <div className="jr-coach-head">
+        <span className="jr-coach-icon" aria-hidden="true">{meta.icon}</span>
+        <div>
+          <p className="eyebrow">Progress Coach</p>
+          <h2 id="progress-coach-title">{meta.label}</h2>
+        </div>
+      </div>
+
+      {data.completion ? (
+        <p className="jr-coach-message">{data.message}</p>
+      ) : (
+        <>
+          {action && (
+            <div className="jr-coach-action">
+              <p className="jr-coach-label">Next best action</p>
+              <h3>{action.title}</h3>
+              {action.catchUpPerDay && (
+                <p className="jr-coach-catchup">About <strong>{action.catchUpPerDay}</strong> to catch up.</p>
+              )}
+              {onViewTrack && action.trackKey && (
+                <button type="button" className="primary jr-coach-cta" onClick={() => onViewTrack(action.trackKey)}>
+                  View {trackLabel} details
+                </button>
+              )}
+            </div>
+          )}
+          <div className="jr-coach-why">
+            <p className="jr-coach-label">Why</p>
+            <p>{data.message}</p>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function ProgressCoachLoading() {
+  return (
+    <section className="panel jr-coach jr-coach-loading" aria-live="polite" aria-busy="true">
+      <p className="eyebrow">Progress Coach</p>
+      <h2>Checking your pace…</h2>
+      <p className="muted">Your next useful action will appear here.</p>
+    </section>
+  );
+}
+
 // The unified phase-by-phase progress + SP tab. Four phases: Standups, ViBe, SPA,
 // Projects. Standups & ViBe show real SP; SPA & Projects are placeholders until the
 // Samagama data (and their SP rule) land. Goal *staking* lives in the Commitments tab.
@@ -1284,6 +1352,7 @@ function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave })
 function MyJourney({ student, goToCommitment, canCommit = false }) {
   const email = student.email;
   const [data, setData] = useState(null);
+  const [coach, setCoach] = useState(null);
   const [form, setForm] = useState({});
   const [showTraj, setShowTraj] = useState(false);
   const [err, setErr] = useState(null);
@@ -1292,7 +1361,17 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
     const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`);
     setData(await r.json());
   };
-  useEffect(() => { load(); }, [email]);
+  const loadCoach = async () => {
+    try {
+      const r = await fetch(`${API}/progress-coach/state`);
+      if (r.status === 401) { setCoach({ authRequired: true }); return; }
+      if (!r.ok) { setCoach({ unavailable: true }); return; }
+      setCoach(await r.json());
+    } catch {
+      setCoach({ unavailable: true });
+    }
+  };
+  useEffect(() => { load(); loadCoach(); }, [email]);
 
   if (!data) return <section className="panel">Loading your journey…</section>;
   if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
@@ -1306,9 +1385,16 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
     });
     const j = await r.json();
     if (!r.ok) { setErr(j.error); return; }
-    setErr(null); setData(j);
+    setErr(null); setData(j); loadCoach();
   };
   const gp = { form, setForm, onSave: saveTarget };
+
+  const viewTrack = key => {
+    const node = document.getElementById(`journey-phase-${key}`);
+    if (!node) return;
+    node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    node.focus({ preventScroll: true });
+  };
 
   return (
     <div className="jr">
@@ -1318,9 +1404,19 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
         {err && <p className="error">{err}</p>}
       </section>
 
+      {coach === null && <ProgressCoachLoading />}
+      {coach?.status && <ProgressCoachPanel data={coach} onViewTrack={viewTrack} />}
+      {coach?.unavailable && (
+        <section className="panel jr-coach jr-coach-unavailable" role="status">
+          <p className="eyebrow">Progress Coach</p>
+          <h2>Temporarily unavailable</h2>
+          <p className="muted">Some progress information is temporarily unavailable. My Journey is still available below.</p>
+        </section>
+      )}
+
       <div className="jr-grid">
         {/* Standups — continuous, no completion goal; commitment only */}
-        <section className="jr-card phase-standups">
+        <section id="journey-phase-standup" className="jr-card phase-standups" tabIndex="-1">
           <div className="jr-head"><span className="jr-n">1</span><h3>Standups</h3><span className="jr-sp">+{standups.sp} SP</span></div>
           <p className="jr-sub">Zoom attendance + Spandan polls</p>
           <div className="jr-stats">
@@ -1337,7 +1433,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
         </section>
 
         {/* ViBe — goal + commitment */}
-        <section className="jr-card phase-vibe">
+        <section id="journey-phase-vibe" className="jr-card phase-vibe" tabIndex="-1">
           <div className="jr-head"><span className="jr-n">2</span><h3>ViBe courses</h3><span className={`jr-sp ${vibe.sp < 0 ? 'neg' : ''}`}>{vibe.sp >= 0 ? '+' : ''}{vibe.sp} SP</span></div>
           <p className="jr-sub">{vibe.clearedCount}/{vibe.totalCourses} courses complete</p>
           <div className="jr-dots">
@@ -1353,7 +1449,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
         </section>
 
         {/* SPA — live progress from the rubric summary (same source as the SPA Points tab) */}
-        <section className="jr-card phase-spa">
+        <section id="journey-phase-spa" className="jr-card phase-spa" tabIndex="-1">
           <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-sp">+{spa.sp} SP</span></div>
           <p className="jr-sub">{spa.solved}/{spa.total} problems solved · full breakdown in the SPA Points tab</p>
           <div className="jr-stats">
@@ -1364,7 +1460,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
         </section>
 
         {/* Projects — live from the PR submission + review mirrors; SP rule still TBD */}
-        <section className="jr-card phase-project">
+        <section id="journey-phase-project" className="jr-card phase-project" tabIndex="-1">
           <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-sp">+{projects.sp} SP</span></div>
           <p className="jr-sub">{projects.submitted ? `${projects.prsRaised} PR${projects.prsRaised === 1 ? '' : 's'} submitted` : 'Pull requests — none submitted yet'}</p>
           {projects.reviewStatus && (
