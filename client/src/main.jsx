@@ -479,6 +479,138 @@ function useAchievements(email) {
   return [data, markSeen];
 }
 
+// ---- Achievement Passport ---------------------------------------------------
+// A summary of the SAME achievements the tiles below show — nothing is fetched
+// or computed that the tab does not already have. Categories are derived from
+// the achievement's own kind/board, with a neutral "Achievements" bucket for
+// anything the backend does not describe well enough to place.
+const PASSPORT_CATEGORIES = [
+  { key: 'milestones', label: 'Milestones', icon: '🎖️' },
+  { key: 'performance', label: 'Performance', icon: '🏆' },
+  { key: 'participation', label: 'Participation', icon: '🤝' },
+  { key: 'consistency', label: 'Consistency', icon: '⏳' },
+  { key: 'other', label: 'Achievements', icon: '📜' }
+];
+
+const BOARD_CATEGORY = { total: 'performance', poll: 'performance', spa: 'participation', query: 'participation', attendance: 'consistency' };
+
+// The group carries no category of its own: milestones are one, and a rank
+// group's board is the part of its key after `board:` (see services/achievements.js).
+function categoryOf(group) {
+  if (group.kind === 'milestone') return 'milestones';
+  if (group.kind === 'rank') return BOARD_CATEGORY[String(group.key || '').replace('board:', '')] || 'other';
+  return 'other';
+}
+
+function passportEntries(groups) {
+  const rows = [];
+  for (const g of groups) {
+    const category = categoryOf(g);
+    for (const item of g.items || []) rows.push({ ...item, category });
+  }
+  return rows.sort((a, b) => new Date(b.earnedAt || 0) - new Date(a.earnedAt || 0));
+}
+
+function formatEarned(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// Takes only what it prints — name, level, SP, league — so no address or id
+// ever reaches this component, let alone the markup.
+function AchievementPassport({ name, level, totalSp, trophyLeague, data }) {
+  const [open, setOpen] = useState(false);
+  const entries = useMemo(() => passportEntries(data.groups || []), [data.groups]);
+  const milestones = entries.filter(e => e.category === 'milestones').length;
+  const byCategory = PASSPORT_CATEGORIES
+    .map(c => ({ ...c, count: entries.filter(e => e.category === c.key).length }))
+    .filter(c => c.count > 0);
+
+  return (
+    <section className="panel passport">
+      <div className="passport-head">
+        <div className="passport-id">
+          <span className="passport-crest">🛡️</span>
+          <div>
+            <p className="passport-eyebrow">Achievement Passport</p>
+            <h2>{name}</h2>
+            <p className="muted">Your verified Spurti growth journey</p>
+          </div>
+        </div>
+        <span className="passport-seal">Verified Spurti Record</span>
+      </div>
+
+      <div className="passport-tiles">
+        <div className="passport-tile"><span>Level</span><strong>{level ?? '—'}</strong></div>
+        <div className="passport-tile"><span>Spurti Points</span><strong>{totalSp ?? '—'}</strong></div>
+        <div className="passport-tile"><span>Trophy League</span><strong>{trophyLeague || '—'}</strong></div>
+        <div className="passport-tile"><span>Achievements</span><strong>{data.counts?.earned || 0}</strong></div>
+        <div className="passport-tile"><span>Boards placed on</span><strong>{data.counts?.boards || 0}</strong></div>
+        <div className="passport-tile"><span>Milestones</span><strong>{milestones}</strong></div>
+      </div>
+
+      <button className="secondary passport-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {open ? 'Hide full passport' : 'View full passport'}
+      </button>
+
+      {open && (
+        <div className="passport-detail">
+          <div className="passport-section">
+            <h3>Achievement categories</h3>
+            {byCategory.length === 0
+              ? <p className="muted">No categories yet — they appear as you earn achievements.</p>
+              : (
+                <div className="passport-cats">
+                  {byCategory.map(c => (
+                    <div className="passport-cat" key={c.key}>
+                      <span className="passport-cat-icon">{c.icon}</span>
+                      <div><strong>{c.count}</strong><span>{c.label}</span></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+          </div>
+
+          <div className="passport-section">
+            <h3>Achievement timeline</h3>
+            {entries.length === 0
+              ? <p className="muted">No achievements earned yet. Place on a leaderboard or reach a milestone and it will be recorded here.</p>
+              : (
+                <ol className="passport-timeline">
+                  {entries.map(e => (
+                    <li key={e.achId}>
+                      <span className="passport-tl-icon">{e.icon}</span>
+                      <div className="passport-tl-body">
+                        <b>{e.title}</b>
+                        <span className="passport-tl-meta">
+                          {[e.period, formatEarned(e.earnedAt), PASSPORT_CATEGORIES.find(c => c.key === e.category)?.label]
+                            .filter(Boolean).join(' · ')}
+                        </span>
+                        {e.detail ? <em>{e.detail}</em> : null}
+                      </div>
+                      {e.verifyId && (
+                        <a className="passport-tl-verify" href={`${APP_BASE}/verify/${e.verifyId}`} target="_blank" rel="noreferrer">{e.verifyId}</a>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              )}
+          </div>
+
+          <div className="passport-section passport-verify">
+            <h3>Verification</h3>
+            <p className="muted">
+              Every achievement above carries a public verify code. Opening a code shows only the holder's name,
+              what was earned and when — nothing else about the student is published.
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AchievementsPanel({ student, data }) {
   const [openKey, setOpenKey] = useState(null);
   const [sharing, setSharing] = useState(null);
@@ -492,6 +624,10 @@ function AchievementsPanel({ student, data }) {
 
   return (
     <div className="ach">
+      <AchievementPassport
+        name={me.name} level={me.level} totalSp={me.totalSp}
+        trophyLeague={student.trophyLeague} data={data}
+      />
       <section className="panel ach-head">
         <div className="ach-counts">
           <div><strong>{data.counts?.earned || 0}</strong><span>earned</span></div>
