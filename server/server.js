@@ -369,7 +369,7 @@ api.get('/me', async (req, res) => {
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
 async function vibeStudent(req) {
-  const email = normalizeEmail(req.body?.email || req.query.email) || await studentEmailFromRequest(req);
+  const email = await studentEmailFromRequest(req);
   if (!email) return null;
   return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
 }
@@ -723,7 +723,7 @@ api.post('/share/card', async (req, res) => {
 // and which achievements are actually worth posting.
 api.post('/share/track', async (req, res) => {
   const { achId, platform, captionEdited, captionChars } = req.body || {};
-  if (!achId || !['linkedin', 'whatsapp', 'download', 'copy', 'native'].includes(platform)) {
+  if (!achId || !['linkedin', 'download', 'copy', 'native'].includes(platform)) {
     return res.status(400).json({ error: 'achId and a valid platform required' });
   }
   const student = await vibeStudent(req);
@@ -779,6 +779,11 @@ api.post('/ping', async (req, res) => {
   }
   if (page === 'record' || page.startsWith('admin')) {
     liveViewers.set(normalized, { name, page, lastSeen: new Date() });
+  }
+  // Evict stale entries so the map doesn't grow unbounded.
+  const seen = Date.now() - 60_000;
+  for (const [k, v] of liveViewers.entries()) {
+    if (v.lastSeen.getTime() < seen) liveViewers.delete(k);
   }
   res.json({ ok: true });
 });
