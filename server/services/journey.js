@@ -16,8 +16,10 @@ import Commitment from '../models/Commitment.js';
 import JourneyPlan from '../models/JourneyPlan.js';
 import Student from '../models/Student.js';
 import SpaProgress from '../models/SpaProgress.js';
+import Session from '../models/Session.js';
 import { ActPullRequest, ActPrReview } from '../models/ActMirrors.js';
 import { buildVibeState, isVibeEligible } from './vibe.js';
+import { computeStreak } from './streaks.js';
 
 // Count distinct GitHub PR links in the free-text submission field; a submission
 // with no parseable link still counts as 1 (the form requires real PR work).
@@ -34,10 +36,11 @@ export async function buildJourneyState(student) {
   const email = student.email;
 
   // --- Phase 1: Standups (attendance + Spandan polls) — existing SP, aggregated ---
-  const [att, polls, txns] = await Promise.all([
+  const [att, polls, txns, sessions] = await Promise.all([
     AttendanceRecord.find({ email }).lean(),
     PollRecord.find({ email }).lean(),
-    SPTransaction.find({ email }).lean()
+    SPTransaction.find({ email }).lean(),
+    Session.find().sort({ endDateTime: 1 }).lean()
   ]);
   const spByCat = cats => txns
     .filter(t => cats.includes(t.category))
@@ -49,7 +52,8 @@ export async function buildJourneyState(student) {
     pollsAttempted: polls.reduce((a, p) => a + (p.attemptedQuestions || 0), 0),
     pollsTotal: polls.reduce((a, p) => a + (p.totalQuestions || 0), 0),
     spAttendance: spByCat(['attendance']),
-    spPolls: spByCat(['poll'])
+    spPolls: spByCat(['poll']),
+    streak: computeStreak(att, sessions.map(s => s.label))
   };
   standups.sp = standups.spAttendance + standups.spPolls;
 

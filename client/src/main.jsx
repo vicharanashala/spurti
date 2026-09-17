@@ -1327,6 +1327,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
             <div><strong>{standups.zoomMinutes}</strong><span>Zoom minutes</span></div>
             <div><strong>{standups.sessionsAttended}</strong><span>sessions attended</span></div>
             <div><strong>{standups.pollsAttempted}/{standups.pollsTotal}</strong><span>polls attempted</span></div>
+            <div><strong>{standups.streak.current}{standups.streak.current > 0 ? '🔥' : ''}</strong><span>day streak{standups.streak.longest > standups.streak.current ? ` (best ${standups.streak.longest})` : ''}</span></div>
           </div>
           <div className="jr-splits">
             <span className="jr-pill">Attendance +{standups.spAttendance}</span>
