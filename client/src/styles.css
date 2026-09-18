@@ -656,6 +656,25 @@ input {
 
 /* ---- My Journey (phase-by-phase progress + SP) ---------------------------- */
 .jr { display: grid; gap: 16px; }
+.jr-coach { display: grid; gap: 14px; border-left: 5px solid var(--primary); }
+.jr-coach-on-track { border-left-color: var(--green); }
+.jr-coach-needs-attention { border-left-color: var(--amber); }
+.jr-coach-action-required { border-left-color: var(--red); }
+.jr-coach-neutral { border-left-color: var(--primary); }
+.jr-coach-unavailable, .jr-coach-loading { border-left-color: var(--line); }
+.jr-coach-head { display: flex; align-items: center; gap: 12px; }
+.jr-coach-head .eyebrow { margin-bottom: 4px; }
+.jr-coach-head h2 { margin: 0; font-size: 20px; }
+.jr-coach-icon { width: 32px; height: 32px; display: grid; place-items: center; font-size: 20px; flex: 0 0 auto; }
+.jr-coach-action { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fbfdff; }
+.jr-coach-label { margin: 0 0 5px; color: var(--muted); font-size: 12px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
+.jr-coach-action h3 { margin: 0; font-size: 18px; }
+.jr-coach-message, .jr-coach-why p:last-child { margin: 0; color: var(--muted); line-height: 1.55; }
+.jr-coach-why { display: grid; gap: 2px; }
+.jr-coach-catchup { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+.jr-coach-cta { min-height: 36px; margin-top: 12px; padding: 0 13px; font-size: 13px; }
+.jr-coach-loading h2 { margin-bottom: 4px; }
+.jr-coach-loading p:last-child { margin-bottom: 0; }
 .jr-plan-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin-top: 6px; }
 .jr-plan-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 700; color: var(--muted); }
 .jr-plan-row input { min-height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; }
@@ -701,6 +720,10 @@ input {
 .jr-pill.amber { background: #fef3e2; color: var(--amber); }
 .jr-pill.muted { background: #f1f5f9; color: var(--muted); font-weight: 600; }
 .jr-link { background: none; border: none; color: var(--primary); font-weight: 800; font-size: 12px; cursor: pointer; padding: 0; margin-left: auto; }
+@media (max-width: 520px) {
+  .jr-coach-action h3 { font-size: 16px; }
+  .jr-coach-cta { width: 100%; }
+}
 
 /* ---- Commitments hub (sub-tabs, one phase at a time) --------------------- */
 .cm { display: grid; gap: 12px; }
