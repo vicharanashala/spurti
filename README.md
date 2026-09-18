@@ -59,7 +59,7 @@ place.** Categories live in the ledger today:
 | `spa` | +5 per validated question learned (cap 50), +10 per validated peer taught (cap 25); fraud −50% / failed audit −20% of SP held | `act_spa_endorsements` mirror | Jul |
 | `query` | +5 per distinct peer query answered, cap 200; rejected or unworthy answers earn nothing; admin-review penalties (−10 / −5) from 22 Aug, capped | `act_query_reviews` mirror | Aug |
 | `project` | one-time +500 when the mentor review of the project PR completes | `act_pr_reviews` mirror | 5 Sep |
-| `quiz` | daily FAQ quiz: 5/5 → +10, 4/5 → +5, 2–3 → 0, 0–1 → −7 (never below zero balance); broken-key questions count as correct | `act_faq_quiz_attempts` mirror | 15 Sep, see *Production vs repository* |
+| `quiz` | daily FAQ quiz: 5/5 → +10, 4/5 → +5, 2–3 → 0, 0–1 → −7 (never below zero balance); broken-key questions count as correct | `act_faq_quiz_attempts` mirror | 15 Sep |
 | `manual`, `peer_faq` | discretionary awards; preserved across rebuilds, never recomputed | admin | — |
 
 Grace day 6 Jun: a one-minute join counts as full attendance and full poll. Students on the
@@ -117,12 +117,12 @@ email up in `students`. There is no login page.
 
 | When (IST) | Where | What |
 |---|---|---|
-| 11:30, 17:30, 23:30, 05:30 | sakshi crontab | `sp-refresh.sh`: Spandan fetch → rubric APPLY → levels → attendance records → trajectory snapshot → leaderboards. Single-instance lock; each step's outcome lands in a step-health file the admin dashboard shows |
-| every 30 min | sakshi crontab | `snapshot-analytics.js` — one `AnalyticsSnapshot` for the admin Analytics tab |
+| 11:30, 17:30, 23:30, 05:30 | sakshi crontab | `sp-refresh.sh`: Spandan fetch → rubric APPLY → levels → attendance records → poll records → trajectory snapshot → leaderboards → backup retention → ViBe fetch. Single-instance lock; each step's outcome lands in a step-health file the admin dashboard shows |
 | every 10 min while a survey is open | sakshi crontab | survey reconciliation against the Google Form responses — a small script kept outside this repository |
 | weekly | sakshi crontab | `sp-runs-retention.sh` — thin the ledger backups that every APPLY writes under `sp-runs/` |
-| on a cron, see script header | sakshi side | `pipeline/certificate-freeze.cjs` — adds newly completed students to `certificate_finals`; existing rows are never touched |
-| when new data arrives | manual | `pipeline/vibe-fetch.cjs` (ViBe completion mirror), `pipeline/vtalk-attendance-build.cjs` (V-Talk attendance) |
+| 06:45, 12:45, 18:45, 00:45 | sakshi crontab | `pipeline/certificate-freeze.cjs APPLY=1` — adds newly completed students to `certificate_finals`; existing rows are never touched |
+| Monday 06:15 | sakshi crontab | weekly research export (script kept outside this repository) |
+| when new V-Talk data arrives | manual | `pipeline/vtalk-attendance-build.cjs` |
 | every 6 h | samagama cron | `pipeline/samagama/cron-sakshi-zoom.sh` → `zoom-update.js` (Zoom into `zoom_data`, mirrored to `sakshi_spurti.zoom_*`) |
 | every 6 h | Samagama repo | the `act_*` activity mirror the SPA, query, project, ViBe and quiz rules read |
 | every 2 h | samagama cron | `pipeline/samagama/sync-spurti-from-sakshi.js` — copies the ledger back so the Samagama dashboard's SP button agrees with Spurti |
@@ -140,10 +140,10 @@ server/
   models/              Mongoose schemas — Student, SPTransaction, Session, AttendanceRecord, PollRecord,
                        LeaderboardSnapshot, BoardReign, Achievement, AchievementView, ShareEvent,
                        Commitment, JourneyPlan, JourneyProgress, SpaProgress, VibeProgress,
-                       TrajectorySnapshot, AnalyticsSnapshot, Announcement, AnnouncementAck,
+                       TrajectorySnapshot, Announcement, AnnouncementAck,
                        E2CardEvent, SessionEvent, ActMirrors (read-only views over act_*)
   services/            the logic worth reading: leaderboards, levels, achievements, journey, standup,
-                       vibe, spa, trajectory, analyticsService, spLedger, sp
+                       vibe, spa, trajectory
   scripts/             buildLeaderboards.js and buildTrajectories.js (run by the refresh)
   seed-demo-local.mjs, seed-announcements-demo.mjs   throwaway local demo data (npm run seed)
   migrations/          dated run-once scripts (run BEFORE deploying the code that needs them)
@@ -157,7 +157,7 @@ client/
 pipeline/              the SP recompute chain — README.md inside
   sp-rubric-build-mirror.cjs   THE scorer. Reads only sakshi_spurti mirrors; APPLY=1 to write
   spandan-poll-fetch.cjs       Spandan Research API → spandan_polls (poll and hybrid attendance source)
-  vibe-fetch.cjs               ViBe course completion → vibe_course_progress
+  vibe-fetch.cjs               ViBe course completion → vibe_course_progress (last step of the refresh)
   vtalk-attendance-build.cjs   V-Talk nights from the Zoom mirror → vtalk_attendance
   certificate-freeze.cjs       write-once certificate_finals
   sync-attendance-records.cjs / sync-poll-records.cjs   display collections rebuilt from the ledger
@@ -166,7 +166,6 @@ pipeline/              the SP recompute chain — README.md inside
 sp-refresh.sh          the sakshi-side 6-hourly refresh (see "What runs when")
 sp-runs-retention.sh   backup retention for sp-runs/
 sync-levels.cjs        Levels / Trophy League / Legend / onboarding group — idempotent, derived only
-snapshot-analytics.js  admin analytics snapshot
 test/                  node:test suites for the pure scoring logic
 CONTEXT.md             the deep reference: schema, the full SP rubric with its cutover dates, admin
                        endpoints, server paths, known incidents
@@ -251,7 +250,8 @@ Variables the web app and the refresh read:
 | `ALERT_WEBHOOK_URL`, `ALERT_WEBHOOK_SECRET`, `ALERT_AFTER` | unset | Where the refresh posts an alert after N consecutive failures of a step. Unset = log only. |
 | `SPANDAN_RESEARCH_KEY` | unset | Key for the Spandan Research API the poll fetch reads. Required on the sakshi side. |
 | `SPANDAN_CUTOFF`, `ATT_HYBRID_CUTOVER` | `2026-07-16`, `2026-07-29` | The two source cutover dates the scorer uses. Only override to replay history. |
-| `QUIZ_SP_START` | `2026-09-15` | First quiz day that earns SP (production scorer). |
+| `QUIZ_SP_START` | `2026-09-15` | First quiz day that earns SP. |
+| `CERT_LOCKED_EMAILS` | unset | Comma-separated students whose certificate is printed; the scorer skips them so printed numbers never drift. |
 
 ## API
 
@@ -285,7 +285,7 @@ Aug       Achievements with verify pages (12 Aug); query-answer SP with review g
           step-health + alert webhook in the refresh; README, licence, tests (17 Aug)
 Sep       live Journey progress from the act_* mirrors (5 Sep); project +500 and SPA teach
           10 × cap 25 (5 Sep); certificate freeze (5 Sep, auto 8 Sep); E2 goal card (7 Sep);
-          daily quiz SP + quiz leaderboards (15 Sep, production); Spandan email alias fix (17 Sep)
+          daily quiz SP + quiz leaderboards (15 Sep); Spandan email alias fix (17 Sep)
 ```
 
 ## Production vs repository
@@ -293,12 +293,9 @@ Sep       live Journey progress from the act_* mirrors (5 Sep); project +500 and
 Production and `main` can drift, in both directions, and this has bitten before. Check what is
 actually deployed before assuming `main` is running. Known at the time of writing:
 
-- **Daily quiz SP is live on the server but not yet in this repository.** Four files were
-  edited on the server on 15 Sep (`pipeline/sp-rubric-build-mirror.cjs`, `server/services/
-  leaderboards.js`, `server/server.js`, `client/src/main.jsx`): the `quiz` category, a `day`
-  window and a Daily Quiz Stars board. Until that is ported, the rubric here does not score quizzes
-  and the leaderboard service does not know the category.
-- The third survey (`POLL3_*`) was wired on the server first and is in `server.js` here.
+- The daily quiz SP and the two extra refresh steps ran on the server for three days before they
+  were committed (PR #221). If you find a behaviour on the site that the code here does not
+  explain, ask before assuming a bug.
 - Survey reconciliation and experiment tooling (arm assignment, analysis) are deliberately kept
   outside this repository, in the lab's private research folder.
 

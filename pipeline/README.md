@@ -78,7 +78,7 @@ re-inserts the full ledger each run, so re-running never double-counts.
 | `spandan-poll-fetch.cjs` | Spandan Research Session Export API → `spandan_polls`. Source for poll SP and for hybrid attendance from 16 Jul / 29 Jul. Needs `SPANDAN_RESEARCH_KEY`. Additive only. |
 | `sync-attendance-records.cjs` | Rebuild `attendancerecords` from `sptransactions` (feeds the Session Health widget and the 3,600-minute Journey goal). |
 | `sync-poll-records.cjs` | Rebuild `pollrecords` from `sptransactions`. Rewritten 14 Aug 2026. |
-| `vibe-fetch.cjs` | ViBe course completion → `vibe_course_progress`; raw responses archived under `data/vibe-snapshots/`. The endpoint is unreliable; pull whenever it answers. |
+| `vibe-fetch.cjs` | ViBe course completion → `vibe_course_progress`; raw responses archived under `data/vibe-snapshots/`. Runs as the last step of `sp-refresh.sh`; the endpoint is unreliable, so it never blocks scoring. |
 | `vtalk-attendance-build.cjs` | V-Talk nights from the Zoom mirror → `vtalk_attendance`, scored by the rubric's V-Talk pass. Re-run when new V-Talk data arrives. |
 | `certificate-freeze.cjs` | Write-once `certificate_finals` rows for students with a `completedAllAt` date. Re-running only adds newly completed students. |
 
@@ -105,11 +105,10 @@ The `act_*` activity mirrors the SPA, query, project, ViBe and quiz rules read
 
 | When (IST) | Job |
 |-----------|-----|
-| 11:30, 17:30, 23:30, 05:30 | `../sp-refresh.sh` — Spandan fetch → `sp-rubric-build-mirror.cjs APPLY=1` → `sync-levels.cjs` → `sync-attendance-records.cjs` → `buildTrajectories.js` → `buildLeaderboards.js`. Single-instance lock; step outcomes in `STEP_HEALTH_FILE`; alert webhook after repeated failures. |
-| every 30 min | `../snapshot-analytics.js` |
+| 11:30, 17:30, 23:30, 05:30 | `../sp-refresh.sh` — Spandan fetch → `sp-rubric-build-mirror.cjs APPLY=1` → `sync-levels.cjs` → `sync-attendance-records.cjs` → `sync-poll-records.cjs` → `buildTrajectories.js` → `buildLeaderboards.js` → `sp-runs-retention.sh` → `vibe-fetch.cjs`. Single-instance lock; step outcomes in `STEP_HEALTH_FILE`; alert webhook after repeated failures. |
 | every 10 min while a survey is open | `../survey-sheet-sync.cjs`, `../poll2-sheet-sync.cjs` |
 | weekly | `../sp-runs-retention.sh` |
-| on a cron (see script header) | `certificate-freeze.cjs` |
+| 06:45, 12:45, 18:45, 00:45 | `certificate-freeze.cjs APPLY=1` |
 
 **Samagama side** (`/etc/cron.d`, UTC):
 
