@@ -72,7 +72,7 @@ const STAFF = new Set([
 // award rows written by the app (admin manual + peer-review FAQ) that must be
 // PRESERVED across rebuilds — never wiped (the 3d self-wipe bug).
 const OWNED_CATS = ['initial', 'attendance', 'poll'];
-const PRESERVED_CATS = ['manual', 'peer_faq'];
+const PRESERVED_CATS = ['manual', 'peer_faq', 'reflection'];
 
 const isMandatory = (t) => /stand|orientation/i.test(t) && !/breakout|weekend|nptel|special|support|non[- ]?mandatory/i.test(t);
 const tier = (pct) => { pct = Math.min(100, pct); return pct >= 90 ? 10 : pct >= 75 ? 5 : pct >= 50 ? 3 : 0; };

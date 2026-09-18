@@ -84,25 +84,84 @@ export async function getAllStudentsSummary() {
  */
 export async function appendTransaction(email, category, sessionLabel, sessionDatetime, delta, reason, ingestedFrom) {
   const sessionDt = sessionDatetime instanceof Date ? sessionDatetime : new Date(sessionDatetime);
+  const normalizedEmail = email.toLowerCase();
+
+  const last = await SPTransaction.findOne({ email: normalizedEmail }).sort({ dateTime: -1, createdAt: -1 }).lean();
+  const balanceAfter = Number(last?.balanceAfter ?? 0) + delta;
 
   const [txn] = await SPTransaction.create([{
-    email: email.toLowerCase(),
+    email: normalizedEmail,
     category,
     sessionLabel,
     sessionDatetime: sessionDt,
-    delta,
+    deltaMode: 'absolute',
+    deltaValue: delta,
+    appliedDelta: delta,
+    balanceAfter,
     reason,
+    dateTime: sessionDt,
     recordedAt: new Date(),
     ingestedFrom
   }]);
 
   // Atomic update of student totalSp
   await Student.updateOne(
-    { email: email.toLowerCase() },
+    { email: normalizedEmail },
     { $inc: { totalSp: delta } }
   );
 
   return txn;
+}
+
+export async function appendTransactionIdempotent(email, category, sessionLabel, sessionDatetime, delta, reason, idempotencyKey, ingestedFrom) {
+  if (!idempotencyKey) {
+    return appendTransaction(email, category, sessionLabel, sessionDatetime, delta, reason, ingestedFrom);
+  }
+
+  const normalizedEmail = email.toLowerCase();
+  const normalizedKey = String(idempotencyKey).trim().toLowerCase();
+  if (!normalizedKey) {
+    throw new Error('idempotencyKey is required for idempotent transactions');
+  }
+
+  const existing = await SPTransaction.findOne({ email: normalizedEmail, idempotencyKey: normalizedKey }).lean();
+  if (existing) {
+    return existing;
+  }
+
+  const sessionDt = sessionDatetime instanceof Date ? sessionDatetime : new Date(sessionDatetime);
+  const last = await SPTransaction.findOne({ email: normalizedEmail }).sort({ dateTime: -1, createdAt: -1 }).lean();
+  const balanceAfter = Number(last?.balanceAfter ?? 0) + delta;
+
+  try {
+    const [txn] = await SPTransaction.create([{
+      email: normalizedEmail,
+      category,
+      idempotencyKey: normalizedKey,
+      sessionLabel,
+      sessionDatetime: sessionDt,
+      deltaMode: 'absolute',
+      deltaValue: delta,
+      appliedDelta: delta,
+      balanceAfter,
+      reason,
+      dateTime: sessionDt,
+      recordedAt: new Date(),
+      ingestedFrom
+    }]);
+
+    await Student.updateOne(
+      { email: normalizedEmail },
+      { $inc: { totalSp: delta } }
+    );
+
+    return txn;
+  } catch (err) {
+    if (err?.code === 11000 || err?.codeName === 'DuplicateKey') {
+      return SPTransaction.findOne({ email: normalizedEmail, idempotencyKey: normalizedKey }).lean();
+    }
+    throw err;
+  }
 }
 
 function maskEmail(email) {

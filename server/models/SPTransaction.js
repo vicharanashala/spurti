@@ -6,9 +6,10 @@ const spTransactionSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['initial', 'attendance', 'poll', 'manual', 'peer_faq', 'spa', 'query'],
+    enum: ['initial', 'attendance', 'poll', 'manual', 'peer_faq', 'spa', 'query', 'reflection'],
     index: true
   },
+  idempotencyKey: { type: String, lowercase: true, trim: true, index: true },
   sessionLabel: { type: String, default: '', index: true },
   deltaMode: { type: String, enum: ['absolute', 'percentage'], default: 'absolute' },
   deltaValue: { type: Number, required: true },
@@ -20,5 +21,6 @@ const spTransactionSchema = new mongoose.Schema({
 
 spTransactionSchema.index({ email: 1, dateTime: 1, createdAt: 1 });
 spTransactionSchema.index({ sessionLabel: 1, category: 1 });
+spTransactionSchema.index({ email: 1, idempotencyKey: 1 }, { unique: true, sparse: true });
 
 export default mongoose.model('SPTransaction', spTransactionSchema);
