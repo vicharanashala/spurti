@@ -855,6 +855,96 @@ tr.step-alert td { border-color: #f3c9c5; }
 .ann-done p, .ann-done header strong { color: var(--muted); }
 .ann-caughtup { margin: 2px 0 0; font-size: 13px; }
 
+
+.quest-card {
+  margin: 16px 0;
+  padding: 20px;
+  border-radius: 16px;
+  background: var(--card, #fff);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.quest-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.quest-head h2 {
+  margin: 4px 0 0;
+}
+
+.quest-head > strong {
+  font-size: 20px;
+  white-space: nowrap;
+}
+
+.quest-bar {
+  height: 8px;
+  margin: 16px 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e9e9e9;
+}
+
+.quest-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+  transition: width 0.25s ease;
+}
+
+.quest-list {
+  display: grid;
+  gap: 10px;
+}
+
+.quest-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.quest-icon {
+  font-size: 22px;
+}
+
+.quest-item > div {
+  flex: 1;
+}
+
+.quest-item strong {
+  display: block;
+}
+
+.quest-item p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.quest-status {
+  font-size: 20px;
+}
+
+.quest-item.done {
+  opacity: 0.75;
+}
+
+.quest-item.done .quest-status {
+  font-weight: 700;
+}
+
+.quest-complete {
+  margin: 14px 0 0;
+  font-weight: 600;
+}
+
 /* SP at-a-glance table (FAQ tab) */
 .sp-table-wrap { margin: 4px 0 18px; }
 .sp-table-wrap h3 { margin: 0 0 8px; }
