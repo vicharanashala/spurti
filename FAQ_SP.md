@@ -25,14 +25,35 @@ Spurti means energy, inspiration, and forward movement — the intent is to help
 students keep their learning energy through the whole programme.
 
 ### 3. What are the SP earning sources?
-There are **five live sources**, each recorded as its own category in the SP
+There are **seven live sources**, each recorded as its own category in the SP
 Bank:
 
 1. **Attendance** — the daily standup.
 2. **Poll** — the session quizzes.
 3. **SPA** — peer teaching and learning endorsements.
 4. **Query** — answering other students' questions.
-5. **ViBe** — course commitments.
+5. **Project** — your project PR, once the mentor review is completed.
+6. **ViBe** — course commitments.
+7. **Daily quiz** — the 5-question FAQ quiz on your Samagama dashboard (from 15 Sep 2026).
+
+### SP at a glance
+
+| Source | How you earn | SP | Cap |
+|---|---|---|---|
+| Initial | one-time credit on your official start date | +100 | 100 |
+| Attendance | standup presence: ≥90% / 75–89% / 50–74% of the window | +10 / +5 / +3 per session | Not capped |
+| Polls | your day's score vs the day's top scorer, same bands | +10 / +5 / +3 per day | Not capped |
+| Daily quiz | 5 / 4 / 2–3 / 0–1 correct out of 5 | +10 / +5 / 0 / −7 per day | Not capped |
+| SPA — learn | each validated question you learn | +5 | 250 (50 questions) |
+| SPA — teach | each validated peer you teach | +10 | 250 (25 peers) |
+| Query answering | each distinct peer query you genuinely answer | +5 | 200 (40 queries) |
+| Project | your project PR passes the mentor review | +500 one-time | 500 |
+| **Total (earnable SP)** | *attendance and polls counted at their 600 design value (60 sessions × 10)* | | **2,500** |
+
+Where SP can reduce:
+- SPA integrity: confirmed fraud −50% / failed audit −20% of the SP earned up to that date (one-time).
+- Query review: a rejected answer −10, marked unworthy −5 (only for queries raised on/after 22 Aug 2026; capped at −200 overall).
+- ViBe commitments: missing a goal you staked SP on loses the stake × penalty (only if you chose to stake).
 
 The system is **positive-first**: you gain SP for taking part, and most
 categories can never reduce your balance.
@@ -109,8 +130,8 @@ SPA rewards learning from and teaching peers, from **validated** endorsements
 only:
 
 ```text
-Learn a question (validated):  +5 SP each, capped at 50 SP  (up to 10 questions)
-Teach a peer     (validated):  +8 SP each, capped at 30 SP
+Learn a question (validated):  +5 SP each,  up to 50 questions (max 250 SP)
+Teach a peer     (validated):  +10 SP each, up to 25 peers     (max 250 SP)
 ```
 
 Unvalidated or flagged endorsements do not count.
@@ -130,6 +151,37 @@ When you give a real, useful answer to another student's question, you earn
 
 The goal is genuine peer help — quality and effort, not volume. Shallow or
 copied answers to many queries will not build SP.
+
+### 14b. Can a query answer cost me SP?
+Yes, but only after an admin review. For queries raised on or after **22 Aug 2026**,
+an answer the admins **reject** costs **−10 SP** and one they mark **unworthy**
+costs **−5 SP**. SP you already earned for an answer is never clawed back; the
+penalty is a separate row, and penalties stop at −200 per student.
+
+## Section 6b: Project SP
+
+### How do I earn SP for my project?
+When your project PR passes the **mentor review** (marked *completed*), you earn
+a one-time **+500 SP**, dated to the review completion. A submission that is
+rejected or still pending review earns nothing until it passes.
+
+## Section 6c: Daily quiz SP
+
+### How does the daily quiz earn SP?
+From **15 Sep 2026**, each completed daily FAQ quiz (5 questions, 8–10 AM on
+your Samagama dashboard) is scored by how many you get right:
+
+```text
+5 of 5 correct   +10 SP
+4 of 5 correct    +5 SP
+2–3 of 5 correct   0 SP  (a zero row still appears in your SP Bank)
+0–1 of 5 correct  −7 SP  (never takes your balance below zero)
+```
+
+Only quizzes you actually complete count; a missed quiz earns nothing and costs
+nothing. Each quiz day is scored once — if you attempted twice, the better score
+stands. A question with a known-broken answer key is counted as correct. Quiz SP
+has its own daily, weekly and all-time leaderboards.
 
 ## Section 7: ViBe course commitments
 
@@ -177,11 +229,13 @@ line's reason for that date — the per-category detail explains the total.
 
 ### 21. Can my SP decrease?
 For everyday activity, **no**. Attendance and polls only ever add SP (floor 0),
-so a low day simply earns less, never a deduction. SP decreases in only two
+so a low day simply earns less, never a deduction. SP decreases in only these
 cases:
 
 - You **lose a ViBe stake** you chose to make.
 - An **SPA integrity penalty** applies (confirmed fraud or failed audit).
+- An admin review **rejects** (−10) or marks **unworthy** (−5) a query answer you gave.
+- A **daily quiz** you completed with 0–1 correct answers (−7, never below zero).
 
 Spurti is built to reward participation and recovery, not to punish an ordinary
 off day.

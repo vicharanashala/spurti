@@ -111,18 +111,89 @@ const STAFF = new Set([
 // never used. Two capped tracks + a one-time integrity penalty on current SP.
 // Source: act_spa_endorsements + act_spa_transactions (mirrored 6-hourly).
 const SPA_LEARN_UNIT = 5, SPA_LEARN_CAP = 50;   // +5 SP / validated question learned, cap 50 → max 250
-const SPA_TEACH_UNIT = 8, SPA_TEACH_CAP = 30;   // +8 SP / validated peer taught,     cap 30 → max 240
+const SPA_TEACH_UNIT = 10, SPA_TEACH_CAP = 25;  // +10 SP / validated peer taught,    cap 25 → max 250
+// Certificate-scale rescore (2026-09-05, per HANDOFF_CERTIFICATE_DATA.md): teach
+// 8×30 → 10×25, strictly upward at every count ≤25; counts 26-30 kept ≥ old pay
+// by the cap math (old max 240 < new max 250).
 const SPA_FRAUD_RATE = 0.5, SPA_AUDIT_RATE = 0.2;
 const SPA_GOOD = ['approved', 'audit_passed'];
+
+// ── Project → SP (mentor-reviewed PR; certificate scale) ─────────────────────
+// One-time +500 when the mentor review of the student's project PR is
+// 'completed' (act_pr_reviews.reviewStatus). 'rejected', 'pending' and
+// 'pending_reevaluation' earn nothing. Dated resubmittedAt || reviewedAt —
+// reviewedAt keeps the EARLIER rejection date on resubmitted projects.
+const PROJECT_SP = 500;
+
+// ── E2 goal-card incentive (arm C only; pre-reg 2026-09-07) ──────────────────
+// One-time +10 when an arm-C student of the E2 goal-card experiment sets their
+// first My Journey goal inside the launch window. Arm membership comes from the
+// launch assignment CSV (server-side file, has emails). Missing E2_START or a
+// missing CSV makes the whole category a silent no-op — safe on every host.
+const E2_GOAL_SP = 10;
+const E2_ASSIGN_CSV = process.env.E2_ASSIGN_CSV || `${process.env.HOME}/spurti/e2_assignment_2026-09-07.csv`;
+const E2_START_ENV = process.env.E2_START || '';
+const E2_DAYS_ENV = Number(process.env.E2_DAYS || 7);
+
+// ── Daily FAQ quiz → SP (banded correctness; announced 15 Sep 2026) ──────────
+// Source: act_faq_quiz_attempts (6-hourly mirror of the Samagama daily quiz).
+// Score ONLY status='completed' rows: the mirror also logs one 'missed_window'
+// row per enrolled student per missed mandatory day (~2k/day) plus 'in_progress'
+// attempts — neither earns nor costs anything (a miss must NEVER hit the -7 band).
+// Bands on the day's 5 questions: 5 correct -> +10, 4 -> +5, 2-3 -> 0, 0-1 -> -7.
+// The -7 sits where blind-clicking lives (a pure guesser on 4-option MCQs nets
+// ~1.25 correct); at the observed 52-60% correctness a typical honest attempt
+// lands at 2-3 and is safe. Verified EV per attempt ~0 on the real distribution.
+// Broken-key credit mechanism, currently EMPTY (15 Sep, Harshdeep's key audit):
+// the suspected zero-correct qids turned out fine — the rejoin-limit question's
+// key matches FAQ §6.6 exactly (nobody ever picks the right option: comprehension
+// gap, a signal to keep, NOT a key fault); the other zero-correct qids are
+// superseded and never served. Add a qid here ONLY for a Samagama-confirmed bad
+// key, and treat the list as append-only once populated (every rebuild re-scores
+// ALL history, so a later removal would retro-score attempts made under the
+// then-broken key).
+const QUIZ_SP_START = process.env.QUIZ_SP_START || '2026-09-15';
+const QUIZ_BAND = (n) => (n >= 5 ? 10 : n === 4 ? 5 : n >= 2 ? 0 : -7);
+const QUIZ_BROKEN_QIDS = new Set([]);
+
+// ── Certificate-locked students ──────────────────────────────────────────────
+// Their certificate is fully processed and issued — printed numbers must never
+// move. They keep the exact rule-set in force at print time: no 'project'
+// category, SPA teach at the legacy 8×30. Everyone still in the signing queue
+// gets the new rules and a regenerated certificate.
+// 2026-09-05: Yaradla Yaswanth Reddy (the only fully-processed certificate).
+// Students whose certificate is already printed: the scorer skips them so the
+// printed numbers never drift. Comma-separated emails in .env (CERT_LOCKED_EMAILS);
+// never hardcode an address here — this file is public.
+const CERT_LOCKED = new Set(String(process.env.CERT_LOCKED_EMAILS || '')
+  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean));
+const SPA_TEACH_UNIT_LEGACY = 8, SPA_TEACH_CAP_LEGACY = 30;
 
 // ── Query answering → SP (Pattern A: rubric-recomputed) ──────────────────────
 // +5 SP per DISTINCT peer query a student answered (from
 // act_query_reviews.peer.submittedAnswerHistory), self-answers excluded.
-// Anti-farming: answers the admin REJECTED or MARKED_UNWORTHY earn nothing
-// (unreviewed + approved still count), and total query SP is capped per student.
+// Anti-farming: the +5 is permanent once earned (no clawback on review), but an
+// answer the admin REJECTS (-10) or MARKS UNWORTHY (-5) takes ONE penalty row —
+// only for queries raised on/after QUERY_PEN_QUERY_START. Verdicts settled before
+// QUERY_PAY_STICKY_FROM keep the old no-pay treatment. Total pay capped per student.
 // Answering only — asking a question earns nothing.
 const QUERY_UNIT = 5, QUERY_CAP = 200;   // +5 SP / distinct query, cap 200 → max 40 queries
 const QUERY_BAD_ACTIONS = ['rejected', 'marked_unworthy'];
+// Penalty for admin-disapproved answers, FORWARD-ONLY — gated on when the QUERY was
+// RAISED (createdAt), not on the verdict date. Answers to queries that entered the
+// system before this date earn nothing when disapproved but never cost anything,
+// however late the admin reviews them; only answers to NEW queries carry the risk.
+// (Team decision 22 Aug: an admin swept 80 old-query verdicts the day the rule
+// launched, which the original verdict-date gate would have penalized — old-query
+// answers were given under the old no-penalty rules, so the query's entry date is
+// the honest boundary.)
+const QUERY_PEN_QUERY_START = '2026-08-22';
+// Verdicts BEFORE this date settled under the old no-pay rule and stay that way;
+// on/after it, pay is sticky (see the query loop). Set to the penalty-launch day
+// so the 21-Aug review sweep withdraws nothing.
+const QUERY_PAY_STICKY_FROM = '2026-08-21';
+const QUERY_PEN = { rejected: 10, marked_unworthy: 5 };
+const QUERY_PEN_CAP = 200;               // penalties stop accruing at -200 per student
 
 // ── PRESERVED categories — NOT recomputable from Zoom source, so they must survive
 // the delete-and-rebuild (else the wipe erases them every run). 'manual' = ViBe/
@@ -298,6 +369,25 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   // attendance for these dates was skipped above, so no double credit.
   for (const [, sp] of spandanAttByDate) scoreSpandanAttendance(sp, 'Day ' + sp.dayNumber);
 
+  // V-Talk attendance pass: special synchronous sessions from the
+  // vtalk_attendance mirror (built by pipeline/vtalk-attendance-build.cjs from
+  // Zoom meeting/webinar reports; webinar rows are strict name->student matches,
+  // unique only). Scored OUTSIDE the per-day session cascade because V-Talks
+  // co-exist with standups on the same date. V-Talk 07 is deliberately absent
+  // (it ran inside Spandan and is already scored as "Day 78 (14 Aug)").
+  // Reason carries "present X of Y min (Z%)" so sync-attendance-records.cjs
+  // folds the minutes into attendancerecords / the 3600 journey goal.
+  for (const v of await sak.collection('vtalk_attendance').find({}).toArray()) {
+    const e = String(v.email || '').toLowerCase().trim(); if (!e) continue;
+    const W = v.windowMinutes || ATT_SESSION_MIN;
+    const mins = Math.min(W, Math.round(v.attendedMinutes || 0));
+    const pct = W ? Math.round(mins / W * 1000) / 10 : 0;
+    const d = tier(pct);
+    touch(e, v.name).rows.push({ date: v.date, order: 1, cat: 'attendance', delta: d,
+      reason: `${v.label} (${ddmon(v.date)}): present ${mins} of ${W} min (${pct}%) -> ${d > 0 ? '+' : ''}${d} SP.` });
+    const o = students.get(e); if (!o.firstAtt || v.date < o.firstAtt) o.firstAtt = v.date;
+  }
+
   // 3b. SPA → per-canon validated learn/teach events (dated) + integrity flags.
   //     emailToCanon is fully built by now, so we can fold aliases correctly.
   const spaByCanon = new Map(); // canon -> { learn:[YYYY-MM-DD...], teach:[...] }
@@ -313,15 +403,37 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   }
   // Genuine fraud = net teacher_fraud_penalty + fraud_penalty_reversal < 0, with
   // operator "Testing" rows excluded (they are demote-feature tests, all reversed).
+  // The /testing/i guard applies to the PENALTY side ONLY — a reversal always counts.
+  // A reversal's reason routinely quotes the penalty it undoes (e.g. '...was explicitly
+  // logged with reason "Testing purpose"'), so filtering both sides dropped the +credit
+  // and kept the -debit, flagging a net-zero account as fraud. That hit exactly one
+  // person: an auditor whose penalty had already been investigated and reversed.
   for (const f of await sak.collection('act_spa_transactions').aggregate([
-        { $match: { transactionType: { $in: ['teacher_fraud_penalty', 'fraud_penalty_reversal'] }, reason: { $not: /testing/i } } },
-        { $group: { _id: { $toLower: '$email' }, net: { $sum: '$deltaSPA' } } }]).toArray()) {
-    if (f.net < 0) { const c = canonOf(f._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), fraud: true }); }
+        { $match: { $or: [
+            { transactionType: 'teacher_fraud_penalty', reason: { $not: /testing/i } },
+            { transactionType: 'fraud_penalty_reversal' }] } },
+        { $group: { _id: { $toLower: '$email' }, net: { $sum: '$deltaSPA' }, when: { $max: '$createdAt' } } }]).toArray()) {
+    if (f.net < 0) { const c = canonOf(f._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), fraud: true, fraudDate: dstr(f.when) || null }); }
   }
-  for (const a of await sak.collection('act_spa_transactions').aggregate([
-        { $match: { transactionType: { $in: ['audit_failure_learner_penalty', 'audit_failure_teacher_penalty'] } } },
-        { $group: { _id: { $toLower: '$email' } } }]).toArray()) {
-    const c = canonOf(a._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), auditFail: true });
+  // Audit failures, EXCLUDING the collusion-pattern cleanup. That sweep de-endorsed
+  // ~28k endorsements in bulk off a multi-signal detector, and its own rejectNote
+  // says the teacher's +10% reward was revoked and "no other penalty" — so it is
+  // not adjudicated misconduct and must not trigger the -20%. Same guard in spirit
+  // as the fraud netting above, which already drops operator test rows. A student
+  // who ALSO has a genuine audit failure still gets flagged, on that row's merit.
+  const auditRows = await sak.collection('act_spa_transactions').find(
+        { transactionType: { $in: ['audit_failure_learner_penalty', 'audit_failure_teacher_penalty'] } },
+        { projection: { email: 1, endorsementId: 1, createdAt: 1 } }).toArray();
+  const auditEids = [...new Set(auditRows.map((r) => r.endorsementId).filter(Boolean))];
+  const cleanupEids = new Set((await sak.collection('act_spa_endorsements').find(
+        { _id: { $in: auditEids }, rejectNote: /collusion-pattern cleanup/i },
+        { projection: { _id: 1 } }).toArray()).map((d) => String(d._id)));
+  for (const a of auditRows) {
+    if (a.endorsementId && cleanupEids.has(String(a.endorsementId))) continue;
+    const c = canonOf(String(a.email || '').toLowerCase().trim());
+    const prev = spaFlag.get(c) || {};
+    const d = dstr(a.createdAt); // date of the offence, for dating the penalty row
+    spaFlag.set(c, { ...prev, auditFail: true, auditDate: (d && (!prev.auditDate || d > prev.auditDate)) ? d : prev.auditDate });
   }
 
   // 3d. Query answering → per-canon distinct queries answered (dated). Answerer =
@@ -334,11 +446,35 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       uidToEmail.set(String(r.userId), String(r.email).toLowerCase().trim());
   }
   const queryByCanon = new Map(); // canon -> [YYYY-MM-DD ...] (one per distinct query answered)
+  const queryPenByCanon = new Map(); // canon -> [{date, action}] penalizable verdicts (query raised on/after QUERY_PEN_QUERY_START)
   for (const q of await sak.collection('act_query_reviews').find(
         { 'peer.submittedAnswerHistory.0': { $exists: true } },
-        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1, 'peer.review.action': 1 } }).toArray()) {
+        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1, 'peer.review.action': 1, 'peer.review.at': 1 } }).toArray()) {
     const askerId = String(q.userId);
-    if (QUERY_BAD_ACTIONS.includes(q.peer?.review?.action)) continue; // admin-flagged bad answer earns nothing
+    const action = q.peer?.review?.action;
+    if (QUERY_BAD_ACTIONS.includes(action)) {
+      const penDate = dstr(q.peer?.review?.at);
+      const qRaised = dstr(q.createdAt);
+      // Historical reviews (verdict before QUERY_PAY_STICKY_FROM) stand as settled:
+      // the answer never pays and carries no penalty — exactly as balances have
+      // read for weeks. From that date onward the +5, once earned, is PERMANENT
+      // (team decision 22 Aug: no double-charge — a later disapproval never claws
+      // back the pay, it adds exactly one penalty row instead), so the query falls
+      // through to the pay loop below like any other.
+      if (!penDate || penDate < QUERY_PAY_STICKY_FROM) continue;
+      // Single penalty per answer, and only for queries RAISED after the rule
+      // existed — answers to older queries keep their pay and cost nothing.
+      if (qRaised && qRaised >= QUERY_PEN_QUERY_START) {
+        const seen = new Set();
+        for (let uid of (q.peer.submittedAnswerHistory || [])) {
+          uid = String(uid); if (uid === askerId || seen.has(uid)) continue; seen.add(uid);
+          const e = uidToEmail.get(uid); if (!e) continue;
+          const c = canonOf(e);
+          let arr = queryPenByCanon.get(c); if (!arr) { arr = []; queryPenByCanon.set(c, arr); }
+          arr.push({ date: penDate, action });
+        }
+      }
+    }
     const date = dstr(q.peer?.answer?.submittedAt) || dstr(q.createdAt) || dstr(q.updatedAt); if (!date) continue;
     const seen = new Set();
     for (let uid of (q.peer.submittedAnswerHistory || [])) {
@@ -350,7 +486,63 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     }
   }
 
-  // 3e. PRESERVED rows (manual/peer_faq) — read BEFORE the wipe and fold into each
+  // 3e. Project → per-canon completed mentor review (earliest completion date).
+  const projectByCanon = new Map(); // canon -> YYYY-MM-DD of review completion
+  for (const r of await sak.collection('act_pr_reviews').find(
+        { reviewStatus: 'completed' }, { projection: { email: 1, reviewedAt: 1, resubmittedAt: 1 } }).toArray()) {
+    const e = String(r.email || '').toLowerCase().trim(); if (!e) continue;
+    const c = canonOf(e);
+    const date = dstr(r.resubmittedAt) || dstr(r.reviewedAt) || TODAY;
+    const prev = projectByCanon.get(c);
+    if (!prev || date < prev) projectByCanon.set(c, date);
+  }
+
+  // 3e2. E2 goal-card: arm-C students who set their first journey goal inside the
+  //      experiment window -> canon -> YYYY-MM-DD of the plan's creation. No-op
+  //      unless E2_START is set and the assignment CSV exists on this host.
+  const e2GoalByCanon = new Map();
+  if (E2_START_ENV && fs.existsSync(E2_ASSIGN_CSV)) {
+    try {
+      const armC = new Set(fs.readFileSync(E2_ASSIGN_CSV, 'utf8').trim().split('\n').slice(1)
+        .map(l => l.split(',')).filter(p => (p[2] || '').trim() === 'C')
+        .map(p => canonOf(p[0].toLowerCase().trim())));
+      const startMs = new Date(E2_START_ENV).getTime();
+      const endMs = startMs + E2_DAYS_ENV * 86400000;
+      for (const jp of await sak.collection('journeyplans').find({},
+            { projection: { email: 1, createdAt: 1, standupBy: 1, vibeBy: 1, spaBy: 1, projectBy: 1 } }).toArray()) {
+        const c = canonOf(String(jp.email || '').toLowerCase().trim());
+        if (!armC.has(c)) continue;
+        if (!(jp.standupBy || jp.vibeBy || jp.spaBy || jp.projectBy)) continue;
+        const t = jp.createdAt ? new Date(jp.createdAt).getTime() : NaN;
+        if (!(t >= startMs && t < endMs)) continue;
+        e2GoalByCanon.set(c, dstr(jp.createdAt) || TODAY);
+      }
+      console.log(`E2 goal-card: ${e2GoalByCanon.size} arm-C setter(s) in window`);
+    } catch (e) { console.error('E2 goal-card scan skipped:', e.message); }
+  }
+
+  // 3e3. Daily FAQ quiz → per-canon completed attempts since QUIZ_SP_START.
+  //      One row per (student, quiz day); duplicate same-day docs keep the best
+  //      effective score. n = correct + broken-key-credited; x = credited count.
+  const quizByCanon = new Map(); // canon -> Map(quizDate -> { n, x })
+  for (const a of await sak.collection('act_faq_quiz_attempts').find(
+        { status: 'completed', quizDate: { $gte: QUIZ_SP_START } },
+        { projection: { email: 1, quizDate: 1, score: 1, questions: 1 } }).toArray()) {
+    const e = String(a.email || '').toLowerCase().trim(); if (!e || !a.quizDate) continue;
+    const c = canonOf(e);
+    let n = 0, x = 0;
+    if (Array.isArray(a.questions) && a.questions.length) {
+      for (const q of a.questions) {
+        if (q.correct) n++;
+        else if (QUIZ_BROKEN_QIDS.has(String(q.qid))) { n++; x++; }
+      }
+    } else n = Number(a.score) || 0; // defensive: mirror docs all carry questions[]
+    let m = quizByCanon.get(c); if (!m) { m = new Map(); quizByCanon.set(c, m); }
+    const prev = m.get(a.quizDate);
+    if (!prev || n > prev.n) m.set(a.quizDate, { n, x });
+  }
+
+  // 3f. PRESERVED rows (manual/peer_faq) — read BEFORE the wipe and fold into each
   //     student's ledger so commitment/admin SP survives the rebuild. Re-created with
   //     the same delta/date/reason (metadata like original createdAt is not retained).
   const preservedByCanon = new Map(); // canon -> [{ date, order, cat, delta, reason }]
@@ -389,13 +581,16 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     // SPA rows (Pattern A): one consolidated 'spa' row per day, cumulative caps
     // across days. These bypass the (date|cat) best-dedup by being pushed directly.
     const spa = spaByCanon.get(cand); const flags = spaFlag.get(cand) || {};
+    // CERT_LOCKED students keep the legacy teach pay (rules at certificate print time).
+    const teachUnit = CERT_LOCKED.has(cand) ? SPA_TEACH_UNIT_LEGACY : SPA_TEACH_UNIT;
+    const teachCap = CERT_LOCKED.has(cand) ? SPA_TEACH_CAP_LEGACY : SPA_TEACH_CAP;
     let spaLearnUsed = 0, spaTeachUsed = 0;
     if (spa) {
       const byDay = new Map(); // date -> { learn, teach }
       for (const d of spa.learn.slice().sort()) { if (spaLearnUsed >= SPA_LEARN_CAP) break; spaLearnUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.learn++; byDay.set(d, o); }
-      for (const d of spa.teach.slice().sort()) { if (spaTeachUsed >= SPA_TEACH_CAP) break; spaTeachUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.teach++; byDay.set(d, o); }
+      for (const d of spa.teach.slice().sort()) { if (spaTeachUsed >= teachCap) break; spaTeachUsed++; const o = byDay.get(d) || { learn: 0, teach: 0 }; o.teach++; byDay.set(d, o); }
       for (const [d, o] of byDay) {
-        const delta = o.learn * SPA_LEARN_UNIT + o.teach * SPA_TEACH_UNIT; if (!delta) continue;
+        const delta = o.learn * SPA_LEARN_UNIT + o.teach * teachUnit; if (!delta) continue;
         const parts = []; if (o.learn) parts.push(`${o.learn} learned`); if (o.teach) parts.push(`${o.teach} taught`);
         rows.push({ date: d, order: 3, cat: 'spa', delta, reason: `SPA (${ddmon(d)}): ${parts.join(' + ')} (validated) -> +${delta} SP.` });
       }
@@ -404,9 +599,18 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     const penRate = flags.fraud ? SPA_FRAUD_RATE : (flags.auditFail ? SPA_AUDIT_RATE : 0);
     let spaPenalty = 0;
     if (penRate > 0) {
-      spaPenalty = Math.round(rows.reduce((a, r) => a + r.delta, 0) * penRate);
-      if (spaPenalty > 0) rows.push({ date: TODAY, order: 9, cat: 'spa', delta: -spaPenalty,
-        reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.` });
+      // Date the penalty to the offence, NOT to TODAY. The ledger is wiped and rebuilt
+      // on every sp-refresh (4x/day), so a TODAY stamp re-dated one old decision every
+      // run — in a newest-first SP Bank that reads as a fresh punishment every morning.
+      const penDate = (flags.fraud ? flags.fraudDate : flags.auditDate) || TODAY;
+      // Base is what the student had EARNED BY the offence date, not their whole
+      // accumulated total. Charging a July offence against August earnings meant the
+      // penalty kept growing after the fact, and a back-dated row computed from future
+      // rows made the running balance dip by more than was ever there at that point.
+      const penBase = rows.reduce((a, r) => a + (r.date <= penDate ? r.delta : 0), 0);
+      spaPenalty = Math.round(penBase * penRate);
+      if (spaPenalty > 0) rows.push({ date: penDate, order: 9, cat: 'spa', delta: -spaPenalty,
+        reason: `SPA (${ddmon(penDate)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of the ${penBase} SP earned up to ${ddmon(penDate)} -> -${spaPenalty} SP.` });
     }
     // Query-answer rows: +5 per distinct peer query answered, one 'query' row per
     // day, oldest-first, capped at QUERY_CAP SP per student (excess days truncated).
@@ -414,6 +618,10 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     if (qDates && qDates.length) {
       const qByDay = new Map();
       for (const d of qDates) qByDay.set(d, (qByDay.get(d) || 0) + 1);
+      // Anti-refarm needs no separate cap burn under sticky pay: a disapproved
+      // answer STAYS in the paid pool, so it already consumes its slice of the
+      // lifetime cap — a maxed farmer whose junk gets flagged eats the penalties
+      // with no cap room ever freed.
       let qUsed = 0;
       for (const d of [...qByDay.keys()].sort()) {
         if (qUsed >= QUERY_CAP) break;
@@ -426,8 +634,71 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
           reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${delta} SP${capNote}.` });
       }
     }
+    // Project row: one-time +PROJECT_SP on mentor-completed review (Pattern A,
+    // rubric-recomputed). CERT_LOCKED students keep their issued numbers.
+    const projDate = projectByCanon.get(cand);
+    if (projDate && !CERT_LOCKED.has(cand)) {
+      rows.push({ date: projDate, order: 7, cat: 'project', delta: PROJECT_SP,
+        reason: `Project (${ddmon(projDate)}): mentor review of your project PR completed -> +${PROJECT_SP} SP.` });
+    }
+    // E2 goal-card row: one-time +10, arm C only, first goal set inside the window.
+    const e2Date = e2GoalByCanon.get(cand);
+    if (e2Date && !CERT_LOCKED.has(cand)) {
+      rows.push({ date: e2Date, order: 7, cat: 'goal', delta: E2_GOAL_SP,
+        reason: `Goal set (${ddmon(e2Date)}): first My Journey target date set during the goal-card week -> +${E2_GOAL_SP} SP (one-time).` });
+    }
     // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
     for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
+    // Daily-quiz rows (from 15 Sep 2026): one 'quiz' row per quiz day, banded on
+    // effective correct count (broken-key questions credited). A negative band is
+    // clamped to the balance actually held by that date — same lesson as the SPA
+    // and query penalties: the running balance must never dip below zero.
+    // CERT_LOCKED students keep their issued numbers. Zero-band rows (2-3 correct)
+    // ARE written so the SP Bank shows the student why the day paid nothing.
+    const quiz = quizByCanon.get(cand);
+    if (quiz && !CERT_LOCKED.has(cand)) {
+      let quizPensUsed = 0;
+      for (const d of [...quiz.keys()].sort()) {
+        if (d < info.start) continue;
+        const { n, x } = quiz.get(d);
+        let delta = QUIZ_BAND(n);
+        const note = x ? ` (${x} question${x === 1 ? '' : 's'} with a known broken answer key credited)` : '';
+        if (delta < 0) {
+          const heldByD = rows.reduce((a, r) => a + (r.date <= d ? r.delta : 0), 0) - quizPensUsed;
+          delta = -Math.min(-delta, Math.max(0, heldByD));
+          if (delta === 0) continue; // nothing to take — no row
+          quizPensUsed += -delta;
+        }
+        rows.push({ date: d, order: 8, cat: 'quiz', delta,
+          reason: `Daily quiz (${ddmon(d)}): ${n} of 5 correct${note} -> ${delta > 0 ? '+' : ''}${delta} SP.` });
+      }
+    }
+    // Query-answer penalties (rule announced 21 Aug 2026, forward-only): one 'query'
+    // row per verdict day, dated to the VERDICT (stable across rebuilds, like the SPA
+    // penalty). Capped at QUERY_PEN_CAP per student and clamped so the penalty can
+    // never drive the student's total balance below zero.
+    const qPens = queryPenByCanon.get(cand);
+    if (qPens && qPens.length) {
+      let penBudget = QUERY_PEN_CAP, pensUsed = 0;
+      const penByDay = new Map(); // date -> { rejected: n, marked_unworthy: n }
+      for (const p of qPens) { const o = penByDay.get(p.date) || { rejected: 0, marked_unworthy: 0 }; o[p.action]++; penByDay.set(p.date, o); }
+      for (const d of [...penByDay.keys()].sort()) {
+        if (penBudget <= 0) break;
+        const o = penByDay.get(d);
+        // Clamp to SP actually held by the verdict date (same lesson as the SPA
+        // penalty): the running balance must never dip below zero at this row.
+        const heldByD = rows.reduce((a, r) => a + (r.date <= d ? r.delta : 0), 0) - pensUsed;
+        let pen = o.rejected * QUERY_PEN.rejected + o.marked_unworthy * QUERY_PEN.marked_unworthy;
+        pen = Math.min(pen, penBudget, Math.max(0, heldByD));
+        if (pen <= 0) continue;
+        penBudget -= pen; pensUsed += pen;
+        const parts = [];
+        if (o.rejected) parts.push(`${o.rejected} rejected (-${QUERY_PEN.rejected} each)`);
+        if (o.marked_unworthy) parts.push(`${o.marked_unworthy} marked unworthy (-${QUERY_PEN.marked_unworthy} each)`);
+        rows.push({ date: d, order: 6, cat: 'query', delta: -pen,
+          reason: `Query answering (${ddmon(d)}): admin review — ${parts.join(' + ')} -> -${pen} SP.` });
+      }
+    }
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
     finalBal.set(cand, bal); nameByCanon.set(cand, info.name);

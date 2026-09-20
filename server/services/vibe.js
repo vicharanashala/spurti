@@ -5,6 +5,7 @@ import Student from '../models/Student.js';
 import VibeProgress from '../models/VibeProgress.js';
 import Commitment from '../models/Commitment.js';
 import SPTransaction from '../models/SPTransaction.js';
+import { ActVibeProgress } from '../models/ActMirrors.js';
 
 export const ELIGIBILITY_CUTOFF = new Date('2026-07-16T00:00:00.000Z');
 
@@ -43,6 +44,13 @@ export async function buildVibeState(student) {
   const rows = await VibeProgress.find({ email }).lean();
   const prog = {};
   rows.forEach(r => { prog[r.course] = { pct: r.pct, week: r.weekHours, prior: !!r.priorCompleted }; });
+  // The live ViBe API mirror (act_vibe_progress, source:'live_api') overrides any
+  // local/dummy VibeProgress row — VibeProgress values were never real in prod.
+  const live = await ActVibeProgress.find({ email }).lean();
+  live.forEach(r => {
+    const pct = r.finished ? 100 : Math.max(0, Math.min(100, Math.round(r.completionPct || 0)));
+    prog[r.courseKey] = { pct, week: prog[r.courseKey]?.week ?? 0, prior: !!r.exempt };
+  });
 
   const ladder = COURSES.map(c => {
     const p = prog[c.key] || { pct: 0, week: 0, prior: false };

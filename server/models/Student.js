@@ -27,7 +27,15 @@ const studentSchema = new mongoose.Schema({
   poll2CompletedAt: { type: Date, default: null },
   // Third pop-up ("poll3") — dashboard usability survey. Same mechanism, own flag.
   poll3Completed: { type: Boolean, default: false, index: true },
-  poll3CompletedAt: { type: Date, default: null }
+  poll3CompletedAt: { type: Date, default: null },
+  // The last time the student actually OPENED the Achievements tab. Anything
+  // earned after this is still new to them, which is what the tab badge counts.
+  // Null means never opened, so everything they hold is unseen.
+  achievementsSeenAt: { type: Date, default: null },
+  // E2 goal-card experiment (pre-reg 2026-09-07). Assigned once, server-side, by
+  // pipeline/assign-arms-e2.mjs at launch; '' = not in the experiment.
+  // A = control (no card) · B = card · C = card + one-time +10 SP on setting.
+  e2Arm: { type: String, enum: ['', 'A', 'B', 'C'], default: '', index: true }
 }, { timestamps: true });
 
 studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });

@@ -39,6 +39,17 @@ const DRY = process.env.DRY === '1';
 
 const lc = (s) => String(s || '').toLowerCase().trim();
 
+// Known mis-typed Spandan login emails -> the student's real Spurti email.
+// A student who registered on Spandan with a typo earns poll/attendance rows
+// under an address the SP rubric can't fold into any roster record, so every
+// session silently lands in set-aside. Rewriting at ingest keeps ONE mirror the
+// rubric, sync-poll-records and the Polls view all agree on. Add a line per
+// case; re-run with FULL=1 so already-mirrored sessions pick the fix up.
+const EMAIL_ALIASES = {
+  'mahajandurgesh196@gmnail.com': 'mahajandurgesh196@gmail.com', // Day 53-100; new correct-email account from Day 101
+};
+const canonEmail = (s) => { const e = lc(s); return EMAIL_ALIASES[e] || e; };
+
 async function fetchPage(since) {
   const url = new URL(BASE);
   url.searchParams.set('preset', 'evening');
@@ -82,7 +93,7 @@ async function fetchPage(since) {
         const points = x.points ?? x.pointsEarned ?? 0;
         const answered = x.answered ?? x.questionsAnswered ?? 0;
         return {
-          email: lc(x.studentEmail),
+          email: canonEmail(x.studentEmail),
           studentName: x.studentName || '',
           rank: x.rank ?? null,
           points,
@@ -95,6 +106,12 @@ async function fetchPage(since) {
           questionsAnswered: answered,   // alias (back-compat)
         };
       }).filter((x) => x.email);
+      // If an alias and its real address both sat in one session (old + new
+      // Spandan accounts), keep the higher-scoring record so the mirror stays
+      // one row per student per session.
+      const byEmail = new Map();
+      for (const x of students) { const cur = byEmail.get(x.email); if (!cur || x.points > cur.points) byEmail.set(x.email, x); }
+      students.length = 0; students.push(...byEmail.values());
       const topPoints = students.reduce((mx, x) => Math.max(mx, x.points), 0);
       const doc = {
         roomId: s.roomId,

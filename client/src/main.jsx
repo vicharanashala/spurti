@@ -5,7 +5,16 @@ import './styles.css';
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
 
+// /spurti/verify/SPRT-XXXX-XXXX is a public page — the QR on a shared card
+// resolves here, and it must render for someone who has never logged in.
+const VERIFY_CODE = (window.location.pathname.match(/\/verify\/([A-Za-z0-9-]+)\/?$/) || [])[1] || null;
+
 function App() {
+  if (VERIFY_CODE) return <VerifyView code={VERIFY_CODE.toUpperCase()} />;
+  return <AppShell />;
+}
+
+function AppShell() {
   const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('admin') === '1' ? 'admin-login' : 'landing');
   const [profile, setProfile] = useState(null);
   const [excused, setExcused] = useState(null);
@@ -67,9 +76,17 @@ function App() {
     return <main className="page login-page"><section className="panel auth-card"><p className="eyebrow">Spurti</p><h1>Loading</h1></section></main>;
   }
   if (view === 'student' && profile) {
+    // The E2 goal card must never stack on top of a mandatory survey pop-up —
+    // same gate conditions the three SurveyModals use below.
+    const surveyBlocking = [
+      [config.survey, 'surveyCompleted'],
+      [config.poll2, 'poll2Completed'],
+      [config.poll3, 'poll3Completed']
+    ].some(([cfg, key]) => cfg?.enabled && cfg.formUrl && profile.student && !profile.student[key]);
     return (
       <>
         <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <GoalCardModal student={profile.student} surveyBlocking={surveyBlocking} />
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -274,6 +291,12 @@ function StudentView({ profile, onBack }) {
   const [commitPhase, setCommitPhase] = useState('vibe');
   const { student } = profile;
   const goToCommitment = ph => { setCommitPhase(ph); setTab('vibe'); };
+  // Fetched up here rather than inside the panel because the server decides who
+  // gets the tab at all — until it answers `visible`, the tab strip omits it.
+  const [ach, markAchievementsSeen] = useAchievements(student.email);
+  const unseenAchievements = ach?.counts?.unseen || 0;
+  // Opening the tab is what counts as seeing them, wherever it is opened from.
+  const selectTab = key => { setTab(key); if (key === 'achievements') markAchievementsSeen(); };
   return (
     <main className="page compact">
       <header className="topbar">
@@ -285,17 +308,25 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
+      <Announcements student={student} />
+      <StudentPulse
+        profile={profile}
+        newAchievements={unseenAchievements}
+        canShareAchievements={!!ach?.sharing}
+        onOpenAchievements={() => selectTab('achievements')}
+      />
+      <Tabs tab={tab} setTab={selectTab} tabs={[['bank','SP Bank'],
         ['journey','My Journey'],
         ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
         ['spa','SPA Points'],
+        ...(ach?.visible ? [['achievements','Achievements', unseenAchievements]] : []),
         ['leaderboard','Leaderboard'],
         ['faq','FAQ']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
+      {tab === 'achievements' && ach?.visible && <AchievementsPanel student={student} data={ach} />}
       {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
       {tab === 'faq' && <FaqTab />}
     </main>
@@ -418,6 +449,345 @@ function LevelStatus({ student }) {
   );
 }
 
+// ---- Achievements -----------------------------------------------------------
+// One tile per board (plus milestones); opening a tile reveals every instance,
+// since a weekly win carries its week and is separately shareable. Locked
+// milestones show what's left to go so the tab is a goal list, not just a shelf.
+// `visible` and `canShare` come from the server's env switches — the client never
+// decides either, so pulling the feature back is a .env edit and a restart.
+function useAchievements(email) {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/achievements?email=${encodeURIComponent(email)}`)
+      .then(r => r.json())
+      .then(d => { if (live) setData(d); })
+      .catch(() => { if (live) setData({ visible: false, groups: [], locked: [], counts: {} }); });
+    return () => { live = false; };
+  }, [email]);
+  // Clearing the badge is optimistic: the student HAS looked, so it should go
+  // the moment they click rather than after a round trip. If the POST fails the
+  // count simply comes back on the next load — nothing is lost either way.
+  const markSeen = () => {
+    setData(d => (d?.counts?.unseen ? { ...d, counts: { ...d.counts, unseen: 0 } } : d));
+    fetch(`${API}/achievements/seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    }).catch(() => {});
+  };
+  return [data, markSeen];
+}
+
+function AchievementsPanel({ student, data }) {
+  const [openKey, setOpenKey] = useState(null);
+  const [sharing, setSharing] = useState(null);
+
+  if (!data) return <section className="panel">Loading your achievements…</section>;
+
+  const me = { name: student.name, totalSp: student.totalSp, level: student.level, ...(data.student || {}), email: student.email };
+  const canShare = !!data.sharing;
+  const groups = data.groups || [];
+  const locked = data.locked || [];
+
+  return (
+    <div className="ach">
+      <section className="panel ach-head">
+        <div className="ach-counts">
+          <div><strong>{data.counts?.earned || 0}</strong><span>earned</span></div>
+          <div><strong>{data.counts?.thisWeek || 0}</strong><span>this week</span></div>
+          <div><strong>{data.counts?.boards || 0}</strong><span>boards placed on</span></div>
+        </div>
+        <p className="muted">
+          Placing 1st, 2nd or 3rd on any leaderboard earns a permanent card — a new one each week you take it.
+          Open a tile to see every time you placed{canShare ? ', and share any of them' : ''}.
+        </p>
+        {/* Said plainly because the look of these cards HAS already changed once
+            and will again. What is permanent is the achievement and its verify
+            code, not the artwork — worth stating before someone assumes the
+            picture they downloaded is the record. */}
+        <p className="muted ach-note">
+          The look of the cards may change from time to time as we improve the design. Your achievements
+          and their verify links stay exactly as they are — only the artwork is refreshed.
+        </p>
+      </section>
+
+      {groups.length === 0 && locked.length === 0 && (
+        <section className="panel empty"><p className="muted">No achievements yet. Place on any leaderboard, or hit a milestone, and your first card lands here.</p></section>
+      )}
+
+      <div className="ach-grid">
+        {groups.map(g => (
+          <AchievementTile
+            key={g.key} group={g} me={me} canShare={canShare}
+            open={openKey === g.key}
+            onToggle={() => setOpenKey(openKey === g.key ? null : g.key)}
+            onShare={setSharing}
+          />
+        ))}
+        {locked.map(l => (
+          <div className="ach-tile locked" key={l.key}>
+            <div className="ach-medal">{l.icon}</div>
+            <div className="ach-body">
+              <h4>{l.title}</h4>
+              <span className="ach-when">Locked · {l.remaining}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {sharing && <ShareModal item={sharing} me={me} onClose={() => setSharing(null)} />}
+    </div>
+  );
+}
+
+const PLACE_WORD = { 1: '1st', 2: '2nd', 3: '3rd' };
+
+function AchievementTile({ group, me, open, onToggle, onShare, canShare }) {
+  const latest = group.items[0];
+  const isRank = group.kind === 'rank';
+  return (
+    <div className={`ach-tile${open ? ' open' : ''}`}>
+      <button className="ach-face" onClick={onToggle} aria-expanded={open}>
+        <div className="ach-medal">{group.icon}</div>
+        <div className="ach-body">
+          <h4>{group.title}</h4>
+          <span className="ach-when">
+            {isRank
+              ? `Best: ${PLACE_WORD[group.bestPlace] || '—'} · ${group.items.length} time${group.items.length === 1 ? '' : 's'}`
+              : latest.period}
+          </span>
+        </div>
+        <span className="ach-caret">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <ul className="ach-items">
+          {group.items.map(item => (
+            <li key={item.achId}>
+              <span className="ach-item-medal">{item.icon}</span>
+              <span className="ach-item-text">
+                <b>{item.period}</b>
+                {item.detail ? <em>{item.detail}</em> : null}
+              </span>
+              {canShare && <button className="ach-share" onClick={() => onShare(item)}>Share</button>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Renders the actual PNG the student posts, and hands them the two ways out:
+// LinkedIn, or just the file. Each one is logged. WhatsApp was dropped — the
+// point of these cards is a public, checkable post, and a forward to a chat
+// thread is neither.
+// navigator.clipboard is secure-context only (https or localhost), so on any
+// plain-http origin it is simply absent and a copy would fail silently. The
+// textarea trick still works everywhere.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
+  } catch { /* fall through */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch { return false; }
+}
+
+function ShareModal({ item, me, onClose }) {
+  const [png, setPng] = useState(null);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const verifyUrl = `${window.location.origin}${APP_BASE}/verify/${item.verifyId}`;
+  const [caption, setCaption] = useState('');
+  // Posting a card is a four-step job on LinkedIn and every step is easy to skip
+  // — most of all uploading the image, without which the post is a bare link.
+  // The tick is not paperwork: it is there to make the steps get read once.
+  const [readSteps, setReadSteps] = useState(false);
+
+  useEffect(() => {
+    import('./shareCard.js').then(m => {
+      const text = m.shareCaption(item, verifyUrl);
+      setCaption(text);
+      setGenerated(text);
+    });
+  }, [item.achId]);
+
+  useEffect(() => {
+    let live = true;
+    import('./shareCard.js')
+      .then(m => m.renderCard(item, me, verifyUrl))
+      .then(url => {
+        if (!live) return;
+        setPng(url);
+        // Hand the card to the server once, so the verify link carries it as a
+        // preview image. Best-effort: a failure here only costs the preview.
+        fetch(`${API}/share/card`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: me.email, achId: item.achId, dataUrl: url })
+        }).catch(() => {});
+      })
+      .catch(() => { if (live) setError('Could not draw the card. Try again.'); });
+    return () => { live = false; };
+  }, [item.achId]);
+
+  // `generated` is the caption as we wrote it; comparing against what's in the
+  // box at share time is the only way to know whether students take our framing
+  // or write their own.
+  const [generated, setGenerated] = useState('');
+  const track = (platform) => fetch(`${API}/share/track`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: me.email, achId: item.achId, platform,
+      captionEdited: !!generated && caption !== generated,
+      captionChars: caption.length
+    })
+  }).catch(() => {});
+
+  // Two ways to get the picture into the post without the student handling a file:
+  //  1. the share sheet, which takes the image itself — phones, and the better path
+  //  2. failing that, post the verify link and let the platform expand it into a
+  //     preview of the card (that's what the og:image on /verify/:code is for)
+  // Downloading is a fallback, not the route.
+  const share = async () => {
+    const { dataUrlToFile } = await import('./shareCard.js');
+    const file = png ? dataUrlToFile(png, `spurti-${item.achId.replace(/[:]/g, '-')}.png`) : null;
+
+    // Only phones get the share sheet. Desktop Chrome/Safari also advertise
+    // navigator.share, but there it opens the OS app picker (Mail, AirDrop…),
+    // which is not what someone pressing "Share on LinkedIn" is asking for.
+    const onPhone = navigator.userAgentData?.mobile ?? /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (onPhone && file && navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], text: caption, title: item.title });
+        track('native');
+        return;
+      } catch (err) {
+        if (err?.name === 'AbortError') return;   // they backed out; not a failure
+      }
+    }
+
+    track('linkedin');
+    // LinkedIn cannot be handed post text by URL — it opens an empty composer
+    // whatever you pass. Copying first is what makes the paste possible.
+    const ok = await copyText(caption);
+    setCopied(ok);
+    window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(verifyUrl)}`, '_blank', 'noopener');
+  };
+
+  const justDownload = async () => {
+    const { downloadDataUrl } = await import('./shareCard.js');
+    track('download');
+    if (png) downloadDataUrl(png, `spurti-${item.achId.replace(/[:]/g, '-')}.png`);
+  };
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <section className="modal share-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2>Share your card</h2>
+          <button className="icon" onClick={onClose}>x</button>
+        </div>
+        {error && <p className="muted">{error}</p>}
+        {!png && !error && <p className="muted">Drawing your card…</p>}
+        {png && <img className="share-preview" src={png} alt={`${item.title} — ${item.period}`} />}
+        <div className="caption-box">
+          <div className="caption-head">
+            <b>Your caption</b>
+            <button className="mini-copy" onClick={async () => { track('copy'); setCopied(await copyText(caption)); }}>
+              {copied ? 'Copied ✓' : 'Copy'}
+            </button>
+          </div>
+          <textarea value={caption} onChange={e => { setCaption(e.target.value); setCopied(false); }} rows={12} />
+          <p>LinkedIn always opens an empty box — paste this in with <b>Ctrl+V</b> (<b>Cmd+V</b> on Mac). Edit it first if you like.</p>
+        </div>
+
+        <div className="post-howto">
+          <b>How to post this — read before you click</b>
+          <ol>
+            <li><b>Download the card first.</b> LinkedIn will not pick the picture up on its own; you attach it yourself in a moment.</li>
+            <li>Click <b>Share on LinkedIn</b>. Your caption is copied for you and the composer opens with your verify link already attached.</li>
+            <li><b>Add the card image to the post</b> — the photo button in the composer, then the file you just downloaded. Skip this and your post is only a link.</li>
+            <li><b>Paste the caption</b> (Ctrl+V / Cmd+V).</li>
+            <li><b>Tag us, in this order</b> — the lab first, then Sudarshan sir, then Sakshi. Type
+            <b>@Vicharanashala</b> and pick the lab page, then <b>@Sudarshan Iyengar</b>, then <b>@Sakshi</b>.
+            Picking each one from the dropdown is what makes it a real tag — typed text alone doesn't reach
+            anyone. Tag any other mentors from the lab you worked with as well.
+            <span className="tag-links">
+              <a href="https://www.linkedin.com/company/vicharanashala/" target="_blank" rel="noopener">The lab page →</a>
+              <a href="https://www.linkedin.com/in/sudarshan-iyengar-3560b8145/" target="_blank" rel="noopener">Sudarshan sir's profile →</a>
+              <a href="https://www.linkedin.com/in/sakshivk/" target="_blank" rel="noopener">Sakshi's profile →</a>
+            </span></li>
+          </ol>
+          <label className="ack">
+            <input type="checkbox" checked={readSteps} onChange={e => setReadSteps(e.target.checked)} />
+            <span>I've read the steps — in particular that I add the image myself.</span>
+          </label>
+        </div>
+
+        <div className="share-actions">
+          <button className="secondary" disabled={!png} onClick={justDownload}>Download card</button>
+          <button className="primary" disabled={!png || !readSteps} onClick={share}>Share on LinkedIn</button>
+        </div>
+
+        <p className="muted share-note">
+          On a phone, Share hands the picture straight to LinkedIn and you can skip step 3 — but samagama.in isn't
+          built for small screens, so this is probably a job for a computer. Either way the verify link travels with
+          the post: anyone who clicks it lands on proof the achievement is real.
+        </p>
+      </section>
+    </div>
+  );
+}
+
+// Public credential check behind the QR — no login, and deliberately nothing
+// beyond the name, what was won, and when.
+function VerifyView({ code }) {
+  const [state, setState] = useState({ loading: true });
+  useEffect(() => {
+    fetch(`${API}/verify/${encodeURIComponent(code)}`)
+      .then(r => r.ok ? r.json() : { valid: false })
+      .then(d => setState({ loading: false, ...d }))
+      .catch(() => setState({ loading: false, valid: false }));
+  }, [code]);
+
+  return (
+    <main className="page verify-page">
+      <section className="panel verify-card">
+        {state.loading ? <p className="muted">Checking…</p> : state.valid ? (
+          <>
+            <span className="verify-ok">✓ Verified achievement</span>
+            <div className="verify-medal">{state.icon}</div>
+            <h1>{state.title}</h1>
+            <p className="verify-period">{state.period}</p>
+            <p className="verify-awarded">Awarded to</p>
+            <p className="verify-name">{state.name}</p>
+            <p className="muted">{state.programme}</p>
+            <p className="muted">Awarded {new Date(state.earnedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+            <p className="verify-code">{state.verifyId}</p>
+          </>
+        ) : (
+          <>
+            <span className="verify-bad">Not found</span>
+            <h1>We can't verify this card</h1>
+            <p className="muted">No achievement matches the code <b>{code}</b>. A genuine Spurti card carries a code issued by the system — if this one doesn't resolve, it wasn't issued here.</p>
+          </>
+        )}
+      </section>
+    </main>
+  );
+}
+
 // Curated leaderboard presets → each maps to a cached board (window/category/scope).
 const LB_PRESETS = [
   { key: 'week-total',        label: 'This Week',                          window: 'week', category: 'total',      scope: 'all' },
@@ -432,6 +802,9 @@ const LB_PRESETS = [
   { key: 'all-spa',           label: '🧑‍🏫 Top SPA — All-Time',            window: 'all',  category: 'spa',        scope: 'all' },
   { key: 'week-query',        label: '💬 Top Query Answerers — This Week', window: 'week', category: 'query',      scope: 'all' },
   { key: 'all-query',         label: '💬 Top Query Answerers — All-Time',  window: 'all',  category: 'query',      scope: 'all' },
+  { key: 'day-quiz',          label: '🧠 Daily Quiz — Today',              window: 'day',  category: 'quiz',       scope: 'all' },
+  { key: 'week-quiz',         label: '🧠 Daily Quiz — This Week',          window: 'week', category: 'quiz',       scope: 'all' },
+  { key: 'all-quiz',          label: '🧠 Daily Quiz — All-Time',           window: 'all',  category: 'quiz',       scope: 'all' },
 ];
 
 function LeaderboardPanel({ student }) {
@@ -616,14 +989,89 @@ function TrajectoryModal({ student, onClose }) {
   );
 }
 
-  
+// Programme announcements with read-tracking. Unread notices render as a
+// highlighted card with a "Got it" button — that ack is the read signal the
+// team tracks. Read ones fold away behind a toggle so the page stays clean,
+// and the whole section disappears when there are no notices at all.
+function Announcements({ student }) {
+  const [data, setData] = useState(null);
+  const [showRead, setShowRead] = useState(false);
+  const load = async () => {
+    try {
+      const r = await fetch(`${API}/announcements?email=${encodeURIComponent(student.email)}`);
+      if (r.ok) setData(await r.json());
+    } catch { /* a failed notice fetch must never break the dashboard */ }
+  };
+  useEffect(() => { load(); }, [student.email]);
+  if (!data || !data.announcements?.length) return null;
 
-function StudentPulse({ profile }) {
+  const unread = data.announcements.filter(a => !a.acked);
+  const read = data.announcements.filter(a => a.acked);
+  const ack = async id => {
+    await fetch(`${API}/announcements/${id}/ack`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: student.email })
+    });
+    load();
+  };
+  const fmt = d => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+
+  return (
+    <section className="panel announcements">
+      <div className="ann-head">
+        <h2>📣 Announcements{unread.length > 0 && <em className="ann-badge">{unread.length} new</em>}</h2>
+        {read.length > 0 && (
+          <button className="ann-toggle" onClick={() => setShowRead(s => !s)}>
+            {showRead ? 'Hide read' : `Read earlier (${read.length})`}
+          </button>
+        )}
+      </div>
+      {unread.map(a => (
+        <article key={a.id} className="ann-item ann-new">
+          <header><strong>{a.title}</strong><time>{fmt(a.postedAt)}</time></header>
+          <p>{a.body}</p>
+          <button className="primary ann-ack" onClick={() => ack(a.id)}>Got it ✓</button>
+        </article>
+      ))}
+      {unread.length === 0 && <p className="muted ann-caughtup">You’re all caught up.</p>}
+      {showRead && read.map(a => (
+        <article key={a.id} className="ann-item ann-done">
+          <header><strong>{a.title}</strong><time>{fmt(a.postedAt)} · read ✓</time></header>
+          <p>{a.body}</p>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function StudentPulse({ profile, newAchievements = 0, canShareAchievements = false, onOpenAchievements }) {
   const { student, cohort, transactions } = profile;
   const [showTraj, setShowTraj] = useState(false);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
+  const many = newAchievements > 1;
+ main
+  const { student, cohort, transactions } = profile;
+  const [showTraj, setShowTraj] = useState(false);
+  const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
+  const many = newAchievements > 1;
   return (
     <>
+      {/* Milestones are settled on read, so a card can come into existence during
+          the very page load the student is looking at. Nothing else on the page
+          would tell them: the tab strip sits lower and reads identically whether
+          or not something new is waiting. */}
+      {newAchievements > 0 && onOpenAchievements && (
+        <button className="ach-nudge" onClick={onOpenAchievements}>
+          <span className="ach-nudge-icon" aria-hidden="true">🎖️</span>
+          <span className="ach-nudge-text">
+            <strong>{newAchievements} new achievement{many ? 's' : ''}</strong>
+            <em>{canShareAchievements
+              ? `See ${many ? 'them' : 'it'} and share ${many ? 'them' : 'it'}`
+              : `See ${many ? 'them' : 'it'} in your Achievements tab`}</em>
+          </span>
+          <span className="ach-nudge-go" aria-hidden="true">→</span>
+        </button>
+      )}
       <section className="pulse-grid">
         <div className="pulse-card progress-card">
           <span>Standing</span>
@@ -685,11 +1133,44 @@ const FAQ_ITEMS = [
   { q: 'Why can’t I search my SP directly?', a: 'For privacy and security, direct student search is disabled in production. Instead, open Spurti from your Samagama dashboard — the same login you already use — and it will show only your own record. This is what ensures no one can look up another student’s SP, and it’s why you normally reach Spurti through the official programme link rather than searching by name or email.' },
 ];
 
+// SP rates at a glance — keep in sync with the live rubric
+// (pipeline/sp-rubric-build-mirror.cjs) and FAQ_SP.md.
+const SP_RATES = [
+  { src: 'Initial', how: 'one-time credit on your official start date', sp: '+100', cap: '100' },
+  { src: 'Attendance', how: 'standup presence: ≥90% / 75–89% / 50–74% of the window', sp: '+10 / +5 / +3 per session', cap: 'Not capped' },
+  { src: 'Polls', how: 'your day’s score vs the day’s top scorer, same bands', sp: '+10 / +5 / +3 per day', cap: 'Not capped' },
+  { src: 'SPA — learn', how: 'each validated question you learn', sp: '+5', cap: '250 (50 questions)' },
+  { src: 'SPA — teach', how: 'each validated peer you teach', sp: '+10', cap: '250 (25 peers)' },
+  { src: 'Query answering', how: 'each distinct peer query you genuinely answer', sp: '+5', cap: '200 (40 queries)' },
+  { src: 'Project', how: 'your project PR passes the mentor review', sp: '+500 one-time', cap: '500' },
+];
+const SP_DEDUCTIONS = [
+  'SPA integrity: confirmed fraud −50% / failed audit −20% of the SP earned up to that date (one-time).',
+  'Query review: an answer the admins reject −10, marked unworthy −5 (only for queries raised on/after 22 Aug; capped at −200 overall).',
+  'ViBe commitments: missing a goal you staked SP on loses the stake × penalty (only if you chose to stake).',
+];
+
 function FaqTab() {
   const [open, setOpen] = useState(0);
   return (
     <section className="panel">
       <div className="panel-head"><h2>FAQ</h2></div>
+      <div className="sp-table-wrap">
+        <h3>SP at a glance</h3>
+        <table className="sp-table">
+          <thead><tr><th>Source</th><th>How you earn</th><th>SP</th><th>Cap</th></tr></thead>
+          <tbody>
+            {SP_RATES.map(r => (
+              <tr key={r.src}><td>{r.src}</td><td>{r.how}</td><td>{r.sp}</td><td>{r.cap}</td></tr>
+            ))}
+            <tr className="sp-total"><td><b>Total (earnable SP)</b></td><td className="muted">attendance and polls counted at their 600 design value (60 sessions × 10)</td><td colSpan={2}><b>2,500</b></td></tr>
+          </tbody>
+        </table>
+        <p className="muted sp-deduct-head">Where SP can reduce:</p>
+        <ul className="sp-deduct">
+          {SP_DEDUCTIONS.map((d, i) => <li key={i}>{d}</li>)}
+        </ul>
+      </div>
       <p className="muted faq-intro">Tap a question to see the answer.</p>
       <div className="faq-list">
         {FAQ_ITEMS.map((item, i) => (
@@ -705,8 +1186,15 @@ function FaqTab() {
   );
 }
 
+// A tab entry is [key, label] or [key, label, badge]; the badge is only drawn
+// when it is a positive number, so existing callers are untouched.
 function Tabs({ tab, setTab, tabs }) {
-  return <nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>;
+  return <nav className="tabs">{tabs.map(([key, label, badge]) => (
+    <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>
+      {label}
+      {badge > 0 && <span className="tab-badge" aria-label={`${badge} new`}>{badge}</span>}
+    </button>
+  ))}</nav>;
 }
 
 function SpBank({ transactions }) {
@@ -883,7 +1371,7 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
   if (!data) return <section className="panel">Loading your journey…</section>;
   if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
 
-  const { standups, vibe, goals } = data;
+  const { standups, vibe, spa, projects, goals } = data;
 
   const saveTarget = async (field, value) => {
     const r = await fetch(`${API}/journey/plan`, {
@@ -938,17 +1426,24 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
           {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('vibe')}>🎲 Stake SP →</button></div>}
         </section>
 
-        {/* SPA — goal (date) works now; progress data + commitment coming soon */}
+        {/* SPA — live progress from the rubric summary (same source as the SPA Points tab) */}
         <section className="jr-card phase-spa">
-          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-soon">Data soon</span></div>
-          <p className="jr-sub">53-problem set · progress data coming soon</p>
+          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-sp">+{spa.sp} SP</span></div>
+          <p className="jr-sub">{spa.solved}/{spa.total} problems solved · full breakdown in the SPA Points tab</p>
+          <div className="jr-stats">
+            <div><strong>{spa.solved}</strong><span>problems solved</span></div>
+            <div><strong>{spa.taught}</strong><span>peers taught</span></div>
+          </div>
           <PhaseGoal phaseKey="spa" field="spaBy" goal={goals.spa} targetText="solve all 53 problems" {...gp} />
         </section>
 
-        {/* Projects — goal (date) works now; progress data coming soon */}
+        {/* Projects — live from the PR submission + review mirrors; SP rule still TBD */}
         <section className="jr-card phase-project">
-          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">Data soon</span></div>
-          <p className="jr-sub">Pull requests · progress data coming soon</p>
+          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-sp">+{projects.sp} SP</span></div>
+          <p className="jr-sub">{projects.submitted ? `${projects.prsRaised} PR${projects.prsRaised === 1 ? '' : 's'} submitted` : 'Pull requests — none submitted yet'}</p>
+          {projects.reviewStatus && (
+            <div className="jr-splits"><span className="jr-pill">Review: {projects.reviewStatus}</span></div>
+          )}
           <PhaseGoal phaseKey="project" field="projectBy" goal={goals.project} targetText="raise your first PR" {...gp} />
         </section>
       </div>
@@ -1333,7 +1828,8 @@ function AdminView({ admin, auth, onBack }) {
       const id = setInterval(loadActive, 10000);
       return () => clearInterval(id);
     }
-    if (tab === 'analytics' && !analytics) loadAnalytics();
+    // Both tabs read /admin/analytics — the sharing block rides along with it.
+    if ((tab === 'analytics' || tab === 'achievements') && !analytics) loadAnalytics();
   }, [tab]);
 
   return (
@@ -1343,7 +1839,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['achievements','Achievements'], ['students','Students']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -1362,9 +1858,184 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'attendance' && <AdminAttendance data={attendance} onStudent={loadStudent} />}
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
+      {tab === 'achievements' && <AdminAchievements data={analytics?.sharing} reigns={analytics?.reigns} />}
+      {tab === 'analytics' && <PipelineHealth data={analytics?.pipeline} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
+  );
+}
+
+// Achievements & sharing. The organising idea is that a raw share count is a
+// vanity number — it goes up simply because more cards get minted — so every
+// figure here that can be a rate is one, with cards HELD as the denominator.
+// Whether the six-hourly SP pipeline is actually working. This exists because
+// sync-attendance-records failed 31 runs in a row over eight days and the only
+// evidence was one line per run in a 4,700-line log file.
+function PipelineHealth({ data }) {
+  if (!data?.available) return null;
+  const when = (t) => t ? new Date(t).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : 'never';
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Pipeline health</h2>
+        <span className={data.alerting ? 'error' : 'muted'}>
+          {data.alerting ? `${data.alerting} step(s) failing repeatedly` : 'all steps healthy'}
+        </span>
+      </div>
+      <table className="table">
+        <thead><tr><th>Step</th><th>Status</th><th>Consecutive failures</th><th>Last run</th><th>Last ok</th></tr></thead>
+        <tbody>
+          {data.steps.map(s => (
+            <tr key={s.name} className={s.consecutiveFailures >= 2 ? 'step-alert' : ''}>
+              <td>{s.name}</td>
+              <td>{s.status === 'ok' ? 'ok' : <b className="error">failed</b>}</td>
+              <td>{s.consecutiveFailures > 0 ? <b className="error">{s.consecutiveFailures}</b> : '—'}</td>
+              <td>{when(s.lastRun)}</td>
+              <td>{s.lastOk ? when(s.lastOk) : <b className="error">never</b>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function AdminAchievements({ data, reigns }) {
+  if (!data) return <section className="panel empty">Loading achievement data…</section>;
+  const d = (x) => x ? new Date(x).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+  const r = data.reach || {};
+  const pct = (n) => `${n}%`;
+  const hrs = data.medianHoursToShare;
+  const latency = hrs === null || hrs === undefined ? '—'
+    : hrs < 48 ? `${hrs} h` : `${Math.round(hrs / 24)} d`;
+
+  return (
+    <>
+      <section className="panel">
+        <h2>Achievements &amp; sharing</h2>
+        <div className="ach-stats">
+          <div><span>Cards held</span><strong>{data.achievementsHeld}</strong></div>
+          <div><span>Cards shared</span><strong>{data.achievementsShared}</strong><em>{pct(data.shareRatePct)} of held</em></div>
+          <div><span>Share actions</span><strong>{data.totalShares}</strong><em>{data.last7Days} in last 7 days</em></div>
+          <div><span>Students sharing</span><strong>{data.sharers}</strong></div>
+          <div><span>Median earn → share</span><strong>{latency}</strong></div>
+          <div><span>Captions rewritten</span><strong>{pct(data.captionEditedPct)}</strong></div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>By category</h2>
+          <span className="muted">Share rate = distinct cards shared ÷ cards held, so categories that mint more aren't flattered.</span>
+        </div>
+        <table className="table">
+          <thead><tr><th>Category</th><th>Held</th><th>Shared</th><th>Share rate</th><th>Share actions</th><th>Views</th></tr></thead>
+          <tbody>
+            {(data.categories || []).map(c => (
+              <tr key={c.key}>
+                <td>{c.label}</td><td>{c.held}</td><td>{c.sharedCards}</td>
+                <td><b>{pct(c.shareRatePct)}</b></td><td>{c.shares}</td><td>{c.views}</td>
+              </tr>
+            ))}
+            {!(data.categories || []).length && <tr><td colSpan={6} className="muted">No cards issued yet.</td></tr>}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel">
+        <h2>By placing</h2>
+        <p className="muted">Whether a 1st is posted more readily than a 3rd — all three carry the same title, so this is the only place the difference shows.</p>
+        <table className="table">
+          <thead><tr><th>Place</th><th>Held</th><th>Share actions</th><th>Share rate</th></tr></thead>
+          <tbody>
+            {(data.byPlace || []).map(p => (
+              <tr key={p.place}><td>{['', '1st', '2nd', '3rd'][p.place]}</td><td>{p.held}</td><td>{p.shares}</td><td><b>{pct(p.shareRatePct)}</b></td></tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Board reigns</h2>
+          <span className="muted">Who has held the top of each all-time board, and for how long.</span>
+        </div>
+        <p className="muted">
+          An all-time board never settles while the programme runs, so the top spot is recorded as a dated
+          reign rather than an outright title. A reign earns a card once it has lasted <b>7 days</b>; shorter
+          ones are still kept here, which is what makes the churn visible.
+        </p>
+        <div className="ach-stats">
+          <div><span>Leadership changes</span><strong>{reigns?.total ?? 0}</strong></div>
+          <div><span>Median reign</span><strong>{reigns?.medianDays == null ? '—' : `${reigns.medianDays} d`}</strong><em>completed only</em></div>
+          <div><span>Currently reigning</span><strong>{reigns?.current?.length ?? 0}</strong><em>one per board</em></div>
+        </div>
+        <table className="table">
+          <thead><tr><th>Board</th><th>Holder</th><th>From</th><th>To</th><th>Days</th><th>SP</th><th>Card</th></tr></thead>
+          <tbody>
+            {(reigns?.history || []).map((r, i) => (
+              <tr key={i}>
+                <td>{r.board}</td><td>{r.name || '—'}</td><td>{d(r.from)}</td>
+                <td>{r.current ? <b>still reigning</b> : d(r.to)}</td>
+                <td>{r.days}</td><td>{r.sp}</td>
+                <td>{r.awarded ? 'yes' : <span className="muted">too short</span>}</td>
+              </tr>
+            ))}
+            {!(reigns?.history || []).length && <tr><td colSpan={7} className="muted">No one has topped a board yet.</td></tr>}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Reach</h2>
+          <span className="muted">Did the posts get looked at?</span>
+        </div>
+        <div className="ach-stats">
+          <div><span>Verify page views</span><strong>{r.views ?? 0}</strong><em>humans only</em></div>
+          <div><span>Unique viewer-days</span><strong>{r.uniqueViewerDays ?? 0}</strong></div>
+          <div><span>Views per share</span><strong>{r.viewsPerShare ?? 0}</strong></div>
+          <div><span>Crawler hits</span><strong>{r.botViews ?? 0}</strong><em>excluded above</em></div>
+          <div><span>Bad codes</span><strong>{r.notFound ?? 0}</strong></div>
+        </div>
+        {!!(r.byRef || []).length && (
+          <table className="table">
+            <thead><tr><th>Came from</th><th>Views</th></tr></thead>
+            <tbody>{r.byRef.map(x => <tr key={x.ref}><td>{x.ref}</td><td>{x.count}</td></tr>)}</tbody>
+          </table>
+        )}
+        <p className="muted">
+          A viewer-day is one device on one day, counted through a hash that is thrown away nightly — it cannot
+          identify anyone and cannot follow the same person to the next day. Verify-page visitors are members of
+          the public, not study participants, so no IP or cookie is stored.
+        </p>
+      </section>
+
+      <section className="panel">
+        <h2>Where cards go</h2>
+        <div className="ach-stats">
+          {Object.entries(data.byPlatform || {}).map(([k, v]) => (
+            <div key={k}><span>{k}</span><strong>{v}</strong></div>
+          ))}
+          {!Object.keys(data.byPlatform || {}).length && <p className="muted">Nothing shared yet.</p>}
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Top sharers</h2>
+        <table className="table">
+          <thead><tr><th>Name</th><th>Email</th><th>Share actions</th><th>Cards</th><th>Last</th></tr></thead>
+          <tbody>
+            {(data.topSharers || []).map(s => (
+              <tr key={s.email}><td>{s.name}</td><td>{s.email}</td><td>{s.shares}</td><td>{s.achievements}</td>
+                <td>{s.last ? new Date(s.last).toLocaleDateString('en-IN') : '—'}</td></tr>
+            ))}
+            {!(data.topSharers || []).length && <tr><td colSpan={5} className="muted">No shares yet.</td></tr>}
+          </tbody>
+        </table>
+      </section>
+    </>
   );
 }
 
@@ -1543,6 +2214,158 @@ function AllStudentsPanel({ stats, onStudent, auth }) {
   );
 }
 
+
+// ── E2 goal-card (experiment, pre-reg 2026-09-07) ────────────────────────────
+// Pop-up shown to arms B/C at login while the experiment window is open and the
+// student has no journey goal yet (all gated server-side via student.e2Card).
+// Asks for ONE date — the student's current active phase — settable in one tap,
+// skippable in one tap. Shown at most once per calendar day (localStorage),
+// permanently gone once any goal is set. Every impression/skip/set is logged
+// server-side; the log write never blocks the UI.
+const E2_PHASES = [
+  ['standup', 'standupBy', 'your Stand-ups'],
+  ['vibe', 'vibeBy', 'your ViBe courses'],
+  ['spa', 'spaBy', 'your SPA practice'],
+  ['project', 'projectBy', 'your Project']
+];
+
+function GoalCardModal({ student, surveyBlocking }) {
+  const e2 = student?.e2Card;
+  const [state, setState] = useState('idle'); // idle | open | done | closed
+  const [pick, setPick] = useState(null);
+  const [date, setDate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const logEvent = (event, extra = {}) => {
+    fetch(`${API}/e2/card-event`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, phase: pick?.phaseKey, ...extra })
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!e2 || surveyBlocking) return;
+    const todayKey = `e2CardShown:${new Date().toISOString().slice(0, 10)}`;
+    if (localStorage.getItem('e2CardDone') || localStorage.getItem(todayKey)) return;
+    let active = true;
+    (async () => {
+      try {
+        const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(student.email)}`);
+        const j = await r.json();
+        if (!active || !j?.eligible) return;
+        // First phase with no goal yet and still settable (not achieved/active).
+        const next = E2_PHASES
+          .map(([phaseKey, field, label]) => ({ phaseKey, field, label, goal: j.goals?.[phaseKey] }))
+          .find(p => p.goal && !j.plan?.[p.field] && p.goal.status !== 'achieved' && p.goal.status !== 'active');
+        if (!next) { localStorage.setItem('e2CardDone', '1'); return; }
+        setPick(next);
+        setState('open');
+        localStorage.setItem(todayKey, '1');
+        fetch(`${API}/e2/card-event`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'impression', phase: next.phaseKey })
+        }).catch(() => {});
+      } catch { /* any failure -> no card today */ }
+    })();
+    return () => { active = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (state !== 'open' && state !== 'done') return null;
+
+  const save = async () => {
+    if (!pick || !date) return;
+    // The picker's min already blocks earlier dates, but a typed date can slip
+    // past it on some browsers — enforce the realistic minimum here too.
+    if (pick.goal.minDate && date < pick.goal.minDate) {
+      setErr(`That date is earlier than realistically possible — the earliest is ${fmtDate(pick.goal.minDate)}.`);
+      return;
+    }
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`${API}/journey/plan`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: student.email, [pick.field]: date })
+      });
+      const j = await r.json();
+      if (!r.ok) { setErr(j.error || 'Could not save that date — please try another.'); setBusy(false); return; }
+      logEvent('set', { value: date });
+      localStorage.setItem('e2CardDone', '1');
+      setState('done');
+    } catch {
+      setErr('Network error — please try again.'); setBusy(false);
+    }
+  };
+
+  const skip = () => { logEvent('skip'); setState('closed'); };
+
+  return (
+    <div className="survey-overlay" role="dialog" aria-modal="true" aria-labelledby="e2-title">
+      <div className="survey-modal e2-card">
+        {state === 'done' ? (
+          <>
+            <div className="survey-head">
+              <h2 id="e2-title">Goal set 🎯</h2>
+              <p>
+                Your target date is saved{e2.sp > 0 ? ` and your +${e2.sp} SP will appear with the next points refresh` : ''}.
+                Track your pace any time in the <strong>My Journey</strong> tab.
+              </p>
+            </div>
+            <div className="survey-actions">
+              <button type="button" className="survey-primary" onClick={() => setState('closed')}>Done</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="survey-head">
+              <h2 id="e2-title">Set your goal 🎯</h2>
+              <p>
+                Pick your own target date for {pick.label}. The pace bar in
+                <strong> My Journey</strong> will then show exactly what "on track"
+                means for you each week.
+              </p>
+              {e2.sp > 0 && (
+                <p className="e2-sp">Set it now and earn a one-time <strong>+{e2.sp} SP</strong>.</p>
+              )}
+            </div>
+            {pick.goal.progressPct != null && (
+              <div className="e2-progress">
+                <span className="jr-goal-meta">
+                  {pick.goal.unit === '%'
+                    ? `You're at ${pick.goal.progressPct}% — ${pick.goal.remainingPct}% to go.`
+                    : `You have ${pick.goal.current} of ${pick.goal.target} ${pick.goal.unit} — ${pick.goal.remaining} ${pick.goal.unit} to go.`}
+                </span>
+                <div className="jr-progress"><i style={{ width: `${pick.goal.progressPct}%` }} /></div>
+              </div>
+            )}
+            <div className="e2-row">
+              <input
+                type="date"
+                min={pick.goal.minDate || undefined}
+                max={pick.goal.maxDate || undefined}
+                value={date}
+                onChange={e => setDate(e.target.value)}
+              />
+              <button type="button" className="survey-primary" disabled={!date || busy} onClick={save}>
+                {busy ? 'Saving…' : 'Set my goal'}
+              </button>
+            </div>
+            {pick.goal.minDate && (
+              <span className="jr-goal-hint">
+                Earliest realistic finish: {fmtDate(pick.goal.minDate)} — earlier dates can't be picked.
+                {pick.goal.paceHint ? ` ${pick.goal.paceHint}` : ''}
+              </span>
+            )}
+            {err && <p className="survey-note">{err}</p>}
+            <div className="survey-actions">
+              <button type="button" className="survey-ghost" onClick={skip}>Skip for now</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', completedKey = 'surveyCompleted' }) {
   const [checking, setChecking] = useState(false);

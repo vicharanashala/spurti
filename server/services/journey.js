@@ -5,14 +5,27 @@
 // SP attribution per phase:
 //   - Standups: ALREADY awarded (attendance + poll SPTransactions) — we just aggregate.
 //   - ViBe:     net SP from settled commitments (+ the weekly floor) — from the ViBe module.
-//   - SPA / Projects: rule TBD until Samagama data lands — shown as "coming soon" (sp = 0).
+//   - SPA:      ALREADY awarded by the pipeline rubric (category 'spa') — we aggregate;
+//               progress comes from the rubric's spaprogresses summary.
+//   - Projects: progress from the Samagama act_pull_requests / act_pr_reviews mirrors;
+//               SP rule still TBD (sp = 0 until decided).
 import AttendanceRecord from '../models/AttendanceRecord.js';
 import PollRecord from '../models/PollRecord.js';
 import SPTransaction from '../models/SPTransaction.js';
 import Commitment from '../models/Commitment.js';
 import JourneyPlan from '../models/JourneyPlan.js';
-import JourneyProgress from '../models/JourneyProgress.js';
+import Student from '../models/Student.js';
+import SpaProgress from '../models/SpaProgress.js';
+import { ActPullRequest, ActPrReview } from '../models/ActMirrors.js';
 import { buildVibeState, isVibeEligible } from './vibe.js';
+
+// Count distinct GitHub PR links in the free-text submission field; a submission
+// with no parseable link still counts as 1 (the form requires real PR work).
+export function countPrLinks(text) {
+  if (!text) return 0;
+  const m = String(text).match(/github\.com\/[^\s,]+\/pull\/\d+/gi);
+  return m ? new Set(m.map(s => s.toLowerCase())).size : 1;
+}
 
 export const SPA_TOTAL = 53;
 export const STANDUP_MINUTES_TARGET = 3600;   // cumulative Zoom minutes (~120 min/week)
@@ -57,30 +70,42 @@ export async function buildJourneyState(student) {
     sp: settled.reduce((a, b) => a + (b.resultDelta || 0), 0)  // net SP from settled commitments
   };
 
-  // --- Phase 3 & 4: SPA + Projects — PLACEHOLDER (Samagama data + SP rule TBD) ---
-  const jp = (await JourneyProgress.findOne({ email }).lean()) || {};
+  // --- Phase 3: SPA — live from the rubric's spaprogresses summary (same source
+  // as the SPA Points tab); SP = what the rubric actually credited in the ledger ---
+  const spaProg = await SpaProgress.findOne({ email }).lean();
   const spa = {
-    solved: jp.spaSolved || 0,
-    total: jp.spaTotal || SPA_TOTAL,
-    spaPoints: jp.spaPoints || 0,
-    sp: 0, pending: true              // SP rule decided once Samagama data arrives
+    solved: Math.min(spaProg?.learnValidated || 0, SPA_TOTAL),
+    total: SPA_TOTAL,
+    taught: spaProg?.teachValidated || 0,
+    sp: spByCat(['spa']),
+    pending: false
   };
+
+  // --- Phase 4: Projects — live from the Samagama PR-submission mirror.
+  // SP = +500 on mentor-completed review, scored by the rubric (category 'project'). ---
+  const [prSub, prRev] = await Promise.all([
+    ActPullRequest.findOne({ email }).lean(),
+    ActPrReview.findOne({ email }).lean()
+  ]);
   const projects = {
-    prsRaised: jp.prsRaised || 0,
-    prsMerged: jp.prsMerged || 0,
-    sp: 0, pending: true              // SP rule decided once Samagama data arrives
+    submitted: !!prSub,
+    prsRaised: prSub ? countPrLinks(prSub.branchOrPrLinks) : 0,
+    reviewStatus: prRev?.reviewStatus || null,
+    sp: spByCat(['project']),
+    pending: false
   };
 
   const plan = await JourneyPlan.findOne({ email }).lean();
 
-  // Per-phase goal status + pace toward the student's target date. ViBe has live
-  // completion %; SPA/Projects are pending (date countdown only until Samagama data).
+  // Per-phase goal status + pace toward the student's target date. All four phases
+  // now have live progress (ViBe from the API mirror, SPA from the rubric summary,
+  // Projects from the Samagama PR-submission mirror).
   const vibeOverall = Math.round(vibe.ladder.reduce((a, l) => a + l.pct, 0) / (vibe.ladder.length || 1));
   const goals = {
     standup: phaseGoal({ targetDate: plan?.standupBy, current: standups.zoomMinutes, target: STANDUP_MINUTES_TARGET, unit: 'min', daysPerWeek: STANDUP_DAYS_PER_WEEK }),
     vibe: phaseGoal({ targetDate: plan?.vibeBy, current: vibeOverall, target: 100, unit: '%' }),
-    spa: phaseGoal({ targetDate: plan?.spaBy, pending: true }),
-    project: phaseGoal({ targetDate: plan?.projectBy, pending: true })
+    spa: phaseGoal({ targetDate: plan?.spaBy, current: spa.solved, target: SPA_TOTAL, unit: 'solved' }),
+    project: phaseGoal({ targetDate: plan?.projectBy, current: projects.prsRaised, target: 1, unit: 'PR' })
   };
   // Attach realistic date bounds so a target can't be set too soon (superficial) or
   // too far out (delayed). Standups is pace-capped at ~60 min per working day.
@@ -171,11 +196,12 @@ export async function saveJourneyPlan(email, incoming = {}) {
   const existing = await JourneyPlan.findOne({ email }).lean();
   const today = startOfToday();
   // Can't set a standup goal once the 3600-min target is already met (achieved).
-  let standupDone = false;
+  let minutes = null;
   if (incoming.standupBy) {
     const att = await AttendanceRecord.find({ email }).lean();
-    standupDone = att.reduce((a, r) => a + (r.attendedMinutes || 0), 0) >= STANDUP_MINUTES_TARGET;
+    minutes = att.reduce((a, r) => a + (r.attendedMinutes || 0), 0);
   }
+  const standupDone = minutes != null && minutes >= STANDUP_MINUTES_TARGET;
   const set = {};
   for (const f of ['standupBy', 'vibeBy', 'spaBy', 'projectBy']) {
     const cur = existing?.[f] ? new Date(existing[f]) : null;
@@ -183,6 +209,30 @@ export async function saveJourneyPlan(email, incoming = {}) {
     if (locked) continue;
     if (f === 'standupBy' && standupDone) continue;           // already achieved → not settable
     if (Object.prototype.hasOwnProperty.call(incoming, f)) set[f] = incoming[f] ? new Date(incoming[f]) : null;
+  }
+  // Snapshot the remaining work at set time (see JourneyPlan.atSet). Written only
+  // when a date is actually being SET (not cleared), once per lock cycle.
+  const now = new Date();
+  if (set.standupBy) {
+    set['atSet.standup'] = { remainingMin: Math.max(0, STANDUP_MINUTES_TARGET - (minutes ?? 0)), at: now };
+  }
+  if (set.vibeBy) {
+    const student = await Student.findOne({ email }).lean();
+    if (student) {
+      const v = await buildVibeState(student);
+      const ladder = isVibeEligible(student) ? v.ladder : v.ladder.filter(l => l.key !== 'onboarding');
+      const pct = Math.round(ladder.reduce((a, l) => a + (l.pct || 0), 0) / (ladder.length || 1));
+      set['atSet.vibe'] = { remainingPct: Math.max(0, 100 - pct), at: now };
+    }
+  }
+  if (set.spaBy) {
+    const prog = await SpaProgress.findOne({ email }).lean();
+    const solved = Math.min(prog?.learnValidated || 0, SPA_TOTAL);
+    set['atSet.spa'] = { remainingCount: Math.max(0, SPA_TOTAL - solved), at: now };
+  }
+  if (set.projectBy) {
+    const prSub = await ActPullRequest.findOne({ email }).lean();
+    set['atSet.project'] = { prsRaised: prSub ? countPrLinks(prSub.branchOrPrLinks) : 0, at: now };
   }
   if (Object.keys(set).length) await JourneyPlan.updateOne({ email }, { $set: set }, { upsert: true });
 }

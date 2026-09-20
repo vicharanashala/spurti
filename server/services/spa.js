@@ -13,7 +13,7 @@ export function isSpaEligible() { return true; } // SPA SP is a universal featur
 // LOCKED scheme (see memory: spa-sp-award-scheme).
 export const CONFIG = {
   learnUnit: 5,  learnCap: 50,   // +5 SP per validated question learned, cap 50  → max 250
-  teachUnit: 8,  teachCap: 30,   // +8 SP per validated endorsement given, cap 30 → max 240
+  teachUnit: 10, teachCap: 25,   // +10 SP per validated endorsement given, cap 25 → max 250 (8×30 → 10×25 rescore, 2026-09-05)
   fraudRate: 0.5,                // genuine fraud  → -50% of current SP (one-time)
   auditRate: 0.2                 // audit failure  → -20% of current SP (one-time)
 };
