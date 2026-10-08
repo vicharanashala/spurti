@@ -29,6 +29,8 @@ import { buildStandupState, placeStandup, settleStandupDemo } from './services/s
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 import { buildSpaState } from './services/spa.js';
 import { buildTrajectoryState } from './services/trajectory.js';
+import { buildGhostState } from './services/ghost.js';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -421,6 +423,30 @@ api.get('/trajectory/state', async (req, res) => {
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await buildTrajectoryState(student));
 });
+
+// GET /api/trajectory/ghost - Fetches benchmark tracking lines using the correct api instance
+api.get('/api/trajectory/ghost', async (req, res) => {
+  try {
+    const ghostType = req.query.type || 'club3600';
+    const studentEmail = req.user ? req.user.email : null; 
+
+    // Handle local development student search override configurations
+    if (!studentEmail && ALLOW_STUDENT_SEARCH && req.query.email) {
+      const ghostData = await buildGhostState(req.query.email, ghostType);
+      return res.json({ success: true, ...ghostData });
+    }
+
+    if (!studentEmail) {
+      return res.status(401).json({ success: false, error: 'Unauthorized: Missing active student tracking session' });
+    }
+
+    const ghostData = await buildGhostState(studentEmail, ghostType);
+    res.json({ success: true, ...ghostData });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 
 // ---- Standup commitments (weekly, attendance-only; keep-the-stake) -----------
 api.get('/standup/state', async (req, res) => {

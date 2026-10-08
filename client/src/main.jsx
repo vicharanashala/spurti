@@ -859,14 +859,43 @@ function LeaderboardPanel({ student }) {
 // means (reference lines cached in TrajectorySnapshot; own line built live from the ledger).
 function TrajectoryModal({ student, onClose }) {
   const [data, setData] = useState(null);
+  // Ghost Mode state management variables matching codebase constraints
+  const [ghostType, setGhostType] = useState('club3600');
+  const [ghostData, setGhostData] = useState([]);
+  const [showGhost, setShowGhost] = useState(true);
+
   useEffect(() => {
-    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`).then(r => r.json()).then(setData);
+    // 1. Fetch user trajectory parameters
+    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`)
+      .then(r => r.json())
+      .then(setData);
   }, [student.email]);
 
+  useEffect(() => {
+    // 2. Fetch the pacing timeline track from our endpoint whenever the selection toggles
+    fetch(`${API}/trajectory/ghost?email=${encodeURIComponent(student.email)}&type=${ghostType}`)
+      .then(r => r.json())
+      .then(res => {
+        if (res.success && res.timeline) {
+          setGhostData(res.timeline);
+        }
+      })
+      .catch(err => console.error("Ghost tracking load failure:", err));
+  }, [student.email, ghostType]);
+
+  // Combine standard trajectories with the optional Ghost line
   const series = data ? [
     { key: 'you', label: 'You', color: 'var(--primary)', points: data.you, width: 3, dots: true },
     { key: 'cohort', label: 'Cohort average', color: '#94a3b8', points: data.cohort, width: 2, dash: '5 4' },
-    { key: 'group', label: data.groupLabel ? `Your group (${data.groupLabel})` : 'Your group', color: '#8b5cf6', points: data.group, width: 2 }
+    { key: 'group', label: data.groupLabel ? `Your group (${data.groupLabel})` : 'Your group', color: '#8b5cf6', points: data.group, width: 2 },
+    ...(showGhost && ghostData && ghostData.length ? [{
+      key: 'ghost',
+      label: ghostType === 'top10' ? 'Top 10% Ghost' : '3,600-Min Club Ghost',
+      color: '#6366f1',
+      points: ghostData, // Array containing week and sp markers e.g., [{ week: 1, sp: 120 }]
+      width: 2,
+      dash: '4 4'
+    }] : [])
   ].filter(s => s.points && s.points.length) : [];
 
   const weeks = data?.weeks || 10;
@@ -892,9 +921,45 @@ function TrajectoryModal({ student, onClose }) {
           <p className="muted">Not enough data yet — check back after your first week.</p>
         ) : (
           <>
-            <div className="traj-legend">
-              {series.map(s => <span key={s.key} className="traj-key"><i style={{ background: s.color }} />{s.label}</span>)}
+            {/* Inline Toggle Panel inserted cleanly into the modal window layout */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'between', gap: '12px', background: '#0f172a', padding: '10px', borderRadius: '6px', border: '1px solid #1e293b', marginBottom: '12px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '13px', color: '#cbd5e1', userSelect: 'none' }}>
+                <input 
+                  type="checkbox" 
+                  checked={showGhost} 
+                  onChange={(e) => setShowGhost(e.target.checked)}
+                  style={{ marginRight: '8px', accentColor: '#4f46e5' }}
+                />
+                Enable Async Pacing ("Ghost Mode")
+              </label>
+              
+              {showGhost && (
+                <select 
+                  value={ghostType} 
+                  onChange={(e) => setGhostType(e.target.value)}
+                  style={{ background: '#1e293b', border: '1px solid #334155', color: '#f8fafc', fontSize: '12px', padding: '4px 8px', borderRadius: '4px', outline: 'none' }}
+                >
+                  <option value="club3600">3,600-Minute Club Track</option>
+                  <option value="top10">Top 10% Performance Target</option>
+                </select>
+              )}
             </div>
+
+            <div className="traj-legend">
+                {series.map(s => (
+                  <span key={s.key} className="traj-key">
+                    <i style={{ 
+                      backgroundColor: s.key === 'ghost' ? '#6366f1' : s.color, 
+                      display: 'inline-block', 
+                      width: '12px', 
+                      height: '4px', 
+                      marginRight: '6px',
+                      verticalAlign: 'middle'
+                    }} />
+                    {s.label}
+                  </span>
+                ))}
+              </div>
             <div className="traj-chart">
               <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="SP trajectory chart">
                 {yTicks.map(v => (
@@ -907,6 +972,7 @@ function TrajectoryModal({ student, onClose }) {
                 <text x={padL + plotW / 2} y={H - 5} textAnchor="middle" className="traj-axis-title">Weeks since you joined</text>
                 {series.map(s => (
                   <g key={s.key}>
+                    {/* The polyline automatically plots the ghost mapping because of our series injection hook above */}
                     <polyline points={s.points.map(p => `${sx(p.week)},${sy(p.sp)}`).join(' ')}
                       fill="none" stroke={s.color} strokeWidth={s.width} strokeDasharray={s.dash || ''}
                       strokeLinejoin="round" strokeLinecap="round" />
@@ -979,6 +1045,11 @@ function Announcements({ student }) {
 }
 
 function StudentPulse({ profile, newAchievements = 0, canShareAchievements = false, onOpenAchievements }) {
+  const { student, cohort, transactions } = profile;
+  const [showTraj, setShowTraj] = useState(false);
+  const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
+  const many = newAchievements > 1;
+ main
   const { student, cohort, transactions } = profile;
   const [showTraj, setShowTraj] = useState(false);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
