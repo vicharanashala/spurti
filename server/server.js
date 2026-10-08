@@ -4,7 +4,6 @@ import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-
 import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
@@ -21,6 +20,10 @@ import Announcement from './models/Announcement.js';
 import AnnouncementAck from './models/AnnouncementAck.js';
 import JourneyPlan from './models/JourneyPlan.js';
 import E2CardEvent from './models/E2CardEvent.js';
+import SpaProgress from './models/SpaProgress.js';
+
+import { simulateSp } from './services/simulator.js';
+
 import { buildAchievementState, verifyAchievement } from './services/achievements.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
@@ -373,7 +376,153 @@ async function vibeStudent(req) {
   if (!email) return null;
   return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
 }
+// ---- What-If Simulator ----------------------------------------------------
+api.get('/simulator/context', async (req, res) => {
+  const student = await vibeStudent(req);
 
+  if (!student) {
+    return res.status(404).json({ error: 'Student not found' });
+  }
+  const email = normalizeEmail(student.email);
+
+  const [spaProgress, queryTxns] = await Promise.all([
+    SpaProgress.findOne({ email }).lean(),
+    SPTransaction.find({ email, category: 'query' }).lean(),
+  ]);
+
+  // Count only positive query SP earned.
+
+
+  // Count only positive query SP earned.
+  // Query penalties should not reduce the activity-cap progress.
+  const querySp = Math.min(
+    200,
+    queryTxns.reduce(
+      (sum, txn) => sum + Math.max(0, Number(txn.appliedDelta || 0)),
+      0
+    )
+  );
+
+  const studentState = {
+    currentSp: Number(student.totalSp || 0),
+    highestSpEver: Number(
+      student.highestSpEver ?? student.totalSp ?? 0
+    ),
+    spaLearn: Math.max(
+      0,
+      Math.floor(Number(spaProgress?.learnValidated || 0))
+    ),
+    spaTeach: Math.max(
+      0,
+      Math.floor(Number(spaProgress?.teachValidated || 0))
+    ),
+    querySp,
+  };
+
+  const simulation = simulateSp(studentState, {});
+
+  res.json({
+    current: simulation.current,
+    progress: {
+      spaLearn: studentState.spaLearn,
+      spaTeach: studentState.spaTeach,
+      querySp: studentState.querySp,
+    },
+    headroom: simulation.headroom,
+    milestones: simulation.milestones,
+  });
+});
+api.post('/simulator/simulate', async (req, res) => {
+  const student = await vibeStudent(req);
+
+  if (!student) {
+    return res.status(404).json({ error: 'Student not found' });
+  }
+
+  const {
+    sessions = 0,
+    attendancePct = 0,
+    pollPct = 0,
+    additionalSpaLearn = 0,
+    additionalSpaTeach = 0,
+    additionalQueries = 0,
+  } = req.body || {};
+
+  const integerFields = {
+    sessions,
+    additionalSpaLearn,
+    additionalSpaTeach,
+    additionalQueries,
+  };
+
+  for (const [field, value] of Object.entries(integerFields)) {
+    if (!Number.isInteger(value) || value < 0) {
+      return res.status(400).json({
+        error: `${field} must be a non-negative integer`,
+      });
+    }
+  }
+
+  const percentageFields = {
+    attendancePct,
+    pollPct,
+  };
+
+  for (const [field, value] of Object.entries(percentageFields)) {
+    if (
+      typeof value !== 'number' ||
+      !Number.isFinite(value) ||
+      value < 0 ||
+      value > 100
+    ) {
+      return res.status(400).json({
+        error: `${field} must be a number between 0 and 100`,
+      });
+    }
+  }
+
+  const email = normalizeEmail(student.email);
+
+  const [spaProgress, queryTxns] = await Promise.all([
+    SpaProgress.findOne({ email }).lean(),
+    SPTransaction.find({ email, category: 'query' }).lean(),
+  ]);
+
+  const querySp = Math.min(
+    200,
+    queryTxns.reduce(
+      (sum, txn) => sum + Math.max(0, Number(txn.appliedDelta || 0)),
+      0
+    )
+  );
+
+  const studentState = {
+    currentSp: Number(student.totalSp || 0),
+    highestSpEver: Number(
+      student.highestSpEver ?? student.totalSp ?? 0
+    ),
+    spaLearn: Math.max(
+      0,
+      Math.floor(Number(spaProgress?.learnValidated || 0))
+    ),
+    spaTeach: Math.max(
+      0,
+      Math.floor(Number(spaProgress?.teachValidated || 0))
+    ),
+    querySp,
+  };
+
+  const result = simulateSp(studentState, {
+    sessions,
+    attendancePct,
+    pollPct,
+    additionalSpaLearn,
+    additionalSpaTeach,
+    additionalQueries,
+  });
+
+  res.json(result);
+});
 api.get('/vibe/state', async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
