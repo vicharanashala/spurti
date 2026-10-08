@@ -29,6 +29,7 @@ import { buildStandupState, placeStandup, settleStandupDemo } from './services/s
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 import { buildSpaState } from './services/spa.js';
 import { buildTrajectoryState } from './services/trajectory.js';
+import { buildTodayQuest, dayKeyIST } from './services/quests.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -365,6 +366,32 @@ api.get('/me', async (req, res) => {
   if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
   if (student.status === 'excused') return res.json({ authenticated: true, ...excusedPayload(student) });
   res.json({ authenticated: true, profile: await studentPayload(student) });
+});
+
+// Today's Quest — daily missions overlay. Cookie identity only (never ?email=).
+// Completing a quest does not write SP.
+api.get('/quest/today', async (req, res) => {
+  try {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return res.status(401).json({ authenticated: false });
+    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+    if (!student) return res.status(404).json({ authenticated: false, error: 'Student not found' });
+    if (student.status === 'excused') {
+      return res.json({
+        authenticated: true,
+        excused: true,
+        dayKey: dayKeyIST(new Date()),
+        completed: 0,
+        total: 3,
+        missions: [],
+        headline: "Today's Quest is paused while this account is excused."
+      });
+    }
+    res.json({ authenticated: true, excused: false, ...(await buildTodayQuest(student)) });
+  } catch (err) {
+    console.error('quest/today failed:', err?.message);
+    res.status(500).json({ error: "Could not load today's quest" });
+  }
 });
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
