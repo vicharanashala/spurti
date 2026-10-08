@@ -18,6 +18,7 @@ import Student from '../models/Student.js';
 import SpaProgress from '../models/SpaProgress.js';
 import { ActPullRequest, ActPrReview } from '../models/ActMirrors.js';
 import { buildVibeState, isVibeEligible } from './vibe.js';
+import { computeStreak, orderSessionLabels } from './streaks.js';
 
 // Count distinct GitHub PR links in the free-text submission field; a submission
 // with no parseable link still counts as 1 (the form requires real PR work).
@@ -49,7 +50,8 @@ export async function buildJourneyState(student) {
     pollsAttempted: polls.reduce((a, p) => a + (p.attemptedQuestions || 0), 0),
     pollsTotal: polls.reduce((a, p) => a + (p.totalQuestions || 0), 0),
     spAttendance: spByCat(['attendance']),
-    spPolls: spByCat(['poll'])
+    spPolls: spByCat(['poll']),
+    streak: computeStreak(att, orderSessionLabels(txns.filter(t => t.category === 'attendance')))
   };
   standups.sp = standups.spAttendance + standups.spPolls;
 

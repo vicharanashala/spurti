@@ -149,7 +149,10 @@ server/
   migrations/          dated run-once scripts (run BEFORE deploying the code that needs them)
   data/cards/          generated achievement card PNGs — gitignored
 client/
-  src/main.jsx         the entire UI (~2,400 lines, single file): tabs, cards, admin panels
+  src/main.jsx         the screens and their data fetching (~2,700 lines, one file)
+  src/ui.jsx           presentational primitives: rings, charts, icons, confetti, toasts, tabs
+  src/theme.css        the dashboard's look (.ui-* classes, scoped to .ui-app; Admin uses styles.css)
+  src/progress.js      pure helpers behind the visuals (league bands, level maths, "points went up")
   src/shareCard.js     the share card, drawn to canvas in the student's own browser
   src/vledLogo.js      the logo as a data URI (a remote image would taint the canvas)
   vite.config.js       dev server on 5291, proxies /api and /spurti to 5290
@@ -235,6 +238,7 @@ Variables the web app and the refresh read:
 |---|---|---|
 | `MONGO_URI` | local `analysis_summership` | Database. Production uses `sakshi_spurti`. |
 | `PORT` | `5290` | Production runs on 5003. |
+| `MONGO_POOL_SIZE` | `50` | Max Mongo connections per Node process. Total = this × processes; size it to the database. |
 | `ALLOW_STUDENT_SEARCH` | `true` | Look up students by email. `false` in production — privacy. |
 | `SAMAGAMA_AUTH_URL` | `http://127.0.0.1:5001/api/auth/me` | Where the student's cookie is validated. |
 | `ADMIN_EMAIL`, `ADMIN_TOKEN` | unset | Admin routes stay closed until both are set. Sent as `x-admin-email` / `x-admin-token`. |
@@ -335,8 +339,10 @@ node --test --watch test/*.test.js    # while working
 
 Node's built-in `node:test` — no test dependencies, which keeps the dependency list at four
 packages (`express`, `mongoose`, `cors`, `dotenv`). Covered: levels, leagues, onboarding groups,
-weekly totals, rank ties, podium eligibility, the share caption. Not covered: HTTP routes, anything
-needing a database, the React UI, the pipeline. If you add coverage there, say so in the PR.
+weekly totals, rank ties, podium eligibility, the share caption, the resilience helpers in
+`server/lib/`, and how the server behaves with its database down (`test/server.resilience.test.js`
+boots the real app with `SPURTI_NO_START=1` and no Mongo). Not covered: routes' happy paths against
+a real database, the React UI, the pipeline. If you add coverage there, say so in the PR.
 
 ### Things that look arbitrary and are not
 
@@ -353,6 +359,26 @@ needing a database, the React UI, the pipeline. If you add coverage there, say s
 - **Announcements are deactivated, never deleted.** Read receipts point at them.
 - **The certificate snapshot is write-once.** Printed numbers must never drift.
 - **Ranks are not unique** and nothing may be keyed on them.
+
+### Running at scale (tens of thousands of students)
+
+The request path is built so cost does not grow with the size of the cohort:
+
+- **`/me` is per-student work only.** Cohort-wide figures (average, cutoffs, top 50, group top 50)
+  come from a 60-second in-process cache (`loadCohortStats`), not from reading every student. Rank
+  is one indexed count, backed by the `{ totalSp: -1, name: 1 }` index on `Student`.
+- **Sign-in checks are cached** for 60 s per token and de-duplicated, so a dashboard load is one call
+  to Samagama, not one per API request.
+- **Page-view pings are batched** (`server/lib/batchBuffer.js`) into one `insertMany` every 5 s, the
+  buffer is bounded, and the client pings about once a minute, only while the tab is visible.
+- **Failure is contained.** Async handlers are wrapped (`server/lib/asyncRoutes.js`) so a rejected
+  query is one 500, not a hung request; `/api/health` returns 503 when Mongo is down; the Mongo pool
+  and timeouts are bounded (`MONGO_POOL_SIZE`).
+- **The caches are per process.** Run more than one Node process (PM2 cluster) for headroom; each keeps
+  its own copy, which is fine because every cached value is either shared or rebuilt within a minute.
+- **The admin analytics/attendance views** read only the fields they need and are cached for 2 minutes,
+  but they still scan whole collections. Before the cohort is large, move them to aggregation
+  pipelines and paginate the attendance grid.
 
 ## Where it runs
 

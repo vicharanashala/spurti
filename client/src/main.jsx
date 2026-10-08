@@ -1,9 +1,37 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import '@fontsource-variable/plus-jakarta-sans';
 import './styles.css';
+import './theme.css';
+import {
+  Icon, Ring, AreaChart, Chip, Avatar, SkeletonCard, EmptyState, ToastHost, UiTabs, spotlight, useTilt,
+  useCountUp, useSpCelebration, useScrolledPast, burst, toast, PillGroup, CountNum, useTheme, ThemeToggle
+} from './ui.jsx';
+import {
+  TIERS, tierTrack, tierKey, nextLeague, levelProgress, pollSortKey, recentSessionDots, expectedPct, paceTone
+} from './progress.js';
 
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
+
+// "I'm here" ping. Every open tab sends one, so at cohort scale its cost is the
+// number of tabs times how often they fire. About once a minute, spread with random
+// jitter so tens of thousands of tabs don't all fire on the same second, and only
+// while the tab is actually visible — a forgotten background tab sends nothing.
+// Coming back to the tab pings straight away (at most every 20s) so presence is fresh.
+function startPresencePing(send) {
+  let timer = null;
+  let lastSent = 0;
+  const fire = () => { lastSent = Date.now(); send(); };
+  const schedule = () => {
+    timer = setTimeout(() => { if (!document.hidden) fire(); schedule(); }, 55000 + Math.random() * 10000);
+  };
+  const onVisible = () => { if (!document.hidden && Date.now() - lastSent > 20000) fire(); };
+  fire();
+  schedule();
+  document.addEventListener('visibilitychange', onVisible);
+  return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible); };
+}
 
 // /spurti/verify/SPRT-XXXX-XXXX is a public page — the QR on a shared card
 // resolves here, and it must render for someone who has never logged in.
@@ -35,9 +63,7 @@ function AppShell() {
         recordViewed: profile.student.email
       })
     }).catch(() => {});
-    send();
-    const id = setInterval(send, 30000);
-    return () => clearInterval(id);
+    return startPresencePing(send);
   }, [profile]);
 
   useEffect(() => {
@@ -85,7 +111,7 @@ function AppShell() {
     ].some(([cfg, key]) => cfg?.enabled && cfg.formUrl && profile.student && !profile.student[key]);
     return (
       <>
-        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} surveyBlocking={surveyBlocking} />
         <GoalCardModal student={profile.student} surveyBlocking={surveyBlocking} />
         <SurveyModal
           survey={config.survey}
@@ -133,6 +159,31 @@ function AppShell() {
   }} />;
 }
 
+function DemoPicker({ onStudent }) {
+  const [rows, setRows] = useState([]);
+  const [q, setQ] = useState('');
+  useEffect(() => { fetch(`${API}/demo/students`).then(r => r.json()).then(setRows).catch(() => {}); }, []);
+  const open = async (id) => {
+    const res = await fetch(`${API}/confirm`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ studentId: id }) });
+    if (res.ok) onStudent(await res.json());
+  };
+  const shown = rows.filter(r => r.name.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div className="demo-picker">
+      <p className="muted">Open any demo student (no login):</p>
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter students" />
+      <div className="match-list">
+        {shown.map(r => (
+          <button key={r._id} className="match" onClick={() => open(r._id)}>
+            <strong>{r.name}</strong>
+            <span>{r.status === 'excused' ? 'Excused' : `${r.totalSp} SP · Level ${r.level} · ${r.trophyLeague}`}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Landing({ config, onStudent }) {
   const [searchOpen, setSearchOpen] = useState(false);
 
@@ -148,7 +199,9 @@ function Landing({ config, onStudent }) {
             <Info title="How to get points" text="Attend eligible sessions and answer polls to keep your engagement visible." />
             <Info title="Motive" text="To make consistency visible and help the cohort build disciplined learning habits." />
           </div>
-          {config.allowStudentSearch ? (
+          {config.demoMode ? (
+            <DemoPicker onStudent={onStudent} />
+          ) : config.allowStudentSearch ? (
             <button className="primary" onClick={() => setSearchOpen(true)}>Find your Spurti points</button>
           ) : (
             <div className="auth-card inline-auth">
@@ -286,7 +339,31 @@ function SearchModal({ onClose, onStudent }) {
   );
 }
 
-function StudentView({ profile, onBack }) {
+const TAB_ICONS = { bank: 'landmark', journey: 'route', vibe: 'dice', spa: 'book', achievements: 'medal', leaderboard: 'trophy', faq: 'help' };
+
+function greetingFor(d = new Date()) {
+  const h = d.getHours();
+  if (h >= 5 && h < 12) return 'Good morning';
+  if (h >= 12 && h < 17) return 'Good afternoon';
+  if (h >= 17 && h < 22) return 'Good evening';
+  return 'Up late';
+}
+
+// One read of the existing journey endpoint, only so the hero can show the streak.
+function useJourneyStreak(email) {
+  const [streak, setStreak] = useState(null);
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`)
+      .then(r => r.json())
+      .then(j => { if (live) setStreak(j?.standups?.streak || null); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [email]);
+  return streak;
+}
+
+function StudentView({ profile, onBack, surveyBlocking = false }) {
   const [tab, setTab] = useState('bank');
   const [commitPhase, setCommitPhase] = useState('vibe');
   const { student } = profile;
@@ -297,39 +374,200 @@ function StudentView({ profile, onBack }) {
   const unseenAchievements = ach?.counts?.unseen || 0;
   // Opening the tab is what counts as seeing them, wherever it is opened from.
   const selectTab = key => { setTab(key); if (key === 'achievements') markAchievementsSeen(); };
+  const { cel, dismiss, anchorRef } = useSpCelebration(student, { blocked: surveyBlocking });
+  const streak = useJourneyStreak(student.email);
+  const heroRef = useRef(null);
+  const pinned = useScrolledPast(heroRef);
+  const { theme, toggle: toggleTheme } = useTheme();
+  const many = unseenAchievements > 1;
+  const tabs = [
+    ['bank', 'SP Bank'],
+    ['journey', 'My Journey'],
+    ...(student.eligibleForVibeGoals ? [['vibe', 'Commitments']] : []),
+    ['spa', 'SPA Points'],
+    ...(ach?.visible ? [['achievements', 'Achievements', unseenAchievements]] : []),
+    ['leaderboard', 'Leaderboard'],
+    ['faq', 'FAQ']
+  ];
   return (
-    <main className="page compact">
-      <header className="topbar">
-        {onBack ? <button className="secondary" onClick={onBack}>Back</button> : <span />}
-        <div>
-          <p className="eyebrow">Student Spurti Bank</p>
-          <h1>{student.name}</h1>
+    <div className="ui-app" data-theme={theme}>
+      <ToastHost />
+      <main className="ui-page">
+        <Hero themeToggle={<ThemeToggle theme={theme} toggle={toggleTheme} className="on-hero" />} heroRef={heroRef} profile={profile} onBack={onBack} streak={streak} cel={cel} dismiss={dismiss} anchorRef={anchorRef} />
+        <Announcements student={student} />
+        {/* Milestones are settled on read, so a card can come into existence during
+            the very page load the student is looking at. Nothing else on the page
+            would tell them: the tab strip reads identically whether or not
+            something new is waiting. */}
+        {unseenAchievements > 0 && tab !== 'achievements' && (
+          <button type="button" className="ui-nudge" onClick={() => selectTab('achievements')}>
+            <span className="ui-nudge-ico"><Icon name="medal" size={22} /></span>
+            <span className="ui-nudge-text">
+              <strong>{unseenAchievements} new achievement{many ? 's' : ''}</strong>
+              <em>{ach?.sharing
+                ? `See ${many ? 'them' : 'it'} and share ${many ? 'them' : 'it'}`
+                : `See ${many ? 'them' : 'it'} in your Achievements tab`}</em>
+            </span>
+            <Icon name="arrowUp" size={18} style={{ transform: 'rotate(45deg)' }} />
+          </button>
+        )}
+        <div className="ui-grid-2 ui-insights">
+          <StandingCard profile={profile} />
+          <TrendCard student={student} transactions={profile.transactions} />
         </div>
-        <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
-      </header>
-      <LevelStatus student={student} />
-      <Announcements student={student} />
-      <StudentPulse
-        profile={profile}
-        newAchievements={unseenAchievements}
-        canShareAchievements={!!ach?.sharing}
-        onOpenAchievements={() => selectTab('achievements')}
-      />
-      <Tabs tab={tab} setTab={selectTab} tabs={[['bank','SP Bank'],
-        ['journey','My Journey'],
-        ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
-        ['spa','SPA Points'],
-        ...(ach?.visible ? [['achievements','Achievements', unseenAchievements]] : []),
-        ['leaderboard','Leaderboard'],
-        ['faq','FAQ']]} />
-      {tab === 'bank' && <SpBank transactions={profile.transactions} />}
-      {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
-      {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
-      {tab === 'spa' && <SpaModule student={student} />}
-      {tab === 'achievements' && ach?.visible && <AchievementsPanel student={student} data={ach} />}
-      {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
-      {tab === 'faq' && <FaqTab />}
-    </main>
+        <UiTabs tab={tab} setTab={selectTab} tabs={tabs} icons={TAB_ICONS} pinned={pinned} extra={<ThemeToggle theme={theme} toggle={toggleTheme} className="in-nav" />}
+          identity={<><Avatar name={student.name} size={30} /><b>{student.name}</b><span>{student.totalSp} SP</span></>} />
+        <div className="ui-panel" id="ui-panel" role="tabpanel" aria-labelledby={`tab-${tab}`} key={tab}>
+          {tab === 'bank' && <UiSpBank transactions={profile.transactions} />}
+          {tab === 'journey' && <MyJourney student={student} attendance={profile.attendance} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
+          {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
+          {tab === 'spa' && <SpaModule student={student} />}
+          {tab === 'achievements' && ach?.visible && <AchievementsPanel student={student} data={ach} />}
+          {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
+          {tab === 'faq' && <FaqTab />}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function celebrationText(cel) {
+  if (!cel) return null;
+  if (cel.kind === 'league') return { icon: 'trophy', big: `Promoted to ${cel.league}!`, small: `+${cel.delta} SP since your last visit` };
+  if (cel.kind === 'level') return { icon: 'bolt', big: `Level ${cel.level} unlocked!`, small: `+${cel.delta} SP since your last visit` };
+  return { icon: 'spark', big: `+${cel.delta} SP`, small: 'since your last visit' };
+}
+
+function Hero({ heroRef, profile, onBack, streak, cel, dismiss, anchorRef, themeToggle = null }) {
+  const { student } = profile;
+  const lv = levelProgress(student.highestSpEver);
+  const league = student.trophyLeague;
+  const tk = tierKey(league);
+  const next = nextLeague(student.totalSp);
+  const sp = useCountUp(student.totalSp, { from: cel?.from ?? 0 });
+  const gain = celebrationText(cel);
+  return (
+    <section ref={heroRef} className={`ui-hero tier-${tk} ui-spot`} {...spotlight}>
+      <div className="ui-hero-glow" aria-hidden="true" />
+      <div className="ui-hero-bar">
+        {onBack
+          ? <button type="button" className="ui-ghost" onClick={onBack}><Icon name="arrowLeft" size={16} /> Back</button>
+          : <span className="ui-eyebrow"><i className="ui-brand-dot" /> Spurti · Student bank</span>}
+        <div className="ui-hero-tools">
+          <span className={`ui-group ${student.leaderboardGroupLabel ? '' : 'none'}`} title="Your biweekly onboarding cohort">
+            <Icon name="users" size={15} /> Onboarding group <b>{student.leaderboardGroupLabel || 'not assigned yet'}</b>
+          </span>
+          {themeToggle}
+        </div>
+      </div>
+      <div className="ui-hero-grid">
+        <div className="ui-hero-id">
+          <p className="ui-greet">{greetingFor()},</p>
+          <h1 className="ui-name">{student.name}</h1>
+          <div className="ui-chips">
+            <span className={`ui-league tier-${tk}`}><i className="ui-league-shine" aria-hidden="true" />{league}</span>
+            <Chip icon="trophy" title="Your place on the overall board">Rank #{student.rank} of {student.cohortSize}</Chip>
+            {streak?.current > 0 && <Chip tone="flame" icon="flame" title="Consecutive standups attended">{streak.current} session streak</Chip>}
+            {student.legendBadgeUnlocked && <Chip tone="gold" icon="medal" title="Reached 1500 SP at least once">Legend badge</Chip>}
+            {!student.legendBadgeUnlocked && <Chip icon="lock" title="Reach 1500 SP once to unlock">Legend badge locked</Chip>}
+          </div>
+        </div>
+        <div className="ui-hero-sp">
+          <span className="ui-kicker">Spurti Points</span>
+          <strong className="ui-sp-num" ref={anchorRef} aria-label={`${student.totalSp} Spurti Points`}>{sp.toLocaleString()}</strong>
+          <span className="ui-sub">{next ? `${next.toGo} SP to ${next.name}` : 'You are in the top league'}</span>
+        </div>
+        <div className="ui-hero-level">
+          <Ring value={lv.pct} size={116} stroke={11} from="#e9b44c" to="#fde9a8" label={`Level ${lv.level}, ${lv.pct} of 100 SP to level ${lv.nextLevel}`}>
+            <span className="ui-ring-cap">Level</span>
+            <strong className="ui-ring-num">{lv.level}</strong>
+          </Ring>
+          <p className="ui-lv-note"><b>{lv.toNext} SP</b> to Level {lv.nextLevel}</p>
+        </div>
+      </div>
+      {gain && (
+        <button type="button" className="ui-gain" onClick={dismiss} role="status" title="Dismiss">
+          <span className="ui-gain-ico"><Icon name={gain.icon} size={20} /></span>
+          <span><strong>{gain.big}</strong><em>{gain.small}</em></span>
+          <Icon name="x" size={16} />
+        </button>
+      )}
+      <LeagueLadder sp={student.totalSp} />
+      <p className="ui-note">
+        Level shows your highest achievement and never decreases. Your league follows your current Spurti Points and can
+        move up or down.{student.legendBadgeUnlocked ? ' You have unlocked the Legend Badge by reaching 1500 Spurti Points at least once.' : ''}
+      </p>
+    </section>
+  );
+}
+
+function LeagueLadder({ sp }) {
+  const t = tierTrack(sp);
+  return (
+    <div className="ui-ladder" role="img" aria-label={`League progress: ${TIERS[t.current].name} tier`}>
+      <div className="ui-ladder-track">
+        {t.segments.map((s, i) => (
+          <div key={s.key} className={`ui-seg tier-${s.key} ${i === t.current ? 'cur' : ''}`}>
+            <i style={{ '--fill': s.fill }} />
+          </div>
+        ))}
+        <span className="ui-marker" style={{ left: `${t.position * 100}%` }}><b>{sp}</b></span>
+      </div>
+      <div className="ui-ladder-labels" aria-hidden="true">
+        {t.segments.map((s, i) => (
+          <span key={s.key} className={i === t.current ? 'cur' : ''}>{s.name}<small>{s.from}</small></span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StandingCard({ profile }) {
+  const { student, cohort } = profile;
+  const rows = [
+    { key: 'you', label: 'You', v: student.totalSp, me: true },
+    { key: 'avg', label: 'Cohort average', v: cohort.averageSp },
+    ...(cohort.top10Cutoff != null ? [{ key: 't10', label: 'Top 10 cutoff', v: cohort.top10Cutoff }] : []),
+    ...(cohort.top50Cutoff != null ? [{ key: 't50', label: 'Top 50 cutoff', v: cohort.top50Cutoff }] : [])
+  ];
+  const max = Math.max(1, ...rows.map(r => Number(r.v) || 0));
+  // pointsToTop50 is null while the cohort is smaller than 50 — there is no cutoff to chase yet.
+  const top50 = cohort.pointsToTop50 === null ? null
+    : cohort.pointsToTop50 === 0 ? 'You are in the Top 50.'
+    : `${cohort.pointsToTop50} SP to enter the Top 50.`;
+  return (
+    <section className="ui-card ui-standing">
+      <div className="ui-card-head"><h2><Icon name="trophy" size={18} /> Standing</h2></div>
+      <div className="ui-rank"><strong>#{student.rank}</strong><span>of {student.cohortSize}</span></div>
+      {top50 && <p className="ui-muted">{top50}</p>}
+      {cohort.pointsToNextRank > 0 && <p className="ui-muted">{cohort.pointsToNextRank} SP to pass the next student.</p>}
+      <div className="ui-bars">
+        {rows.map(r => (
+          <div key={r.key} className={`ui-bar ${r.me ? 'me' : ''}`}>
+            <span>{r.label}</span>
+            <div><i style={{ '--w': `${((Number(r.v) || 0) / max) * 100}%` }} /></div>
+            <b>{r.v}</b>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TrendCard({ student, transactions }) {
+  const [open, setOpen] = useState(false);
+  const pts = transactions.map(tx => ({ v: tx.balanceAfter, label: tx.sessionLabel || 'Start', sub: tx.reason, delta: tx.appliedDelta }));
+  return (
+    <section className="ui-card ui-trend">
+      <div className="ui-card-head">
+        <h2><Icon name="chart" size={18} /> SP trend</h2>
+        <button type="button" className="ui-link" onClick={() => setOpen(true)}>Full trajectory <Icon name="arrowUp" size={14} style={{ transform: 'rotate(45deg)' }} /></button>
+      </div>
+      {pts.length
+        ? <AreaChart points={pts} height={150} />
+        : <EmptyState icon="chart" title="Your trend starts with your first points">Attend a standup or answer a poll and the line begins.</EmptyState>}
+      {open && <TrajectoryModal student={student} onClose={() => setOpen(false)} />}
+    </section>
   );
 }
 
@@ -415,40 +653,6 @@ function SpaModule({ student }) {
   );
 }
 
-function LevelStatus({ student }) {
-  const tier = String(student.trophyLeague || 'Bronze').split(' ')[0].toLowerCase();
-  return (
-    <section className="level-status">
-      <div className="level-tiles">
-        <div className="level-tile">
-          <span>Level</span>
-          <strong>{student.level}</strong>
-          <em>lifetime achievement</em>
-        </div>
-        <div className={`level-tile league tier-${tier}`}>
-          <span>Trophy League</span>
-          <strong>{student.trophyLeague}</strong>
-          <em>current performance</em>
-        </div>
-        <div className="level-tile">
-          <span>Legend Badge</span>
-          <strong>{student.legendBadgeUnlocked ? '🏅 Unlocked' : '🔒 Locked'}</strong>
-          <em>reach 1500 SP once</em>
-        </div>
-        <div className="level-tile">
-          <span>Onboarding Group</span>
-          <strong className="group">{student.leaderboardGroupLabel || '—'}</strong>
-          <em>biweekly cohort</em>
-        </div>
-      </div>
-      <p className="level-note">
-        Level shows your highest achievement and never decreases. Trophy League shows your current performance and can move up or down with your current Spurti Points.
-        {student.legendBadgeUnlocked ? ' You have unlocked the Legend Badge by reaching 1500 Spurti Points at least once.' : ''}
-      </p>
-    </section>
-  );
-}
-
 // ---- Achievements -----------------------------------------------------------
 // One tile per board (plus milestones); opening a tile reveals every instance,
 // since a weekly win carries its week and is separately shareable. Locked
@@ -483,7 +687,7 @@ function AchievementsPanel({ student, data }) {
   const [openKey, setOpenKey] = useState(null);
   const [sharing, setSharing] = useState(null);
 
-  if (!data) return <section className="panel">Loading your achievements…</section>;
+  if (!data) return <div className="ui-stack"><SkeletonCard rows={2} /><SkeletonCard rows={3} /></div>;
 
   const me = { name: student.name, totalSp: student.totalSp, level: student.level, ...(data.student || {}), email: student.email };
   const canShare = !!data.sharing;
@@ -491,14 +695,14 @@ function AchievementsPanel({ student, data }) {
   const locked = data.locked || [];
 
   return (
-    <div className="ach">
-      <section className="panel ach-head">
-        <div className="ach-counts">
+    <div className="ui-stack">
+      <section className="ui-card ui-ach-head">
+        <div className="ui-ach-counts">
           <div><strong>{data.counts?.earned || 0}</strong><span>earned</span></div>
           <div><strong>{data.counts?.thisWeek || 0}</strong><span>this week</span></div>
           <div><strong>{data.counts?.boards || 0}</strong><span>boards placed on</span></div>
         </div>
-        <p className="muted">
+        <p className="ui-muted">
           Placing 1st, 2nd or 3rd on any leaderboard earns a permanent card — a new one each week you take it.
           Open a tile to see every time you placed{canShare ? ', and share any of them' : ''}.
         </p>
@@ -506,17 +710,17 @@ function AchievementsPanel({ student, data }) {
             and will again. What is permanent is the achievement and its verify
             code, not the artwork — worth stating before someone assumes the
             picture they downloaded is the record. */}
-        <p className="muted ach-note">
+        <p className="ui-muted ui-fine">
           The look of the cards may change from time to time as we improve the design. Your achievements
           and their verify links stay exactly as they are — only the artwork is refreshed.
         </p>
       </section>
 
       {groups.length === 0 && locked.length === 0 && (
-        <section className="panel empty"><p className="muted">No achievements yet. Place on any leaderboard, or hit a milestone, and your first card lands here.</p></section>
+        <section className="ui-card"><EmptyState icon="medal" title="No achievements yet">Place on any leaderboard, or hit a milestone, and your first card lands here.</EmptyState></section>
       )}
 
-      <div className="ach-grid">
+      <div className="ui-ach-grid">
         {groups.map(g => (
           <AchievementTile
             key={g.key} group={g} me={me} canShare={canShare}
@@ -526,11 +730,11 @@ function AchievementsPanel({ student, data }) {
           />
         ))}
         {locked.map(l => (
-          <div className="ach-tile locked" key={l.key}>
-            <div className="ach-medal">{l.icon}</div>
-            <div className="ach-body">
+          <div className="ui-ach locked" key={l.key}>
+            <div className="ui-medal"><span>{l.icon}</span></div>
+            <div className="ui-ach-body">
               <h4>{l.title}</h4>
-              <span className="ach-when">Locked · {l.remaining}</span>
+              <span className="ui-ach-when">Locked · {l.remaining}</span>
             </div>
           </div>
         ))}
@@ -547,29 +751,29 @@ function AchievementTile({ group, me, open, onToggle, onShare, canShare }) {
   const latest = group.items[0];
   const isRank = group.kind === 'rank';
   return (
-    <div className={`ach-tile${open ? ' open' : ''}`}>
-      <button className="ach-face" onClick={onToggle} aria-expanded={open}>
-        <div className="ach-medal">{group.icon}</div>
-        <div className="ach-body">
+    <div className={`ui-ach${open ? ' open' : ''}`}>
+      <button type="button" className="ui-ach-face" onClick={onToggle} aria-expanded={open}>
+        <div className="ui-medal"><span>{group.icon}</span><i className="ui-medal-shine" aria-hidden="true" /></div>
+        <div className="ui-ach-body">
           <h4>{group.title}</h4>
-          <span className="ach-when">
+          <span className="ui-ach-when">
             {isRank
               ? `Best: ${PLACE_WORD[group.bestPlace] || '—'} · ${group.items.length} time${group.items.length === 1 ? '' : 's'}`
               : latest.period}
           </span>
         </div>
-        <span className="ach-caret">{open ? '▾' : '▸'}</span>
+        <Icon name="chevronDown" size={18} className="ui-ach-caret" />
       </button>
       {open && (
-        <ul className="ach-items">
+        <ul className="ui-ach-items">
           {group.items.map(item => (
             <li key={item.achId}>
-              <span className="ach-item-medal">{item.icon}</span>
-              <span className="ach-item-text">
+              <span className="ui-ach-item-medal">{item.icon}</span>
+              <span className="ui-ach-item-text">
                 <b>{item.period}</b>
                 {item.detail ? <em>{item.detail}</em> : null}
               </span>
-              {canShare && <button className="ach-share" onClick={() => onShare(item)}>Share</button>}
+              {canShare && <button type="button" className="ui-btn sm" onClick={() => onShare(item)}>Share</button>}
             </li>
           ))}
         </ul>
@@ -754,37 +958,58 @@ function ShareModal({ item, me, onClose }) {
 // beyond the name, what was won, and when.
 function VerifyView({ code }) {
   const [state, setState] = useState({ loading: true });
+  const [copied, setCopied] = useState(false);
+  const tilt = useTilt(6);
   useEffect(() => {
     fetch(`${API}/verify/${encodeURIComponent(code)}`)
       .then(r => r.ok ? r.json() : { valid: false })
       .then(d => setState({ loading: false, ...d }))
       .catch(() => setState({ loading: false, valid: false }));
   }, [code]);
+  const { theme, toggle: toggleTheme } = useTheme();
+  const copy = async () => {
+    const ok = await copyText(window.location.href);
+    setCopied(ok);
+    if (ok) setTimeout(() => setCopied(false), 2200);
+  };
 
   return (
-    <main className="page verify-page">
-      <section className="panel verify-card">
-        {state.loading ? <p className="muted">Checking…</p> : state.valid ? (
-          <>
-            <span className="verify-ok">✓ Verified achievement</span>
-            <div className="verify-medal">{state.icon}</div>
+    <div className="ui-app ui-verify-app" data-theme={theme}>
+      <main className="ui-verify">
+        <div className="ui-brand"><span className="ui-brand-mark" aria-hidden="true">S</span><b>Spurti</b><em>VLED Summership · IIT Ropar</em><ThemeToggle theme={theme} toggle={toggleTheme} className="push" /></div>
+        {state.loading ? <SkeletonCard rows={5} /> : state.valid ? (
+          <article className="ui-cred" ref={tilt.ref} onPointerMove={tilt.onPointerMove} onPointerLeave={tilt.onPointerLeave}>
+            <div className="ui-cred-glow" aria-hidden="true" />
+            <span className="ui-verified">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path className="ui-draw" pathLength="1" d="M20 6 9 17l-5-5" /></svg>
+              Verified achievement
+            </span>
+            <div className="ui-medal xl"><span>{state.icon}</span><i className="ui-medal-shine" aria-hidden="true" /></div>
             <h1>{state.title}</h1>
-            <p className="verify-period">{state.period}</p>
-            <p className="verify-awarded">Awarded to</p>
-            <p className="verify-name">{state.name}</p>
-            <p className="muted">{state.programme}</p>
-            <p className="muted">Awarded {new Date(state.earnedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
-            <p className="verify-code">{state.verifyId}</p>
-          </>
+            <p className="ui-cred-period">{state.period}</p>
+            <p className="ui-cred-awarded">Awarded to</p>
+            <p className="ui-cred-name">{state.name}</p>
+            <p className="ui-muted">{state.programme}</p>
+            <p className="ui-muted">Awarded {new Date(state.earnedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+            <div className="ui-cred-foot">
+              <code>{state.verifyId}</code>
+              <button type="button" className="ui-btn sm" onClick={copy}><Icon name={copied ? 'check' : 'copy'} size={14} /> {copied ? 'Link copied' : 'Copy link'}</button>
+            </div>
+          </article>
         ) : (
-          <>
-            <span className="verify-bad">Not found</span>
+          <article className="ui-cred bad">
+            <span className="ui-verified bad"><Icon name="x" size={15} stroke={3} /> Not found</span>
             <h1>We can't verify this card</h1>
-            <p className="muted">No achievement matches the code <b>{code}</b>. A genuine Spurti card carries a code issued by the system — if this one doesn't resolve, it wasn't issued here.</p>
-          </>
+            <p className="ui-muted">No achievement matches the code <b>{code}</b>. A genuine Spurti card carries a code issued by the system — if this one doesn't resolve, it wasn't issued here.</p>
+          </article>
         )}
-      </section>
-    </main>
+        <p className="ui-verify-about">
+          Spurti is the student engagement and motivation system of the VLED Summership programme at IIT Ropar.
+          Each card carries a code issued by the system; this page checks that code, and shows nothing beyond the name,
+          what was won, and when.
+        </p>
+      </main>
+    </div>
   );
 }
 
@@ -807,11 +1032,40 @@ const LB_PRESETS = [
   { key: 'all-quiz',          label: '🧠 Daily Quiz — All-Time',           window: 'all',  category: 'quiz',       scope: 'all' },
 ];
 
+// Podium heights follow the printed rank, not the row position, so a tie for 1st
+// draws two equal blocks. Places are never assumed to be unique.
+const PODIUM_H = { 1: 132, 2: 108, 3: 92 };
+const PODIUM_LABEL = { 1: '1st', 2: '2nd', 3: '3rd' };
+
+// The dropdown of presets became two linked controls: WHICH board (chips) and WHEN (a
+// small toggle). Both are derived from LB_PRESETS, so a preset added there shows up here.
+const BOARD_META = {
+  'total:all': ['Overall', 'trophy'], 'total:cohort': ['My Cohort', 'users'], 'attendance:all': ['Attendance', 'calendar'],
+  'poll:all': ['Poll Champions', 'target'], 'spa:all': ['Top SPA', 'book'], 'query:all': ['Query Answerers', 'chat'],
+  'quiz:all': ['Daily Quiz', 'bolt']
+};
+const WINDOW_LABEL = { day: 'Today', week: 'This Week', all: 'All-Time' };
+const WINDOW_ORDER = ['day', 'week', 'all'];
+const boardOf = p => `${p.category}:${p.scope}`;
+const LB_BOARDS = (() => {
+  const boards = new Map();
+  for (const p of LB_PRESETS) {
+    const k = boardOf(p);
+    if (!boards.has(k)) boards.set(k, { key: k, label: BOARD_META[k]?.[0] || p.label, icon: BOARD_META[k]?.[1] || 'trophy', windows: [] });
+    boards.get(k).windows.push(p.window);
+  }
+  return [...boards.values()].map(b => ({ ...b, windows: WINDOW_ORDER.filter(w => b.windows.includes(w)) }));
+})();
+
 function LeaderboardPanel({ student }) {
-  const [presetKey, setPresetKey] = useState('week-total');
+  const [boardKey, setBoardKey] = useState('total:all');
+  const [wantWin, setWantWin] = useState('week');
+  const board = LB_BOARDS.find(b => b.key === boardKey) || LB_BOARDS[0];
+  // Switching to a board that has no such window (e.g. Today -> Overall) falls back to This Week.
+  const win = board.windows.includes(wantWin) ? wantWin : (board.windows.includes('week') ? 'week' : board.windows[0]);
+  const preset = LB_PRESETS.find(p => boardOf(p) === board.key && p.window === win) || LB_PRESETS[0];
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const preset = LB_PRESETS.find(p => p.key === presetKey);
   useEffect(() => {
     let live = true;
     setLoading(true);
@@ -820,36 +1074,70 @@ function LeaderboardPanel({ student }) {
       .then(d => { if (live) { setData(d); setLoading(false); } })
       .catch(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [presetKey, student.email]);
+  }, [preset.key, student.email]);
   const rows = data?.rows || [];
   const me = data?.me || null;
   const meOutside = me && !rows.some(r => r.studentId === student._id);
+  // Nobody stands on the podium (or wears a medal) for 0 SP: a board where everyone is tied
+  // on nothing is "no results yet", not three gold medals.
+  const scored = rows.filter(r => (Number(r.sp) || 0) > 0);
+  const top = scored.slice(0, 3);
+  const rest = scored.filter(r => !top.includes(r));   // zero-point rows are not listed; the "You" strip below still shows your own place
+  const max = Math.max(1, ...rows.map(r => Number(r.sp) || 0));
+  // Visual order of the podium: 2nd, 1st, 3rd (row order in, so ties keep their order).
+  const podium = top.length === 3 ? [top[1], top[0], top[2]] : top;
   return (
-    <section className="panel">
-      <div className="panel-head">
-        <h2>Leaderboard</h2>
-        <select value={presetKey} onChange={e => setPresetKey(e.target.value)}>
-          {LB_PRESETS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-        </select>
+    <section className="ui-card ui-lb">
+      <div className="ui-card-head">
+        <h2><Icon name="trophy" size={18} /> Leaderboard</h2>
       </div>
-      {preset.window === 'week' && data?.weekLabel && <p className="muted lb-week">Week of {data.weekLabel} · resets Monday</p>}
-      {loading ? <p className="muted">Loading…</p> : rows.length === 0 ? <p className="muted">No entries yet.</p> : (
-        <>
-          <table className="table lb-table">
-            <thead><tr><th>Rank</th><th>Name</th><th>Level</th><th>SP</th></tr></thead>
-            <tbody>{rows.map(r => (
-              <tr key={r.studentId} className={r.studentId === student._id ? 'current-student' : ''}>
-                <td>{r.rank}</td><td>{r.name}</td><td>L{r.level}</td><td>{r.sp}</td>
-              </tr>
-            ))}</tbody>
-          </table>
+      <div className="ui-lb-controls">
+        <PillGroup label="Leaderboard" items={LB_BOARDS.map(b => ({ key: b.key, label: b.label, icon: b.icon }))} value={board.key} onChange={setBoardKey} />
+        <PillGroup label="Time window" size="sm" items={board.windows.map(w => ({ key: w, label: WINDOW_LABEL[w] }))} value={win} onChange={setWantWin} />
+      </div>
+      {preset.window === 'week' && data?.weekLabel && <p className="ui-muted ui-lb-week">Week of {data.weekLabel} · resets Monday</p>}
+      {preset.window === 'day' && <p className="ui-muted ui-lb-week">Today’s points only · resets at midnight IST</p>}
+      {loading ? (
+        <div className="ui-stack"><SkeletonCard rows={3} title={false} /><SkeletonCard rows={4} title={false} /></div>
+      ) : scored.length === 0 ? (
+        <EmptyState icon="trophy" title="No entries yet">Nobody has earned points on this board yet — it fills up as points are recorded.</EmptyState>
+      ) : (
+        <div className="ui-lb-body" key={preset.key}>
+          <div className="ui-podium">
+            {podium.map((r, i) => (
+              <div key={r.studentId} className={`ui-pod p${r.rank <= 3 ? r.rank : 'x'} ${r.studentId === student._id ? 'me' : ''}`} style={{ '--i': i }}>
+                {r.rank <= 3 && <span className={`ui-coin c${r.rank}`} aria-hidden="true">{r.rank}</span>}
+                <Avatar name={r.name} size={r.rank === 1 ? 64 : 54} />
+                <b title={r.name}>{r.name}</b>
+                {top.filter(x => x.rank === r.rank).length > 1 && <em className="ui-tied">tied</em>}
+                <span className="ui-pod-sp"><CountNum value={r.sp} /> SP</span>
+                <div className="ui-pod-block" style={{ height: PODIUM_H[r.rank] || 78 }}>
+                  <strong>{r.rank <= 3 ? PODIUM_LABEL[r.rank] : `#${r.rank}`}</strong>
+                  <small>Level {r.level}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+          {rest.length > 0 && (
+            <ol className="ui-lb-list" start={4}>
+              {rest.map((r, i) => (
+                <li key={r.studentId} className={r.studentId === student._id ? 'me' : ''} style={{ '--w': `${((Number(r.sp) || 0) / max) * 100}%`, '--i': Math.min(i, 14) }}>
+                  <i className="ui-lb-bar" aria-hidden="true" />
+                  <span className="ui-lb-rank">{r.rank}</span>
+                  <Avatar name={r.name} size={32} />
+                  <span className="ui-lb-name">{r.name}<small>Level {r.level}</small></span>
+                  <b className="ui-lb-sp"><CountNum value={r.sp} /></b>
+                </li>
+              ))}
+            </ol>
+          )}
           {me && (
-            <div className="lb-me">
-              You: <b>#{me.rank}</b> · {me.sp} SP
-              {meOutside && <span className="muted"> — {preset.window === 'week' ? 'earn more this week to climb' : 'keep going to climb'}</span>}
+            <div className="ui-lb-me">
+              <Icon name="spark" size={16} /> You: <b>#{me.rank}</b> · <CountNum value={me.sp} /> SP
+              {meOutside && <span className="ui-muted"> — {preset.window === 'all' ? 'keep going to climb' : `earn more ${preset.window === 'day' ? 'today' : 'this week'} to climb`}</span>}
             </div>
           )}
-        </>
+        </div>
       )}
     </section>
   );
@@ -866,7 +1154,7 @@ function TrajectoryModal({ student, onClose }) {
   const series = data ? [
     { key: 'you', label: 'You', color: 'var(--primary)', points: data.you, width: 3, dots: true },
     { key: 'cohort', label: 'Cohort average', color: '#94a3b8', points: data.cohort, width: 2, dash: '5 4' },
-    { key: 'group', label: data.groupLabel ? `Your group (${data.groupLabel})` : 'Your group', color: '#8b5cf6', points: data.group, width: 2 }
+    { key: 'group', label: data.groupLabel ? `Your group (${data.groupLabel})` : 'Your group', color: '#6f63b8', points: data.group, width: 2 }
   ].filter(s => s.points && s.points.length) : [];
 
   const weeks = data?.weeks || 10;
@@ -951,88 +1239,30 @@ function Announcements({ student }) {
   const fmt = d => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 
   return (
-    <section className="panel announcements">
-      <div className="ann-head">
-        <h2>📣 Announcements{unread.length > 0 && <em className="ann-badge">{unread.length} new</em>}</h2>
+    <section className="ui-card ui-ann">
+      <div className="ui-card-head">
+        <h2><Icon name="spark" size={18} /> Announcements{unread.length > 0 && <em className="ui-ann-badge"><i aria-hidden="true" />{unread.length} new</em>}</h2>
         {read.length > 0 && (
-          <button className="ann-toggle" onClick={() => setShowRead(s => !s)}>
+          <button type="button" className="ui-link" onClick={() => setShowRead(s => !s)}>
             {showRead ? 'Hide read' : `Read earlier (${read.length})`}
           </button>
         )}
       </div>
       {unread.map(a => (
-        <article key={a.id} className="ann-item ann-new">
+        <article key={a.id} className="ui-ann-item new">
           <header><strong>{a.title}</strong><time>{fmt(a.postedAt)}</time></header>
           <p>{a.body}</p>
-          <button className="primary ann-ack" onClick={() => ack(a.id)}>Got it ✓</button>
+          <button type="button" className="ui-btn sm" onClick={() => ack(a.id)}><Icon name="check" size={14} stroke={3} /> Got it</button>
         </article>
       ))}
-      {unread.length === 0 && <p className="muted ann-caughtup">You’re all caught up.</p>}
+      {unread.length === 0 && <p className="ui-muted ui-caughtup">You’re all caught up.</p>}
       {showRead && read.map(a => (
-        <article key={a.id} className="ann-item ann-done">
+        <article key={a.id} className="ui-ann-item done">
           <header><strong>{a.title}</strong><time>{fmt(a.postedAt)} · read ✓</time></header>
           <p>{a.body}</p>
         </article>
       ))}
     </section>
-  );
-}
-
-function StudentPulse({ profile, newAchievements = 0, canShareAchievements = false, onOpenAchievements }) {
-  const { student, cohort, transactions } = profile;
-  const [showTraj, setShowTraj] = useState(false);
-  const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
-  const many = newAchievements > 1;
-  return (
-    <>
-      {/* Milestones are settled on read, so a card can come into existence during
-          the very page load the student is looking at. Nothing else on the page
-          would tell them: the tab strip sits lower and reads identically whether
-          or not something new is waiting. */}
-      {newAchievements > 0 && onOpenAchievements && (
-        <button className="ach-nudge" onClick={onOpenAchievements}>
-          <span className="ach-nudge-icon" aria-hidden="true">🎖️</span>
-          <span className="ach-nudge-text">
-            <strong>{newAchievements} new achievement{many ? 's' : ''}</strong>
-            <em>{canShareAchievements
-              ? `See ${many ? 'them' : 'it'} and share ${many ? 'them' : 'it'}`
-              : `See ${many ? 'them' : 'it'} in your Achievements tab`}</em>
-          </span>
-          <span className="ach-nudge-go" aria-hidden="true">→</span>
-        </button>
-      )}
-      <section className="pulse-grid">
-        <div className="pulse-card progress-card">
-          <span>Standing</span>
-          <strong>Rank {student.rank}</strong>
-          <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP to enter Top 50.`}</p>
-          <div className="compare-list">
-            <b>Cohort avg: {cohort.averageSp}</b>
-            <b>Top 50: {cohort.top50Cutoff ?? '—'}</b>
-            <b>Top 10: {cohort.top10Cutoff ?? '—'}</b>
-          </div>
-        </div>
-        <button className="pulse-card pulse-clickable" onClick={() => setShowTraj(true)} title="Open full trajectory">
-          <span>SP trend <em className="expand-hint">expand ↗</em></span>
-          <Sparkline points={trend} />
-        </button>
-      </section>
-      {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
-    </>
-  );
-}
-
-function Sparkline({ points }) {
-  const values = points.map(p => p.value);
-  const min = Math.min(...values, 0);
-  const max = Math.max(...values, 1);
-  return (
-    <div className="sparkline">
-      {points.map((point, index) => {
-        const pct = max === min ? 50 : ((point.value - min) / (max - min)) * 100;
-        return <i key={`${point.label}-${index}`} title={`${point.label}: ${point.value} SP`} style={{ height: `${Math.max(6, pct)}%` }} />;
-      })}
-    </div>
   );
 }
 
@@ -1081,37 +1311,63 @@ const SP_DEDUCTIONS = [
 
 function FaqTab() {
   const [open, setOpen] = useState(0);
+  const [q, setQ] = useState('');
+  const term = q.trim().toLowerCase();
+  const items = FAQ_ITEMS
+    .map((item, i) => ({ ...item, i }))
+    .filter(it => !term || it.q.toLowerCase().includes(term) || it.a.toLowerCase().includes(term));
   return (
-    <section className="panel">
-      <div className="panel-head"><h2>FAQ</h2></div>
-      <div className="sp-table-wrap">
-        <h3>SP at a glance</h3>
-        <table className="sp-table">
-          <thead><tr><th>Source</th><th>How you earn</th><th>SP</th><th>Cap</th></tr></thead>
-          <tbody>
-            {SP_RATES.map(r => (
-              <tr key={r.src}><td>{r.src}</td><td>{r.how}</td><td>{r.sp}</td><td>{r.cap}</td></tr>
-            ))}
-            <tr className="sp-total"><td><b>Total (earnable SP)</b></td><td className="muted">attendance and polls counted at their 600 design value (60 sessions × 10)</td><td colSpan={2}><b>2,500</b></td></tr>
-          </tbody>
-        </table>
-        <p className="muted sp-deduct-head">Where SP can reduce:</p>
-        <ul className="sp-deduct">
-          {SP_DEDUCTIONS.map((d, i) => <li key={i}>{d}</li>)}
-        </ul>
-      </div>
-      <p className="muted faq-intro">Tap a question to see the answer.</p>
-      <div className="faq-list">
-        {FAQ_ITEMS.map((item, i) => (
-          <div className={`faq-item ${open === i ? 'open' : ''}`} key={i}>
-            <button className="faq-q" onClick={() => setOpen(open === i ? -1 : i)} aria-expanded={open === i}>
-              <span>{item.q}</span><span className="faq-caret">{open === i ? '–' : '+'}</span>
-            </button>
-            {open === i && <p className="faq-a">{item.a}</p>}
+    <div className="ui-stack">
+      <section className="ui-card ui-rates">
+        <div className="ui-card-head"><h2><Icon name="bolt" size={18} /> SP at a glance</h2></div>
+        <div className="ui-rate-grid">
+          {SP_RATES.map(r => (
+            <div className="ui-rate" key={r.src}>
+              <span className="ui-kicker">{r.src}</span>
+              <strong>{r.sp}</strong>
+              <p>{r.how}</p>
+              <em>Cap: {r.cap}</em>
+            </div>
+          ))}
+          <div className="ui-rate total">
+            <span className="ui-kicker">Total earnable</span>
+            <strong>2,500</strong>
+            <p>attendance and polls counted at their 600 design value (60 sessions × 10)</p>
           </div>
-        ))}
-      </div>
-    </section>
+        </div>
+        <div className="ui-callout">
+          <b><Icon name="shield" size={16} /> Where SP can reduce</b>
+          <ul>{SP_DEDUCTIONS.map((d, i) => <li key={i}>{d}</li>)}</ul>
+        </div>
+      </section>
+
+      <section className="ui-card ui-faq">
+        <div className="ui-card-head">
+          <h2><Icon name="help" size={18} /> FAQ</h2>
+          <label className="ui-search">
+            <Icon name="search" size={16} />
+            <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search questions" aria-label="Search the FAQ" />
+          </label>
+        </div>
+        {items.length === 0 ? (
+          <EmptyState icon="search" title="Nothing matches that">Try a shorter word, like “poll” or “level”.</EmptyState>
+        ) : (
+          <div className="ui-acc-list">
+            {items.map(item => {
+              const isOpen = term ? true : open === item.i;
+              return (
+                <div className={`ui-acc ${isOpen ? 'open' : ''}`} key={item.i}>
+                  <button type="button" className="ui-acc-q" onClick={() => setOpen(open === item.i ? -1 : item.i)} aria-expanded={isOpen}>
+                    <span>{item.q}</span><Icon name="chevronDown" size={18} className="ui-acc-caret" />
+                  </button>
+                  <div className="ui-acc-body" aria-hidden={!isOpen}><div><p>{item.a}</p></div></div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -1175,25 +1431,82 @@ function SpBank({ transactions }) {
   );
 }
 
-const POLL_MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
-const POLL_TOD = { morning: 0, afternoon: 1, evening: 2 };
+// Student-facing statement. The Admin screen keeps the plain SpBank above.
+const SP_CATS = {
+  initial: { label: 'Welcome', icon: 'spark' },
+  attendance: { label: 'Attendance', icon: 'calendar' },
+  poll: { label: 'Poll', icon: 'target' },
+  spa: { label: 'SPA', icon: 'users' },
+  query: { label: 'Query', icon: 'help' },
+  project: { label: 'Project', icon: 'trophy' },
+  manual: { label: 'Award', icon: 'medal' },
+  vibe: { label: 'ViBe', icon: 'bolt' },
+  chat: { label: 'Chat', icon: 'list' }
+};
+const spCat = c => SP_CATS[c] || { label: c ? String(c).charAt(0).toUpperCase() + String(c).slice(1) : 'Other', icon: 'spark' };
 
-// Session labels come in two formats — "15 May Morning" and "Day 10 (26 May)".
-// Parse the real session date (+ time-of-day) into a comparable number so we can
-// sort chronologically; unknown labels sort last. Higher = more recent.
-function pollSortKey(label = '') {
-  let day, mon;
-  const paren = label.match(/\((\d{1,2})\s+([A-Za-z]+)\)/);
-  if (paren) { day = +paren[1]; mon = paren[2]; }
-  else {
-    const lead = label.match(/^(\d{1,2})\s+([A-Za-z]+)/);
-    if (lead) { day = +lead[1]; mon = lead[2]; }
+function UiSpBank({ transactions }) {
+  const [size, setSize] = useState(15);
+  // Server sends oldest→newest (sorted dateTime asc); show newest first.
+  const rows = useMemo(() => [...transactions].reverse(), [transactions]);
+  const shown = rows.slice(0, size);
+  const earned = rows.reduce((a, t) => a + (t.appliedDelta > 0 ? t.appliedDelta : 0), 0);
+  const lost = rows.reduce((a, t) => a + (t.appliedDelta < 0 ? -t.appliedDelta : 0), 0);
+  const downloadCsv = () => {
+    const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [['Date & time', 'Credit', 'Debit', 'Balance', 'Reason'].join(',')].concat(
+      rows.map(tx => [
+        new Date(tx.dateTime).toLocaleString(),
+        tx.appliedDelta > 0 ? tx.appliedDelta : '',
+        tx.appliedDelta < 0 ? tx.appliedDelta : '',
+        tx.balanceAfter, tx.reason
+      ].map(esc).join(',')));
+    const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'sp-bank-statement.csv'; a.click();
+    URL.revokeObjectURL(url);
+  };
+  if (!rows.length) {
+    return <section className="ui-card"><EmptyState icon="landmark" title="Your statement is empty">Every point you earn will show up here with the reason it was awarded.</EmptyState></section>;
   }
-  const m = mon ? POLL_MONTHS[mon.slice(0, 3).toLowerCase()] : undefined;
-  if (m === undefined || !day) return -1;
-  const todMatch = label.toLowerCase().match(/morning|afternoon|evening/);
-  const tod = todMatch ? POLL_TOD[todMatch[0]] : 0;
-  return ((m * 100 + day) * 10) + tod;
+  return (
+    <section className="ui-card ui-bank">
+      <div className="ui-card-head">
+        <h2><Icon name="landmark" size={18} /> SP Bank</h2>
+        <button type="button" className="ui-btn ghost" onClick={downloadCsv}><Icon name="download" size={15} /> Download CSV</button>
+      </div>
+      <div className="ui-bank-sum">
+        <div><span>Earned</span><strong className="credit">+{earned}</strong></div>
+        <div><span>Deducted</span><strong className="debit">{lost ? `−${lost}` : '0'}</strong></div>
+        <div><span>Entries</span><strong>{rows.length}</strong></div>
+      </div>
+      <ol className="ui-tx-list">
+        {shown.map(tx => {
+          const c = spCat(tx.category);
+          const d = new Date(tx.dateTime);
+          const up = tx.appliedDelta > 0; const down = tx.appliedDelta < 0;
+          return (
+            <li className="ui-tx" key={tx._id}>
+              <span className={`ui-tx-ico cat-${tx.category || 'other'}`}><Icon name={c.icon} size={18} /></span>
+              <div className="ui-tx-body">
+                <b>{tx.reason}</b>
+                <span>
+                  <em className={`ui-cat cat-${tx.category || 'other'}`}>{c.label}</em>
+                  {d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} · {d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+              <div className={`ui-tx-amt ${up ? 'credit' : down ? 'debit' : ''}`}>{up ? `+${tx.appliedDelta}` : down ? `−${Math.abs(tx.appliedDelta)}` : '0'}</div>
+              <div className="ui-tx-bal"><span>Balance</span><b>{tx.balanceAfter}</b></div>
+            </li>
+          );
+        })}
+      </ol>
+      <div className="ui-bank-foot">
+        <span className="ui-muted">Showing {Math.min(size, rows.length)} of {rows.length} — download the CSV for the full statement.</span>
+        {size < rows.length && <button type="button" className="ui-btn" onClick={() => setSize(s => s + 20)}>Show more</button>}
+      </div>
+    </section>
+  );
 }
 
 function Polls({ polls }) {
@@ -1228,6 +1541,7 @@ function Leaderboard({ rows }) {
   );
 }
 
+const paceLabel = (pct, expected, name = '') => `${name ? name + ' ' : ''}${pct}% complete${expected != null ? `, ${Math.round(expected)}% expected by today` : ''}`;
 const fmtDate = d => d ? new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '—';
 const toInput = d => d ? new Date(d).toISOString().slice(0, 10) : '';
 
@@ -1236,10 +1550,17 @@ const toInput = d => d ? new Date(d).toISOString().slice(0, 10) : '';
 // Samagama data (and their SP rule) land. Goal *staking* lives in the Commitments tab.
 const NEXT_NUDGE = { standup: 'Next up: push your ViBe courses.', vibe: 'Next up: keep your SPA pace.', spa: 'Next up: ship your first project PR.', project: 'On track across the board — keep it up!' };
 
+const TRACKS = {
+  standup: { color: '#3b6fc4', icon: 'users', name: 'Standups' },
+  vibe: { color: '#f59e0b', icon: 'bolt', name: 'ViBe' },
+  spa: { color: '#6f63b8', icon: 'book', name: 'SPA' },
+  project: { color: '#3f8f74', icon: 'target', name: 'Projects' }
+};
+
 // Goal block that lives ON a phase card: set a target date (none/missed) → pace bar
 // once active → "reached" when done. Unit-aware (min for standups, % for ViBe). A GOAL
 // is a self-set target (no SP) — distinct from a COMMITMENT (staking SP, the Stake link).
-function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave }) {
+function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave, tone = null }) {
   const isPct = goal.unit === '%';
   const metric = isPct ? `${goal.progressPct}% done` : `${goal.current}/${goal.target} ${goal.unit} (${goal.progressPct}%)`;
   const paceLeft = isPct
@@ -1247,44 +1568,76 @@ function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave })
     : `${goal.remaining} ${goal.unit} to go · ~${goal.perDay ?? '—'} ${goal.unit}/${goal.perDayUnit || 'day'} to stay on track`;
 
   if (goal.status === 'achieved') {
-    return <div className="jr-goal"><span className="jr-goal-label done">🎯 Goal reached 🎉</span><span className="jr-goal-foot">{NEXT_NUDGE[phaseKey]}</span></div>;
+    return (
+      <div className="ui-goal done">
+        <span className="ui-goal-tag ok"><Icon name="check" size={14} stroke={2.6} /> Goal reached</span>
+        <span className="ui-goal-foot">{NEXT_NUDGE[phaseKey]}</span>
+      </div>
+    );
   }
   if (goal.status === 'active') {
     return (
-      <div className="jr-goal">
+      <div className="ui-goal">
         {goal.pending ? (
-          <span className="jr-goal-meta">🎯 Goal: by {fmtDate(goal.targetDate)} · {goal.daysLeft}d left · progress soon</span>
+          <span className="ui-goal-meta"><Icon name="target" size={14} /> Goal: by {fmtDate(goal.targetDate)} · {goal.daysLeft}d left · progress soon</span>
         ) : (
           <>
-            <span className="jr-goal-meta">🎯 Goal: {metric} · by {fmtDate(goal.targetDate)} · {goal.daysLeft}d left</span>
-            <div className="jr-progress"><i style={{ width: `${goal.progressPct}%` }} /></div>
-            <span className="jr-goal-foot">{paceLeft}</span>
+            <span className="ui-goal-meta"><Icon name="target" size={14} /> Goal: {metric} · by {fmtDate(goal.targetDate)} · {goal.daysLeft}d left</span>
+            <div className="ui-bar-h" style={tone ? { '--c': tone } : undefined}><i style={{ '--w': `${goal.progressPct}%` }} /></div>
+            <span className="ui-goal-foot">{paceLeft}</span>
           </>
         )}
       </div>
     );
   }
   return (
-    <div className="jr-goal">
+    <div className="ui-goal">
       {!goal.pending && goal.progressPct != null && (
         <>
-          <span className="jr-goal-meta">{metric}</span>
-          <div className="jr-progress"><i style={{ width: `${goal.progressPct}%` }} /></div>
+          <span className="ui-goal-meta">{metric}</span>
+          <div className="ui-bar-h" style={tone ? { '--c': tone } : undefined}><i style={{ '--w': `${goal.progressPct}%` }} /></div>
         </>
       )}
-      <span className={`jr-goal-label ${goal.status === 'missed' ? 'miss' : ''}`}>
-        🎯 {goal.status === 'missed' ? `Goal missed — set a new date to ${targetText}` : `Set a target date to ${targetText}`}
+      <span className={`ui-goal-tag ${goal.status === 'missed' ? 'miss' : ''}`}>
+        <Icon name="target" size={14} /> {goal.status === 'missed' ? `Goal missed — set a new date to ${targetText}` : `Set a target date to ${targetText}`}
       </span>
-      <div className="jr-goal-row">
-        <input type="date" min={goal.minDate || undefined} max={goal.maxDate || undefined} value={form[field] ?? ''} onChange={e => setForm({ ...form, [field]: e.target.value })} />
-        <button className="secondary" disabled={!form[field]} onClick={() => onSave(field, form[field])}>Set goal</button>
+      <div className="ui-goal-row">
+        <input type="date" min={goal.minDate || undefined} max={goal.maxDate || undefined} value={form[field] ?? ''} onChange={e => setForm({ ...form, [field]: e.target.value })} aria-label={`Target date to ${targetText}`} />
+        <button type="button" className="ui-btn" disabled={!form[field]} onClick={() => onSave(field, form[field])}>Set goal</button>
       </div>
-      {goal.minDate && <span className="jr-goal-hint">Earliest realistic: {fmtDate(goal.minDate)}{goal.paceHint ? ` · ${goal.paceHint}` : ''}</span>}
+      {goal.minDate && <span className="ui-goal-hint">Earliest realistic: {fmtDate(goal.minDate)}{goal.paceHint ? ` · ${goal.paceHint}` : ''}</span>}
     </div>
   );
 }
 
-function MyJourney({ student, goToCommitment, canCommit = false }) {
+function Stat({ icon, value, label, tone = '' }) {
+  return (
+    <div className={`ui-stat ${tone}`}>
+      <span className="ui-stat-ico"><Icon name={icon} size={17} /></span>
+      <div><strong>{value}</strong><span>{label}</span></div>
+    </div>
+  );
+}
+
+function TrackCard({ track, n, title, sub, sp, spNeg = false, pct = null, tone = null, expected = null, children }) {
+  const t = TRACKS[track];
+  return (
+    <section className="ui-card ui-track ui-spot" style={{ '--c': t.color }} {...spotlight}>
+      <header className="ui-track-head">
+        <span className="ui-track-ico"><Icon name={t.icon} size={20} /></span>
+        <div className="ui-track-title"><span className="ui-kicker">Track {n}</span><h3>{title}</h3></div>
+        {pct != null && <Ring value={pct} size={56} stroke={7} from={tone || t.color} to={tone || t.color} label={paceLabel(pct, expected)}><b className="ui-ring-sm">{pct}%</b></Ring>}
+      </header>
+      <div className="ui-track-sub">
+        <span className={`ui-sp-pill ${spNeg ? 'neg' : ''}`}>{sp}</span>
+        <p>{sub}</p>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function MyJourney({ student, goToCommitment, canCommit = false, attendance = [] }) {
   const email = student.email;
   const [data, setData] = useState(null);
   const [form, setForm] = useState({});
@@ -1297,10 +1650,51 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
   };
   useEffect(() => { load(); }, [email]);
 
-  if (!data) return <section className="panel">Loading your journey…</section>;
-  if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
+  // A reached goal is celebrated once per student per track, remembered on this device.
+  // If storage is unavailable there is no memory to guard the repeat, so we stay quiet.
+  useEffect(() => {
+    if (!data?.goals) return;
+    const fresh = [];
+    for (const [k, g] of Object.entries(data.goals)) {
+      if (g?.status !== 'achieved') continue;
+      const key = `spurti:goal:v1:${student._id}:${k}`;
+      try { if (!localStorage.getItem(key)) { localStorage.setItem(key, '1'); fresh.push(TRACKS[k]?.name || k); } } catch { /* stay quiet */ }
+    }
+    if (!fresh.length) return;
+    burst({ count: 110 });
+    toast(`Goal reached: ${fresh.join(', ')}`, { icon: 'trophy' });
+  }, [data, student._id]);
+
+  if (!data) {
+    return (
+      <div className="ui-stack">
+        <SkeletonCard rows={2} />
+        <div className="ui-grid-2"><SkeletonCard rows={4} /><SkeletonCard rows={4} /><SkeletonCard rows={3} /><SkeletonCard rows={3} /></div>
+      </div>
+    );
+  }
+  if (!data.eligible) return <section className="ui-card"><EmptyState icon="route" title="My Journey isn’t available for your cohort yet" /></section>;
 
   const { standups, vibe, spa, projects, goals } = data;
+  const streak = standups.streak || { current: 0, longest: 0 };
+  const dots = recentSessionDots(attendance, 14);
+  const pcts = {
+    standup: goals.standup.progressPct ?? 0,
+    vibe: goals.vibe.progressPct ?? 0,
+    spa: goals.spa.progressPct ?? 0,
+    project: goals.project.progressPct ?? 0
+  };
+  const overall = Math.round(Object.values(pcts).reduce((a, b) => a + b, 0) / 4);
+  // Colour = progress vs where the student should be TODAY (see progress.js), not vs the whole target.
+  const exp = {};
+  for (const k of Object.keys(TRACKS)) {
+    const g = goals[k];
+    exp[k] = expectedPct({ track: k, start: student.internshipStartDate, end: student.internshipEndDate, goalDate: g?.hasTarget ? g.targetDate : null });
+  }
+  const tones = Object.fromEntries(Object.keys(TRACKS).map(k => [k, paceTone(pcts[k], exp[k])]));
+  const withExp = Object.keys(TRACKS).filter(k => exp[k] != null);
+  const overallExp = withExp.length ? withExp.reduce((a, k) => a + exp[k], 0) / withExp.length : null;
+  const overallTone = withExp.length ? paceTone(withExp.reduce((a, k) => a + pcts[k], 0) / withExp.length, overallExp) : null;
 
   const saveTarget = async (field, value) => {
     const r = await fetch(`${API}/journey/plan`, {
@@ -1310,79 +1704,103 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
     const j = await r.json();
     if (!r.ok) { setErr(j.error); return; }
     setErr(null); setData(j);
+    toast('Goal saved — your pace bar is live', { icon: 'target' });
   };
   const gp = { form, setForm, onSave: saveTarget };
 
   return (
-    <div className="jr">
-      <section className="panel jr-intro">
-        <h2>My Journey</h2>
-        <p className="muted"><b>🎯 Goal</b> = your own finish-date target; it tracks your pace, no SP.{canCommit && <> &nbsp;<b>🎲 Commitment</b> = stake SP on a bet — the <b>Stake SP</b> link.</>}</p>
-        {err && <p className="error">{err}</p>}
+    <div className="ui-stack">
+      <section className="ui-card ui-overview">
+        <div className="ui-overview-main">
+          <Ring value={overall} size={104} stroke={11} {...(overallTone ? { from: overallTone, to: overallTone } : {})} label={paceLabel(overall, overallExp, 'overall')}>
+            <strong className="ui-ring-num sm">{overall}%</strong>
+            <span className="ui-ring-cap">overall</span>
+          </Ring>
+          <div>
+            <h2>My Journey</h2>
+            <p className="ui-muted"><b>Goal</b> = your own finish-date target; it tracks your pace, no SP.{canCommit && <> &nbsp;<b>Commitment</b> = stake SP on a bet — the <b>Stake SP</b> link.</>}</p>
+            {err && <p className="error">{err}</p>}
+          </div>
+        </div>
+        <div className="ui-mini-rings">
+          {Object.entries(TRACKS).map(([k, t]) => (
+            <div key={k} className="ui-mini">
+              <Ring value={pcts[k]} size={60} stroke={7} from={tones[k] || t.color} to={tones[k] || t.color} label={paceLabel(pcts[k], exp[k], t.name)}><b className="ui-ring-sm">{pcts[k]}%</b></Ring>
+              <span>{t.name}</span>
+            </div>
+          ))}
+        </div>
       </section>
 
-      <div className="jr-grid">
+      <div className="ui-grid-2">
         {/* Standups — continuous, no completion goal; commitment only */}
-        <section className="jr-card phase-standups">
-          <div className="jr-head"><span className="jr-n">1</span><h3>Standups</h3><span className="jr-sp">+{standups.sp} SP</span></div>
-          <p className="jr-sub">Zoom attendance + Spandan polls</p>
-          <div className="jr-stats">
-            <div><strong>{standups.zoomMinutes}</strong><span>Zoom minutes</span></div>
-            <div><strong>{standups.sessionsAttended}</strong><span>sessions attended</span></div>
-            <div><strong>{standups.pollsAttempted}/{standups.pollsTotal}</strong><span>polls attempted</span></div>
+        <TrackCard track="standup" tone={tones.standup} expected={exp.standup} n={1} title="Standups" pct={pcts.standup} sp={`${standups.sp >= 0 ? '+' : ''}${standups.sp} SP`} spNeg={standups.sp < 0} sub="Zoom attendance + Spandan polls">
+          <div className="ui-stats">
+            <Stat icon="clock" value={standups.zoomMinutes} label="Zoom minutes" />
+            <Stat icon="calendar" value={standups.sessionsAttended} label="sessions attended" />
+            <Stat icon="target" value={`${standups.pollsAttempted}/${standups.pollsTotal}`} label="polls attempted" />
+            <Stat icon="flame" tone={streak.current > 0 ? 'flame' : ''}
+              value={<>{streak.current}{streak.current > 0 ? <span className="ui-flame" aria-hidden="true">🔥</span> : ''}</>}
+              label={`session streak${streak.longest > streak.current ? ` (best ${streak.longest})` : ''}`} />
           </div>
-          <div className="jr-splits">
-            <span className="jr-pill">Attendance +{standups.spAttendance}</span>
-            <span className="jr-pill">Polls +{standups.spPolls}</span>
+          {dots.length > 0 && (
+            <div className="ui-dots-wrap">
+              <div className="ui-dots" role="img" aria-label={`Last ${dots.length} sessions on record: ${dots.filter(d => d.attended).length} attended`}>
+                {dots.map((d, i) => (
+                  <i key={d.label} className={d.attended ? 'on' : 'off'} style={{ '--i': i }}
+                    title={`${d.label} — ${d.attended ? `${d.minutes} min` : 'not attended'}`} />
+                ))}
+              </div>
+              <span className="ui-dots-cap">Recent sessions on record</span>
+            </div>
+          )}
+          <div className="ui-pills">
+            <span className="ui-pill">Attendance +{standups.spAttendance}</span>
+            <span className="ui-pill">Polls +{standups.spPolls}</span>
           </div>
-          <PhaseGoal phaseKey="standup" field="standupBy" goal={goals.standup} targetText="reach 3,600 Zoom minutes" {...gp} />
-          {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('standup')}>🎲 Stake SP →</button></div>}
-        </section>
+          <PhaseGoal phaseKey="standup" tone={tones.standup} field="standupBy" goal={goals.standup} targetText="reach 3,600 Zoom minutes" {...gp} />
+          {canCommit && <div className="ui-track-foot"><button type="button" className="ui-btn ghost" onClick={() => goToCommitment('standup')}><Icon name="dice" size={15} /> Stake SP</button></div>}
+        </TrackCard>
 
         {/* ViBe — goal + commitment */}
-        <section className="jr-card phase-vibe">
-          <div className="jr-head"><span className="jr-n">2</span><h3>ViBe courses</h3><span className={`jr-sp ${vibe.sp < 0 ? 'neg' : ''}`}>{vibe.sp >= 0 ? '+' : ''}{vibe.sp} SP</span></div>
-          <p className="jr-sub">{vibe.clearedCount}/{vibe.totalCourses} courses complete</p>
-          <div className="jr-dots">
+        <TrackCard track="vibe" tone={tones.vibe} expected={exp.vibe} n={2} title="ViBe courses" pct={pcts.vibe} sp={`${vibe.sp >= 0 ? '+' : ''}${vibe.sp} SP`} spNeg={vibe.sp < 0}
+          sub={`${vibe.clearedCount}/${vibe.totalCourses} courses complete`}>
+          <div className="ui-steps">
             {vibe.ladder.map(l => (
-              <div key={l.key} className={`jr-dot ${l.cleared ? 'done' : (vibe.current && vibe.current.key === l.key ? 'current' : '')}`} title={l.name}>
-                <b>{l.cleared ? '✓' : `${l.pct}%`}</b><span>{l.name}</span>
+              <div key={l.key} className={`ui-step ${l.cleared ? 'done' : (vibe.current && vibe.current.key === l.key ? 'current' : '')}`} title={l.name}>
+                <b>{l.cleared ? <Icon name="check" size={16} stroke={3} /> : `${l.pct}%`}</b><span>{l.name}</span>
               </div>
             ))}
           </div>
-          {vibe.activeCommitment && <div className="jr-splits"><span className="jr-pill amber">🎲 Active commitment: +{vibe.activeCommitment.goalPct}%</span></div>}
-          <PhaseGoal phaseKey="vibe" field="vibeBy" goal={goals.vibe} targetText="finish all your ViBe courses" {...gp} />
-          {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('vibe')}>🎲 Stake SP →</button></div>}
-        </section>
+          {vibe.activeCommitment && <div className="ui-pills"><span className="ui-pill amber"><Icon name="dice" size={13} /> Active commitment: +{vibe.activeCommitment.goalPct}%</span></div>}
+          <PhaseGoal phaseKey="vibe" tone={tones.vibe} field="vibeBy" goal={goals.vibe} targetText="finish all your ViBe courses" {...gp} />
+          {canCommit && <div className="ui-track-foot"><button type="button" className="ui-btn ghost" onClick={() => goToCommitment('vibe')}><Icon name="dice" size={15} /> Stake SP</button></div>}
+        </TrackCard>
 
         {/* SPA — live progress from the rubric summary (same source as the SPA Points tab) */}
-        <section className="jr-card phase-spa">
-          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-sp">+{spa.sp} SP</span></div>
-          <p className="jr-sub">{spa.solved}/{spa.total} problems solved · full breakdown in the SPA Points tab</p>
-          <div className="jr-stats">
-            <div><strong>{spa.solved}</strong><span>problems solved</span></div>
-            <div><strong>{spa.taught}</strong><span>peers taught</span></div>
+        <TrackCard track="spa" tone={tones.spa} expected={exp.spa} n={3} title="SPA — Matrix Mystics" pct={pcts.spa} sp={`${spa.sp >= 0 ? '+' : ''}${spa.sp} SP`} spNeg={spa.sp < 0}
+          sub={`${spa.solved}/${spa.total} problems solved · full breakdown in the SPA Points tab`}>
+          <div className="ui-stats">
+            <Stat icon="book" value={spa.solved} label="problems solved" />
+            <Stat icon="users" value={spa.taught} label="peers taught" />
           </div>
-          <PhaseGoal phaseKey="spa" field="spaBy" goal={goals.spa} targetText="solve all 53 problems" {...gp} />
-        </section>
+          <PhaseGoal phaseKey="spa" tone={tones.spa} field="spaBy" goal={goals.spa} targetText="solve all 53 problems" {...gp} />
+        </TrackCard>
 
         {/* Projects — live from the PR submission + review mirrors; SP rule still TBD */}
-        <section className="jr-card phase-project">
-          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-sp">+{projects.sp} SP</span></div>
-          <p className="jr-sub">{projects.submitted ? `${projects.prsRaised} PR${projects.prsRaised === 1 ? '' : 's'} submitted` : 'Pull requests — none submitted yet'}</p>
-          {projects.reviewStatus && (
-            <div className="jr-splits"><span className="jr-pill">Review: {projects.reviewStatus}</span></div>
-          )}
-          <PhaseGoal phaseKey="project" field="projectBy" goal={goals.project} targetText="raise your first PR" {...gp} />
-        </section>
+        <TrackCard track="project" tone={tones.project} expected={exp.project} n={4} title="Projects" pct={pcts.project} sp={`${projects.sp >= 0 ? '+' : ''}${projects.sp} SP`} spNeg={projects.sp < 0}
+          sub={projects.submitted ? `${projects.prsRaised} PR${projects.prsRaised === 1 ? '' : 's'} submitted` : 'Pull requests — none submitted yet'}>
+          {projects.reviewStatus && <div className="ui-pills"><span className="ui-pill">Review: {projects.reviewStatus}</span></div>}
+          <PhaseGoal phaseKey="project" tone={tones.project} field="projectBy" goal={goals.project} targetText="raise your first PR" {...gp} />
+        </TrackCard>
       </div>
 
-      <section className="panel jr-trajlink">
+      <section className="ui-card ui-trajlink">
         <div>
           <h2>Your SP trajectory</h2>
-          <p className="muted">Your Spurti Points over time vs the cohort and your group.</p>
+          <p className="ui-muted">Your Spurti Points over time vs the cohort and your group.</p>
         </div>
-        <button className="secondary" onClick={() => setShowTraj(true)}>View trajectory ↗</button>
+        <button type="button" className="ui-btn" onClick={() => setShowTraj(true)}>View trajectory <Icon name="arrowUp" size={14} style={{ transform: 'rotate(45deg)' }} /></button>
       </section>
 
       {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}

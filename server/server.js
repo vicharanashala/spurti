@@ -29,6 +29,11 @@ import { buildStandupState, placeStandup, settleStandupDemo } from './services/s
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 import { buildSpaState } from './services/spa.js';
 import { buildTrajectoryState } from './services/trajectory.js';
+import { wrapRouter } from './lib/asyncRoutes.js';
+import { TtlCache } from './lib/ttlCache.js';
+import { BatchBuffer } from './lib/batchBuffer.js';
+import { rateLimit } from './lib/rateLimit.js';
+import { safeEqual } from './lib/safeEqual.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -162,10 +167,25 @@ const app = express();
 // behaviour — it cannot make things worse.
 app.set('trust proxy', 1);
 const api = express.Router();
+// Every handler below may be async; without this a rejected promise leaves the
+// request hanging and can crash the process (Express 4 does not catch it).
+wrapRouter(api);
 const liveViewers = new Map();
+const LIVE_VIEWER_WINDOW_MS = 150_000;   // pings arrive every ~60s, so allow two missed beats
+const LIVE_VIEWERS_MAX = 100_000;
+// The verify page and its API are public (no login). Generous, because a shared
+// campus address may sit behind many real visitors; this only stops one client
+// from hammering the database.
+const verifyLimit = rateLimit({ windowMs: 60_000, max: 600 });
 
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+// Only the card upload carries a large body (a PNG data URL). Everything else is a
+// few hundred bytes, so a small default limit keeps a bad client from making the
+// server buffer megabytes per request. The specific parser must come first: once
+// a body is parsed the global one skips it.
+const cardJson = express.json({ limit: '2mb' });
+app.post(['/api/share/card', '/spurti/api/share/card'], cardJson);
+app.use(express.json({ limit: '64kb' }));
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
@@ -200,15 +220,27 @@ function parseCookies(header = '') {
 
 // Validate the student's Samagama session by forwarding their chatengine_token
 // cookie to Samagama's internal auth endpoint. Returns the email on success.
+//
+// One dashboard load makes several API calls, each of which needs the student's
+// identity. Validating each with Samagama would multiply the load on Samagama by
+// the number of calls, at exactly the moment the most students are online. So the
+// answer is cached per token for a short while, and concurrent lookups for the
+// same token share one request. A signed-out token can therefore still work for up
+// to SESSION_CACHE_TTL_MS; that is the trade for not falling over.
+const SESSION_CACHE_TTL_MS = 60_000;
+const sessionCache = new TtlCache({ maxKeys: 50_000, staleMs: 2 * 60_000 });
 async function getSamagamaUser(chatengineToken) {
   if (!chatengineToken) return null;
   try {
-    const res = await fetch(SAMAGAMA_AUTH_URL, {
-      headers: { cookie: `chatengine_token=${chatengineToken}` },
-      signal: AbortSignal.timeout(5000)
+    return await sessionCache.getOrLoad(chatengineToken, SESSION_CACHE_TTL_MS, async () => {
+      const res = await fetch(SAMAGAMA_AUTH_URL, {
+        headers: { cookie: `chatengine_token=${chatengineToken}` },
+        signal: AbortSignal.timeout(5000)
+      });
+      if (res.status === 401 || res.status === 403) return null;   // a real "not signed in": cache it
+      if (!res.ok) throw new Error(`Samagama auth HTTP ${res.status}`);   // an outage: do not cache it as "signed out"
+      return await res.json();
     });
-    if (!res.ok) return null;
-    return await res.json();
   } catch {
     return null;
   }
@@ -224,18 +256,67 @@ async function studentEmailFromRequest(req) {
   return normalizeEmail(email);
 }
 
-async function rankFor(email) {
-  const student = await Student.findOne({ email }).lean();
+// The competitive set: everyone not excused.
+const ACTIVE_FILTER = { status: { $ne: 'excused' } };
+const BY_SP = { totalSp: -1, name: 1 };
+
+// Rank = 1 + the number of students strictly ahead (more SP, or equal SP and an
+// earlier name — the same order every board uses). One indexed count per request.
+async function rankFor(student) {
   if (!student || student.status === 'excused') return null;
   const better = await Student.countDocuments({
-    status: { $ne: 'excused' },
+    ...ACTIVE_FILTER,
     $or: [
       { totalSp: { $gt: student.totalSp } },
       { totalSp: student.totalSp, name: { $lt: student.name } }
     ]
   });
-  const cohortSize = await Student.countDocuments({ status: { $ne: 'excused' } });
-  return { rank: better + 1, cohortSize };
+  return better + 1;
+}
+
+// The student ranked immediately above this one (for "N SP to pass the next student").
+function studentAbove(student) {
+  return Student.findOne({
+    ...ACTIVE_FILTER,
+    $or: [
+      { totalSp: { $gt: student.totalSp } },
+      { totalSp: student.totalSp, name: { $lt: student.name } }
+    ]
+  }).sort({ totalSp: 1, name: -1 }).select('totalSp').lean();
+}
+
+// Cohort-wide figures are identical for every student and only move when the
+// pipeline reruns (a few times a day). Loading them per request meant reading the
+// whole student collection twice for every dashboard view — fine at a few hundred
+// students, fatal at tens of thousands. They are computed once a minute instead,
+// shared by all requests, and a database blip serves the last good copy.
+const COHORT_TTL_MS = 60_000;
+const cohortCache = new TtlCache({ maxKeys: 500 });
+const ROW_FIELDS = 'name email totalSp highestSpEver';
+
+function loadCohortStats() {
+  return cohortCache.getOrLoad('cohort', COHORT_TTL_MS, async () => {
+    const [cohortSize, avg, tenth, fiftieth, top] = await Promise.all([
+      Student.countDocuments(ACTIVE_FILTER),
+      Student.aggregate([{ $match: ACTIVE_FILTER }, { $group: { _id: null, avg: { $avg: '$totalSp' } } }]),
+      Student.find(ACTIVE_FILTER).sort(BY_SP).skip(9).limit(1).select('totalSp').lean(),
+      Student.find(ACTIVE_FILTER).sort(BY_SP).skip(49).limit(1).select('totalSp').lean(),
+      Student.find(ACTIVE_FILTER).sort(BY_SP).limit(50).select(ROW_FIELDS).lean()
+    ]);
+    return {
+      cohortSize,
+      averageSp: Math.round(avg[0]?.avg || 0),
+      top10Cutoff: tenth[0]?.totalSp || null,
+      top50Cutoff: fiftieth[0]?.totalSp || null,
+      top
+    };
+  });
+}
+
+function loadGroupTop(group) {
+  if (!group) return Promise.resolve([]);
+  return cohortCache.getOrLoad(`group:${group}`, COHORT_TTL_MS, () =>
+    Student.find({ ...ACTIVE_FILTER, leaderboardGroup: group }).sort(BY_SP).limit(50).select(ROW_FIELDS).lean());
 }
 
 function excusedPayload(student) {
@@ -248,25 +329,25 @@ function excusedPayload(student) {
 
 async function studentPayload(student) {
   const email = student.email;
-  const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const myGroup = leaderboardGroup(student.internshipStartDate);
+  // Per-student work: three small indexed reads, one indexed count, one indexed
+  // lookup. Everything cohort-wide comes from the shared cache (see loadCohortStats).
+  const [transactions, polls, attendance, rank, above, cohort, groupTop] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
-    rankFor(email),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
+    rankFor(student),
+    student.status === 'excused' ? null : studentAbove(student),
+    loadCohortStats(),
+    loadGroupTop(myGroup)
   ]);
-  const allSp = allStudents.map(s => Number(s.totalSp || 0));
-  const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
-  const top10Cutoff = allStudents[9]?.totalSp || null;
-  const top50Cutoff = allStudents[49]?.totalSp || null;
-  const currentIndex = allStudents.findIndex(s => s.email === email);
-  const nextStudent = currentIndex > 0 ? allStudents[currentIndex - 1] : null;
+  const rankInfo = rank ? { rank, cohortSize: cohort.cohortSize } : null;
+  const { averageSp, top10Cutoff, top50Cutoff } = cohort;
+  const leaderboard = cohort.top;
+  const nextStudent = above;
   // Spurti Levels & Trophy Leagues — derived from existing SP (lifetime highest + current).
   const highestSpEver = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
-  const myGroup = leaderboardGroup(student.internshipStartDate);
-  const groupStudents = allStudents.filter(s => leaderboardGroup(s.internshipStartDate) === myGroup);
+  const groupStudents = groupTop;
   const mapRow = (row, index) => ({
     rank: index + 1,
     name: row.name,
@@ -339,8 +420,9 @@ function e2WindowOpen() {
 
 function isAdmin(req) {
   if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false; // fail closed when admin creds aren't configured
-  const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
-  const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
+  // Constant-time compares, so the token cannot be recovered from response timing.
+  const emailOk = safeEqual(normalizeEmail(req.headers['x-admin-email']), ADMIN_EMAIL);
+  const tokenOk = safeEqual(String(req.headers['x-admin-token'] || ''), ADMIN_TOKEN);
   return emailOk && tokenOk;
 }
 
@@ -349,14 +431,32 @@ function adminGuard(req, res, next) {
   next();
 }
 
-api.get('/health', (_req, res) => res.json({ status: 'ok' }));
+// Reports the database too, so a load balancer or PM2 health probe can take an
+// instance out of rotation when it has lost Mongo instead of serving 500s.
+api.get('/health', (_req, res) => {
+  const up = mongoose.connection.readyState === 1;
+  res.status(up ? 200 : 503).json({ status: up ? 'ok' : 'degraded', db: up ? 'up' : 'down' });
+});
 
 api.get('/config', (_req, res) => res.json({
   allowStudentSearch: ALLOW_STUDENT_SEARCH,
+  demoMode: DEMO_MODE,
   survey: surveyPublic(SURVEY),
   poll2: surveyPublic(POLL2),
   poll3: surveyPublic(POLL3)
 }));
+
+// ---- Demo mode (DEMO_MODE=1, local only): no login, pick any student -----------
+const DEMO_MODE = process.env.DEMO_MODE === '1' && ALLOW_STUDENT_SEARCH;
+api.get('/demo/students', async (_req, res) => {
+  if (!DEMO_MODE) return res.status(404).json({ error: 'Not found' });
+  const rows = await Student.find().sort({ totalSp: -1, name: 1 }).select('name email status totalSp highestSpEver').lean();
+  res.json(rows.map(s => ({ _id: String(s._id), name: s.name, email: s.email, status: s.status, totalSp: s.totalSp, level: levelFor(Math.max(s.highestSpEver || 0, s.totalSp || 0)), trophyLeague: leagueBand(s.totalSp) })));
+});
+api.get('/demo/teacher', (_req, res) => {
+  if (!DEMO_MODE || !ADMIN_EMAIL || !ADMIN_TOKEN) return res.status(404).json({ error: 'Not found' });
+  res.json({ email: ADMIN_EMAIL, token: ADMIN_TOKEN });
+});
 
 api.get('/me', async (req, res) => {
   const email = await studentEmailFromRequest(req);
@@ -368,8 +468,14 @@ api.get('/me', async (req, res) => {
 });
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
+// Which student is asking? In production (ALLOW_STUDENT_SEARCH=false) that is the
+// signed-in Samagama user and nobody else: an `email` in the body or query string
+// is ignored, otherwise anyone who knew an intern's address could read their
+// journey or overwrite their goals. With search enabled (local development) the
+// client-supplied email is still honoured, as it always was.
 async function vibeStudent(req) {
-  const email = normalizeEmail(req.body?.email || req.query.email) || await studentEmailFromRequest(req);
+  const claimed = ALLOW_STUDENT_SEARCH ? normalizeEmail(req.body?.email || req.query.email) : '';
+  const email = claimed || await studentEmailFromRequest(req);
   if (!email) return null;
   return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
 }
@@ -488,7 +594,7 @@ api.post('/confirm', async (req, res) => {
   const typed = normalizeEmail(email);
   const student = await Student.findById(studentId).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
-  if (typed !== normalizeEmail(student.email) && typed !== normalizeEmail(student.alternateEmail)) {
+  if (!DEMO_MODE && typed !== normalizeEmail(student.email) && typed !== normalizeEmail(student.alternateEmail)) {
     return res.status(403).json({ error: 'Email did not match this record' });
   }
   if (student.status === 'excused') return res.json(excusedPayload(student));
@@ -496,6 +602,7 @@ api.post('/confirm', async (req, res) => {
 });
 
 api.get('/leaderboard', async (req, res) => {
+  res.set('Cache-Control', 'public, max-age=30');
   const type = String(req.query.leaderboardType || 'overall');
   const filter = { status: { $ne: 'excused' } };
   if (type === 'my_onboarding_group' && req.query.group) filter.leaderboardGroup = String(req.query.group);
@@ -644,7 +751,7 @@ api.post('/achievements/seen', async (req, res) => {
 
 // Public — this is what the QR on a shared card opens. No login, no PII beyond
 // the recipient's name and what they won.
-api.get('/verify/:code', async (req, res) => {
+api.get('/verify/:code', verifyLimit, async (req, res) => {
   const result = await verifyAchievement(req.params.code, Student);
   if (!result) return res.status(404).json({ valid: false });
   res.json(result);
@@ -765,23 +872,43 @@ api.post('/e2/card-event', async (req, res) => {
   res.json({ ok: true });
 });
 
-api.post('/ping', async (req, res) => {
+// Page-view pings. Every open dashboard tab sends one on a timer, so at cohort scale
+// this is the busiest write endpoint by far. Each ping used to be its own insert;
+// they are now queued and written in batches, and the queue is bounded (oldest
+// dropped) so a slow database can never turn analytics into a memory leak.
+const PAGE_VALUES = new Set(SessionEvent.schema.path('page').enumValues);
+const pingBuffer = new BatchBuffer(
+  batch => SessionEvent.insertMany(batch, { ordered: false }),
+  { intervalMs: 5000, batchSize: 1000, maxItems: 20_000, onError: (err, n) => console.error(`ping batch of ${n} lost:`, err?.message) }
+);
+// Per-address, generous: a legitimate tab pings about once a minute.
+const pingLimit = rateLimit({ windowMs: 60_000, max: 20, keyFn: req => normalizeEmail(req.body?.email) || req.ip });
+
+api.post('/ping', pingLimit, async (req, res) => {
   const { email, name, page } = req.body || {};
-  const normalized = normalizeEmail(email);
+  const normalized = normalizeEmail(email).slice(0, 254);
   if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
+  const cleanName = String(name).slice(0, 120);
+  const cleanPage = String(page).slice(0, 40);
   // Telemetry is best-effort: an unknown page value (e.g. a new admin sub-page
-  // not yet in the enum) must never crash the request or leak an unhandled
-  // rejection. Drop the write and carry on.
-  try {
-    await SessionEvent.create({ email: normalized, name, event: 'page_view', page });
-  } catch (err) {
-    if (err?.name !== 'ValidationError') console.error('ping log failed:', err?.message);
+  // not yet in the enum) is simply not recorded.
+  if (PAGE_VALUES.has(cleanPage)) {
+    pingBuffer.push({ email: normalized, name: cleanName, event: 'page_view', page: cleanPage, timestamp: new Date() });
   }
-  if (page === 'record' || page.startsWith('admin')) {
-    liveViewers.set(normalized, { name, page, lastSeen: new Date() });
+  if (cleanPage === 'record' || cleanPage.startsWith('admin')) {
+    if (liveViewers.size < LIVE_VIEWERS_MAX || liveViewers.has(normalized)) {
+      liveViewers.set(normalized, { name: cleanName, page: cleanPage, lastSeen: new Date() });
+    }
   }
   res.json({ ok: true });
 });
+
+// Forget viewers who have stopped pinging, so the live table tracks the people
+// actually online rather than everyone who ever visited.
+setInterval(() => {
+  const cutoff = Date.now() - LIVE_VIEWER_WINDOW_MS;
+  for (const [key, v] of liveViewers) if (v.lastSeen.getTime() < cutoff) liveViewers.delete(key);
+}, 60_000).unref();
 
 // --- Survey triangulation (mandatory perception follow-up) ---------------
 // Mark a student's survey as completed for the given survey config. Idempotent;
@@ -879,14 +1006,18 @@ api.get('/admin/leaderboard', adminGuard, async (req, res) => {
 });
 
 api.get('/admin/attendance', adminGuard, async (_req, res) => {
+  res.json(await adminCache.getOrLoad('attendance', ADMIN_TTL_MS, buildAttendanceGrid));
+});
+
+async function buildAttendanceGrid() {
   const [sessions, students, records] = await Promise.all([
     Session.find().sort({ endDateTime: 1 }).lean(),
-    Student.find({ status: 'active' }).sort({ name: 1 }).lean(),
-    AttendanceRecord.find().lean()
+    Student.find({ status: 'active' }).select('name email totalSp').sort({ name: 1 }).lean(),
+    AttendanceRecord.find().select('email sessionLabel attendedMinutes totalSessionMinutes qualified attendancePercentage').lean()
   ]);
   const byStudent = new Map();
   for (const record of records) byStudent.set(`${record.email}|${record.sessionLabel}`, record);
-  res.json({
+  return {
     sessions: sessions.map(s => ({ label: s.label, totalMinutes: s.totalMinutes })),
     students: students.map(student => ({
       _id: String(student._id),
@@ -903,8 +1034,8 @@ api.get('/admin/attendance', adminGuard, async (_req, res) => {
         } : null];
       }))
     }))
-  });
-});
+  };
+}
 
 api.get('/admin/student/:id', adminGuard, async (req, res) => {
   const student = await Student.findById(req.params.id).lean();
@@ -914,7 +1045,7 @@ api.get('/admin/student/:id', adminGuard, async (req, res) => {
 
 api.get('/admin/active', adminGuard, (_req, res) => {
   const now = new Date();
-  const cutoff = now.getTime() - 60_000;
+  const cutoff = now.getTime() - LIVE_VIEWER_WINDOW_MS;
   const viewers = [];
   for (const [email, data] of liveViewers.entries()) {
     if (data.lastSeen.getTime() >= cutoff) {
@@ -930,7 +1061,17 @@ api.get('/admin/active', adminGuard, (_req, res) => {
   res.json(viewers);
 });
 
+// The analytics and attendance views read large collections. Computed once per
+// TTL and shared, so several admins (or one admin mashing refresh) cost one pass
+// over the data rather than one each, and a database blip serves the last result.
+const adminCache = new TtlCache({ maxKeys: 20, staleMs: 30 * 60_000 });
+const ADMIN_TTL_MS = 2 * 60_000;
+
 api.get('/admin/analytics', adminGuard, async (_req, res) => {
+  res.json(await adminCache.getOrLoad('analytics', ADMIN_TTL_MS, buildAnalytics));
+});
+
+async function buildAnalytics() {
   const now = new Date();
   const lastHour = new Date(now.getTime() - 60 * 60 * 1000);
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -938,11 +1079,13 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   const [allStudents, sessions, attendance, transactions, events, shares, achievements, views, reigns] = await Promise.all([
-    Student.find().lean(),
+    // Only the fields this report reads: at tens of thousands of students and
+    // millions of ledger rows, whole documents would not fit in memory.
+    Student.find().select('email status totalSp').lean(),
     Session.find().sort({ endDateTime: 1 }).lean(),
-    AttendanceRecord.find().lean(),
-    SPTransaction.find().lean(),
-    SessionEvent.find({ timestamp: { $gte: last30Days } }).lean(),
+    AttendanceRecord.find().select('email sessionLabel qualified attendedMinutes').lean(),
+    SPTransaction.find().select('email category appliedDelta').lean(),
+    SessionEvent.find({ timestamp: { $gte: last30Days } }).select('email timestamp').lean(),
     ShareEvent.find().lean(),
     // The full rows, not a count: per-category share rates need the cards HELD
     // in each category as their denominator.
@@ -981,7 +1124,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     return [...map.values()].sort((a, b) => a.label.localeCompare(b.label)).map(r => ({ label: r.label, events: r.events, uniqueUsers: r.emails.size }));
   };
 
-  const activeNow = [...liveViewers.values()].filter(v => now.getTime() - v.lastSeen.getTime() <= 60_000).length;
+  const activeNow = [...liveViewers.values()].filter(v => now.getTime() - v.lastSeen.getTime() <= LIVE_VIEWER_WINDOW_MS).length;
   const spValues = activeStudents.map(s => Number(s.totalSp || 0)).sort((a, b) => a - b);
   const avgSp = spValues.length ? Math.round(spValues.reduce((a, b) => a + b, 0) / spValues.length) : 0;
   const medianSp = spValues.length ? spValues[Math.floor(spValues.length / 2)] : 0;
@@ -1028,7 +1171,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     return acc;
   }, {})).sort((a, b) => b.debitSp - a.debitSp).slice(0, 10);
 
-  res.json({
+  return {
     live: { activeNow },
     users: {
       activeLastHour: uniqueSince(lastHour),
@@ -1063,8 +1206,8 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     sharing: shareSummary(shares, achievements, views, last7Days),
     reigns: reignSummary(reigns),
     pipeline: pipelineHealth()
-  });
-});
+  };
+}
 
 const BOARD_LABEL = {
   total: 'Overall SP', attendance: 'Attendance', poll: 'Polls',
@@ -1257,13 +1400,24 @@ app.use('/cards', express.static(CARD_DIR, { maxAge: '30d' }));
 // student posts the link, LinkedIn/WhatsApp fetch it, read og:image, and show
 // the achievement card in the post itself — no upload, no download. The SPA
 // still boots from the same HTML and renders the page for humans.
+// The built index.html is read once and re-read only if the file changes (a new
+// deploy), instead of a synchronous disk read on every verify-page hit. A card
+// that goes viral on LinkedIn sends a burst of these, and each blocking read
+// stalls every other request on the same process.
+let indexHtmlCache = { mtimeMs: 0, html: '' };
+function indexHtml() {
+  const file = path.join(clientDist, 'index.html');
+  const { mtimeMs } = fs.statSync(file);
+  if (mtimeMs !== indexHtmlCache.mtimeMs) indexHtmlCache = { mtimeMs, html: fs.readFileSync(file, 'utf8') };
+  return indexHtmlCache.html;
+}
+
 async function verifyPageHtml(req, code) {
   // The bundle is built with a relative base, so "./assets/x.js" would resolve
   // against /spurti/verify/<code>/ and 404. This page is two levels deep, so the
   // asset paths have to be absolute.
   const mount = req.path.startsWith('/spurti') ? '/spurti' : '';
-  const html = fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8')
-    .replace(/(src|href)="\.\/assets\//g, `$1="${mount}/assets/`);
+  const html = indexHtml().replace(/(src|href)="\.\/assets\//g, `$1="${mount}/assets/`);
   const result = await verifyAchievement(code, Student);
   const base = publicBaseUrl(req);
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1292,9 +1446,19 @@ async function verifyPageHtml(req, code) {
 }
 
 if (fs.existsSync(clientDist)) {
-  app.use('/spurti', express.static(clientDist, { index: false }));
-  app.use(express.static(clientDist, { index: false }));
-  app.get(['/spurti/verify/:code', '/verify/:code'], async (req, res) => {
+  // Vite fingerprints everything under /assets, so those files can be cached for a
+  // year; index.html (and anything else) must be revalidated so a new build shows up.
+  const staticOpts = {
+    index: false,
+    setHeaders: (res, file) => {
+      res.setHeader('Cache-Control', /[\\/]assets[\\/]/.test(file)
+        ? 'public, max-age=31536000, immutable'
+        : 'no-cache');
+    }
+  };
+  app.use('/spurti', express.static(clientDist, staticOpts));
+  app.use(express.static(clientDist, staticOpts));
+  app.get(['/spurti/verify/:code', '/verify/:code'], verifyLimit, async (req, res) => {
     try {
       const { found, html } = await verifyPageHtml(req, req.params.code);
       // Logged here and NOT on /api/verify: a human loads this page and then
@@ -1312,11 +1476,79 @@ if (fs.existsSync(clientDist)) {
   app.get('*', (_req, res) => res.status(404).send('Build the client first with npm run build.'));
 }
 
-mongoose.connect(MONGO_URI).then(() => {
-  app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
-}).catch((error) => {
-  console.error(error);
-  process.exit(1);
+// Anything that reaches here is a failure no handler dealt with (a rejected query,
+// a malformed or oversized body). One request gets an error; the process carries on.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = err?.status || err?.statusCode || 500;
+  if (status >= 500) console.error(`[error] ${req.method} ${req.originalUrl}:`, err?.stack || err);
+  res.status(status).json({ error: status >= 500 ? 'Something went wrong. Please try again.' : 'Bad request.' });
 });
 
+// Fill the in-process caches once at boot so the first teacher/student to open the
+// dashboard gets a cached answer instead of paying for the cohort-wide queries.
+// Best effort: a failure here only means the first real request loads it instead.
+async function warmCaches() {
+  const t0 = Date.now();
+  const jobs = {
+    cohort: loadCohortStats(),
+    attendance: adminCache.getOrLoad('attendance', ADMIN_TTL_MS, buildAttendanceGrid),
+    analytics: adminCache.getOrLoad('analytics', ADMIN_TTL_MS, buildAnalytics)
+  };
+  const names = Object.keys(jobs);
+  const results = await Promise.allSettled(Object.values(jobs));
+  const ok = names.filter((_, i) => results[i].status === 'fulfilled');
+  console.log(`[cache] warmed ${ok.join(', ') || 'nothing'} in ${Date.now() - t0}ms`);
+  results.forEach((r, i) => { if (r.status === 'rejected') console.warn(`[cache] ${names[i]} not warmed:`, r.reason?.message); });
+}
 
+let server = null;
+let shuttingDown = false;
+async function shutdown(code = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const force = setTimeout(() => process.exit(code || 1), 10_000);   // never hang on the way out
+  force.unref();
+  try {
+    if (server) await new Promise(resolve => server.close(resolve));   // stop taking new connections
+    await pingBuffer.stop();                                           // write out queued page views
+    await mongoose.connection.close();
+  } catch (err) {
+    console.error('shutdown error:', err?.message);
+  }
+  process.exit(code);
+}
+
+// Starts the server unless SPURTI_NO_START=1. The tests set that so they can import
+// the configured app without connecting to Mongo or claiming a port. It is an
+// explicit opt-out rather than "was this file run directly?" on purpose: under PM2
+// or any wrapper process.argv[1] is not this file, and the app must still start.
+if (process.env.SPURTI_NO_START !== '1') {
+  // A rejected promise nobody handled is logged, not fatal. An uncaught exception
+  // leaves the process in an unknown state, so log it, flush what we can and exit
+  // for the supervisor (PM2) to restart cleanly.
+  process.on('unhandledRejection', (reason) => console.error('[unhandledRejection]', reason));
+  process.on('uncaughtException', (err) => { console.error('[uncaughtException]', err); shutdown(1); });
+  process.on('SIGTERM', () => shutdown(0));
+  process.on('SIGINT', () => shutdown(0));
+
+  // Pool size caps concurrent Mongo work per process; the timeouts turn a stalled
+  // database into fast, contained errors instead of requests that pile up forever.
+  mongoose.connect(MONGO_URI, {
+    maxPoolSize: Number(process.env.MONGO_POOL_SIZE || 50),
+    minPoolSize: 5,
+    serverSelectionTimeoutMS: 10_000,
+    socketTimeoutMS: 45_000
+  }).then(() => {
+    server = app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
+    warmCaches();
+    // Keep-alive longer than nginx's, so a proxied connection is never closed under it.
+    server.keepAliveTimeout = 65_000;
+    server.headersTimeout = 66_000;
+  }).catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+export default app;

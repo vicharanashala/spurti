@@ -666,8 +666,8 @@ input {
 
 .jr-card { background: var(--panel, #fff); border: 1px solid var(--line); border-radius: 12px; padding: 16px; border-top: 4px solid var(--primary); box-shadow: var(--shadow, 0 1px 2px rgba(0,0,0,.04)); }
 .jr-card.phase-standups { border-top-color: #3b82f6; }
-.jr-card.phase-vibe { border-top-color: #8b5cf6; }
-.jr-card.phase-spa { border-top-color: #f59e0b; }
+.jr-card.phase-vibe { border-top-color: #f59e0b; }
+.jr-card.phase-spa { border-top-color: #8b5cf6; }
 .jr-card.phase-project { border-top-color: #10b981; }
 
 .jr-head { display: flex; align-items: center; gap: 8px; }
@@ -688,8 +688,8 @@ input {
 
 .jr-dots { display: flex; gap: 8px; }
 .jr-dot { flex: 1; text-align: center; border: 1px solid var(--line); border-radius: 8px; padding: 8px 4px; }
-.jr-dot.done { background: #ede9fe; border-color: #8b5cf6; }
-.jr-dot.current { background: #f5f3ff; border-color: #8b5cf6; box-shadow: inset 0 0 0 1px #8b5cf6; }
+.jr-dot.done { background: #fef3c7; border-color: #f59e0b; }
+.jr-dot.current { background: #fffbeb; border-color: #f59e0b; box-shadow: inset 0 0 0 1px #f59e0b; }
 .jr-dot b { display: block; font-size: 15px; }
 .jr-dot span { font-size: 10px; color: var(--muted); }
 
@@ -711,9 +711,9 @@ input {
 .cm-subtab.active .cm-tag { background: rgba(255, 255, 255, 0.24); color: #fff; }
 .cm-acc { border: 1px solid var(--line); border-radius: 12px; background: var(--panel, #fff); overflow: hidden; border-left: 4px solid var(--line); }
 .cm-acc.open { box-shadow: var(--shadow, 0 1px 3px rgba(0,0,0,.06)); }
-.cm-acc.phase-vibe.open { border-left-color: #8b5cf6; }
+.cm-acc.phase-vibe.open { border-left-color: #f59e0b; }
 .cm-acc.phase-standup.open { border-left-color: #3b82f6; }
-.cm-acc.phase-spa.open { border-left-color: #f59e0b; }
+.cm-acc.phase-spa.open { border-left-color: #8b5cf6; }
 .cm-acc.phase-project.open { border-left-color: #10b981; }
 .cm-accbtn { width: 100%; display: flex; align-items: center; gap: 10px; padding: 14px 16px; background: none; border: none; cursor: pointer; text-align: left; font: inherit; }
 .cm-accbtn b { font-size: 15px; }

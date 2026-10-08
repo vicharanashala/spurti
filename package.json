@@ -7,6 +7,8 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "seed": "node server/seed-demo-local.mjs",
+    "seed:demo": "node server/seed-demo-full.mjs",
+    "demo": "node server/seed-demo-full.mjs && node server/server.js",
     "seed-announcements": "node server/seed-announcements-demo.mjs",
     "setup": "npm install && npm --prefix client install && npm run build",
     "build": "npm --prefix client run build",

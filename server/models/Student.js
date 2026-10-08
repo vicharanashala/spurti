@@ -39,5 +39,11 @@ const studentSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 studentSchema.index({ name: 'text', email: 'text', alternateEmail: 'text' });
+// Every board and every student's rank sorts by (totalSp desc, name asc). Without
+// this compound index each rank lookup is an in-memory sort of the whole
+// collection; with it the count and the "who is just above me" query walk the index.
+studentSchema.index({ totalSp: -1, name: 1 });
+// The per-onboarding-group board: filter by group, then the same ordering.
+studentSchema.index({ leaderboardGroup: 1, totalSp: -1, name: 1 });
 
 export default mongoose.model('Student', studentSchema);
