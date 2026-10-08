@@ -25,15 +25,19 @@ export const STANDUP = {
 
 export const tierByKey = k => STANDUP.tiers.find(t => t.key === k);
 
-// Current calendar week, Monday 00:00 → Sunday 23:59:59 (local server time).
+const IST_MS = 5.5 * 3600 * 1000;
+
+// Current calendar week, Monday 00:00 → Sunday 23:59:59 IST. Computed via the IST
+// clock so it is correct regardless of the server's timezone.
 function weekWindow(now = new Date()) {
-  const start = new Date(now); start.setHours(0, 0, 0, 0);
-  const dow = (start.getDay() + 6) % 7;           // 0 = Monday
-  start.setDate(start.getDate() - dow);
-  const end = new Date(start); end.setDate(end.getDate() + 6); end.setHours(23, 59, 59, 999);
+  const ist = new Date(now.getTime() + IST_MS);
+  const dow = (ist.getUTCDay() + 6) % 7;           // 0 = Monday
+  const monMidnightIst = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() - dow);
+  const start = new Date(monMidnightIst - IST_MS);
+  const end = new Date(start.getTime() + 7 * 86400000 - 1);  // Sunday 23:59:59.999
   return { start, end };
 }
-const fmt = d => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+const fmt = d => new Date(d.getTime() + IST_MS).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
 export async function buildStandupState(student) {
   const email = student.email;
@@ -42,9 +46,9 @@ export async function buildStandupState(student) {
   // Attendance already logged this week (informational — the demo settles by button).
   const wk = await AttendanceRecord.find({ email }).lean();
   const thisWeek = wk.filter(r => r.createdAt && new Date(r.createdAt) >= start && new Date(r.createdAt) <= end);
-  const attendedThisWeek = thisWeek.filter(r => (r.attendedMinutes || 0) > 0).length;
-  const avgPctThisWeek = attendedThisWeek
-    ? Math.round(thisWeek.reduce((a, r) => a + (r.attendancePercentage || 0), 0) / attendedThisWeek)
+  const attended = thisWeek.filter(r => (r.attendedMinutes || 0) > 0);
+  const avgPctThisWeek = attended.length
+    ? Math.round(attended.reduce((a, r) => a + (r.attendancePercentage || 0), 0) / attended.length)
     : null;
 
   const commits = await Commitment.find({ email, type: 'standup' }).sort({ createdAt: -1 }).lean();
@@ -59,7 +63,7 @@ export async function buildStandupState(student) {
     weekLabel: `${fmt(start)} – ${fmt(end)}`,
     deadline: end,
     sessionsThisWeek: STANDUP.sessionsPerWeek,
-    attendedThisWeek, avgPctThisWeek,
+    attendedThisWeek: attended.length, avgPctThisWeek,
     tiers: STANDUP.tiers, multipliers: STANDUP.multipliers, penaltyFactor: STANDUP.penaltyFactor,
     totalSp: student.totalSp || 0, available,
     active, history
