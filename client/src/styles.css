@@ -257,6 +257,69 @@ input {
 .level-tile.league.tier-legend   { background: linear-gradient(135deg, #6d28d9, #c026d3); }
 .level-note { color: var(--muted); font-size: 13px; margin-top: 12px; line-height: 1.5; }
 @media (max-width: 720px) { .level-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* SP Risk Predictor (Phase 2) — sits under LevelStatus on the student record */
+.sp-risk {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 16px;
+  margin-bottom: 18px;
+}
+.sp-risk-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.sp-risk-head h2 { margin: 0; font-size: 22px; }
+.sp-risk-tiles { margin-bottom: 8px; }
+.sp-risk-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.sp-risk-badge.risk-low { background: #e9f7ee; color: var(--green); }
+.sp-risk-badge.risk-medium { background: #fef3e2; color: var(--amber); }
+.sp-risk-badge.risk-high { background: #fde8e6; color: var(--red); }
+.sp-risk-sub { font-size: 15px; margin: 16px 0 8px; }
+.sp-risk-meta { margin: 0 0 10px; font-size: 13px; }
+.sp-risk-bars { margin-bottom: 10px; }
+.sp-risk-bars .bar-row { grid-template-columns: 140px minmax(0, 1fr) 42px; font-size: 13px; font-weight: 700; }
+.sp-risk-reasons {
+  margin: 0 0 4px;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.sp-risk-plan { display: grid; gap: 10px; }
+.sp-risk-action {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #fafdff;
+}
+.sp-risk-action header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.sp-risk-action p { margin: 0; color: var(--text); font-size: 14px; line-height: 1.45; }
+.sp-risk-sp { color: var(--green); font-size: 14px; }
+.sp-risk-action.priority-high { border-color: #f5c9a8; background: #fff6ef; }
+.sp-risk-action.priority-low { border-color: #cdebd8; background: #f4fbf6; }
+
 .pulse-grid {
   display: grid;
   grid-template-columns: 1fr 2fr;
