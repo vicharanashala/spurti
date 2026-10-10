@@ -218,6 +218,73 @@ are not in this repository and never will be — they are student data. Locally 
 display layer against seeded or exported-and-anonymised data; scoring changes are verified on the
 server with a dry run (`node pipeline/sp-rubric-build-mirror.cjs` with no `APPLY`).
 
+### Troubleshooting local setup
+
+Common hurdles when setting up Spurti locally and how to resolve them:
+
+#### 1. MongoDB connection errors (`ECONNREFUSED` / `ServerSelectionTimeoutError`)
+
+If `npm start` crashes with `MongooseServerSelectionError: connect ECONNREFUSED 127.0.0.1:27017`:
+
+- **Check if MongoDB is running locally:**
+  ```bash
+  # macOS (Homebrew)
+  brew services list | grep mongodb
+  brew services start mongodb-community
+
+  # Linux (systemd)
+  sudo systemctl status mongod
+  sudo systemctl start mongod
+
+  # Or run via Docker (no local service needed)
+  docker run -d -p 27017:27017 --name spurti-mongo mongo:latest
+  ```
+- **Verify connectivity before starting the server:**
+  ```bash
+  node -e "require('dotenv').config(); const {MongoClient}=require('mongodb'); new MongoClient(process.env.MONGO_URI||'mongodb://127.0.0.1:27017/spurti_demo',{serverSelectionTimeoutMS:4000}).connect().then(()=>{console.log('✓ MongoDB reachable');process.exit(0)}).catch(e=>{console.error('✗ MongoDB error:',e.message);process.exit(1)})"
+  ```
+- **Using MongoDB Atlas?** Ensure your current public IP address is whitelisted in Atlas Network Access. If DNS SRV lookup fails (`querySrv ECONNREFUSED`), switch to the standard connection string format in your `.env`.
+
+#### 2. Seed script refusal: `refusing: MONGO_URI must be a *demo* db`
+
+The demo seed script (`npm run seed`) wipes the `students`, `achievements`, and `attendancerecords` collections to prevent stale mock data. To prevent accidental data loss in production or staging databases, it strictly enforces that the database name in `MONGO_URI` contains `demo`.
+
+- **Fix:** Pass a URI ending in `_demo` or ensure your `.env` contains `demo` in the database path:
+  ```bash
+  MONGO_URI=mongodb://127.0.0.1:27017/spurti_demo npm run seed
+  MONGO_URI=mongodb://127.0.0.1:27017/spurti_demo npm run seed-announcements
+  ```
+- **Demo student login:** After seeding, test the UI by searching for the seeded demo student: `priya.demo@example.com`.
+
+#### 3. Port collision (`EADDRINUSE: :::5290` or `:::5291`)
+
+If you see `Error: listen EADDRINUSE: address already in use :::5290`:
+
+- A background node process or previous `npm start` is still listening on port 5290.
+- Find and terminate the process holding the port:
+  ```bash
+  lsof -ti:5290 | xargs kill -9
+  # For Vite client dev server (5291):
+  lsof -ti:5291 | xargs kill -9
+  ```
+- Alternatively, override the server port by setting `PORT=5292` in your local `.env`.
+
+#### 4. Client Vite proxy returning 504 / ECONNREFUSED
+
+When running `npm --prefix client run dev` (port 5291), the Vite dev server proxies API calls (`/api` and `/spurti`) to `http://localhost:5290`. If the backend server is not active on port 5290, API requests will fail.
+
+- Always run both processes concurrently in two terminal tabs:
+  - **Terminal 1:** `npm start` (API running on 5290)
+  - **Terminal 2:** `npm --prefix client run dev` (Vite dev server on 5291 with hot reloading)
+- Access the app at `http://localhost:5291/spurti/` during frontend development.
+
+#### 5. Local student search & auth bypass
+
+In production, authentication relies on the Samagama SSO cookie (`chatengine_token`). Locally without Samagama:
+
+- Keep `ALLOW_STUDENT_SEARCH=true` in your `.env`.
+- Use the student search input in the navigation bar to search by email (e.g. `priya.demo@example.com`).
+
 ## Configuration
 
 Three example files, one per deployment. Copy the one you need to `.env`; never commit a filled-in
