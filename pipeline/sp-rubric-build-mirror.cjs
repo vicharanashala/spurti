@@ -70,6 +70,9 @@ const APPLY = process.env.APPLY === '1';
 // row's emails fold into the canonical identity; no separate canon is created.
 const CANON_ALIAS = {
   'bsharma_be24@thapar.edu': '25010733@scale.iitrpr.ac.in',
+  // Rohith N R (14 Oct 2026): Samagama keeps notrohith444 as his active account and
+  // hides the old notrohith44 one; his SPA/project/quiz SP move to notrohith444.
+  'notrohith44@gmail.com': 'notrohith444@gmail.com',
 };
 
 // 09:05 IST = 03:35 UTC. wEnd = min(first-instance-end, 11:00 IST). Per-day end overrides (IST) take precedence.
