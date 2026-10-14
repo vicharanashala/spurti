@@ -62,6 +62,15 @@ const PROGRAM_START = process.env.PROGRAM_START || '2026-05-15';
 const TODAY = process.env.TODAY || new Date().toISOString().slice(0, 10);
 const OUT_DIR = process.env.OUT_DIR || process.cwd();
 const APPLY = process.env.APPLY === '1';
+// CANON_ALIAS (added 2026-10-14): candidates rows that are the SAME person as another
+// row's primary email. Samagama re-creates a chatengine user when a registered email
+// changes (Bhaagwat Sharma: SCALE id deleted by IIT Ropar -> new Thapar record 13 Oct),
+// and the old row stays in the mirror, so the rubric saw two identities and split his
+// SP. Map: new primary email -> canonical (ledger-holding) primary email. The alias
+// row's emails fold into the canonical identity; no separate canon is created.
+const CANON_ALIAS = {
+  'bsharma_be24@thapar.edu': '25010733@scale.iitrpr.ac.in',
+};
 
 // 09:05 IST = 03:35 UTC. wEnd = min(first-instance-end, 11:00 IST). Per-day end overrides (IST) take precedence.
 const WINDOW_END_OVERRIDE_IST = { '2026-05-22': '11:00' };
@@ -233,12 +242,18 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   // bogus "start" and the bonus to vanish). Own-record + sakshi roster only.
   const rejectedSet = new Set(); const internCanon = new Map(); const internStart = new Map(); const emailToCanon = new Map(); const nameBy = new Map();
   for (const u of await sak.collection('candidates').find({ email: { $exists: true } }, { projection: { email: 1, emailAlt: 1, zoomEmail: 1, name: 1, vinsStartDate: 1, applicationStatus: 1, deletedAt: 1 } }).toArray()) {
-    const canon = String(u.email || '').toLowerCase().trim(); if (!canon) continue;
-    const emails = [canon, u.emailAlt && String(u.emailAlt).toLowerCase().trim(), u.zoomEmail && String(u.zoomEmail).toLowerCase().trim()].filter(Boolean);
+    const raw = String(u.email || '').toLowerCase().trim(); if (!raw) continue;
+    const canon = CANON_ALIAS[raw] || raw; // aliased rows fold into their canonical identity
+    const emails = [...new Set([raw, canon, u.emailAlt && String(u.emailAlt).toLowerCase().trim(), u.zoomEmail && String(u.zoomEmail).toLowerCase().trim()].filter(Boolean))];
     const d = dstr(u.vinsStartDate);
     for (const e of emails) rosterIds.add(e);
     if (u.applicationStatus === 'rejected' || u.deletedAt) { for (const e of emails) rejectedSet.add(e); continue; }
-    if (d) { internCanon.set(canon, emails); internStart.set(canon, d); for (const e of emails) emailToCanon.set(e, canon); nameBy.set(canon, u.name || canon); }
+    if (d) {
+      internCanon.set(canon, [...new Set([...(internCanon.get(canon) || []), ...emails])]);
+      if (raw === canon || !internStart.has(canon)) internStart.set(canon, d);
+      for (const e of emails) emailToCanon.set(e, canon);
+      if (raw === canon || !nameBy.has(canon)) nameBy.set(canon, u.name || canon);
+    }
   }
 
   // 2. mandatory first-instance per day + official window (from the mirror)

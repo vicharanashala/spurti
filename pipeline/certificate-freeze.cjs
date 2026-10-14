@@ -97,6 +97,10 @@ const MANUAL = [
 // (attendance/polls are duplicated on both, so only one ledger may be read).
 const LEDGER_ALIAS = {
   'notrohith444@gmail.com': 'notrohith44@gmail.com',
+  // Bhaagwat Sharma (14 Oct 2026): SCALE id deleted by IIT Ropar, Samagama moved his
+  // account to the Thapar email; the certificate row carries Thapar, SP + minutes stay
+  // on the SCALE ledger (rubric folds Thapar into SCALE via CANON_ALIAS).
+  'bsharma_be24@thapar.edu': '25010733@scale.iitrpr.ac.in',
 };
 const SPA_GOOD = ['approved', 'audit_passed'];
 const SPA_DONE_COUNT = 50; // spaCompletedAt = when the 50th validated learn landed
