@@ -372,6 +372,7 @@
 .ui-bank-sum > div { padding: 12px 14px; border-radius: 16px; background: var(--ui-tint); border: 1px solid var(--ui-line); }
 .ui-bank-sum span { display: block; font-size: 12px; color: var(--ui-muted); font-weight: 600; }
 .ui-bank-sum strong { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+.ui-bank-sum strong span { display: inline; font-size: inherit; font-weight: inherit; }
 .ui-app .credit { color: var(--ui-green); }
 .ui-app .debit { color: var(--ui-red); }
 .ui-tx-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
@@ -479,6 +480,11 @@
 .ui-callout ul { margin: 8px 0 0; padding-left: 20px; font-size: 13px; line-height: 1.6; }
 .ui-search { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--ui-line); background: #fff; color: var(--ui-muted); min-width: min(260px, 100%); }
 .ui-app .ui-search input { width: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ui-ink); font: inherit; }
+.ui-bank-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
+.ui-bank-filters .ui-sw { max-width: 100%; }
+.ui-bank-filters .ui-search { flex: 1 1 280px; }
+.ui-search-clear { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--ui-muted); cursor: pointer; }
+.ui-search-clear:hover { background: var(--ui-tint); color: var(--ui-ink); }
 .ui-acc-list { display: grid; gap: 8px; }
 .ui-acc { overflow: hidden; border-radius: 16px; border: 1px solid var(--ui-line); background: #fff; transition: border-color 0.25s, box-shadow 0.25s; }
 .ui-acc.open { border-color: rgba(59, 91, 157, 0.45); box-shadow: 0 14px 28px -20px rgba(30, 58, 110, 0.5); }
