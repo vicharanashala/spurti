@@ -346,6 +346,8 @@ input {
   border-radius: 8px;
   padding: 8px;
   background: #fbfdff;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .sparkline i {
   flex: 1;
