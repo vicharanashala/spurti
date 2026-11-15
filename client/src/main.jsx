@@ -1021,8 +1021,9 @@ function Sparkline({ points }) {
   const values = points.map(p => p.value);
   const min = Math.min(...values, 0);
   const max = Math.max(...values, 1);
+  const gap = points.length > 120 ? '0px' : points.length > 60 ? '1px' : points.length > 30 ? '2px' : '4px';
   return (
-    <div className="sparkline">
+    <div className="sparkline" style={{ gap }}>
       {points.map((point, index) => {
         const pct = max === min ? 50 : ((point.value - min) / (max - min)) * 100;
         return <i key={`${point.label}-${index}`} title={`${point.label}: ${point.value} SP`} style={{ height: `${Math.max(6, pct)}%` }} />;
