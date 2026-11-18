@@ -282,6 +282,7 @@ function excusedPayload(student) {
   return {
     excused: true,
     student: publicStudent(student),
+    consentNeeded: consentNeeded(student),
     message: 'Your current internship account has been excused. Your previous Spurti record is preserved, and you may come back in the next cohort.'
   };
 }
@@ -567,7 +568,7 @@ api.get('/search', async (req, res) => {
   if (q.includes('@')) {
     const email = normalizeEmail(q);
     const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
-    if (student?.status === 'excused') return res.json(excusedPayload(student));
+    if (student?.status === 'excused') return res.json({ ...excusedPayload(student), lookupEmail: email });
     if (student) return res.json({ exact: true, profile: await studentPayload(student) });
   }
 

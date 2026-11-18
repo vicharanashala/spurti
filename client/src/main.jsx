@@ -146,7 +146,21 @@ function AppShell() {
     );
   }
   if (view === 'excused' && excused) {
-    return <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />;
+    // Excused and earlier students get the same research-consent choice. In production the
+    // server takes identity from the Samagama session; lookupEmail only exists in local search mode.
+    const excusedEmail = excused.lookupEmail || '';
+    return (
+      <>
+        <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        {config.consent?.enabled && excused.consentNeeded && (
+          <ConsentModal api={API} email={excusedEmail} changeUntil={config.consent.changeUntil}
+            onDone={() => setExcused(prev => ({ ...prev, consentNeeded: false }))} />
+        )}
+        {config.consent?.enabled && !excused.consentNeeded && (
+          <ConsentLink api={API} email={excusedEmail} changeUntil={config.consent.changeUntil} />
+        )}
+      </>
+    );
   }
   if (view === 'admin-login') {
     return <AdminLogin onAdmin={(data, auth) => { setAdmin(data); setAdminAuth(auth); setView('admin'); }} onBack={() => setView('landing')} />;
