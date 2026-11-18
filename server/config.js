@@ -3,6 +3,14 @@ import 'dotenv/config';
 export const PORT = Number(process.env.PORT || 5290);
 export const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/analysis_summership';
 export const ALLOW_STUDENT_SEARCH = process.env.ALLOW_STUDENT_SEARCH !== 'false';
+// Research consent screen. Off unless CONSENT_ENABLED=1. Changing CONSENT_VERSION
+// (e.g. after the consent text changes) shows the screen to everyone again.
+// CONSENT_CHANGE_UNTIL (an ISO date) closes the "change my choice" option; empty = always open.
+export const CONSENT = {
+  enabled: process.env.CONSENT_ENABLED === '1',
+  version: process.env.CONSENT_VERSION || '2026-11-v1',
+  changeUntil: process.env.CONSENT_CHANGE_UNTIL || ''
+};
 // Samagama validates the student's chatengine_token cookie. Spurti reads that
 // cookie and confirms the session against this internal endpoint (same host).
 export const SAMAGAMA_AUTH_URL = process.env.SAMAGAMA_AUTH_URL || 'http://127.0.0.1:5001/api/auth/me';

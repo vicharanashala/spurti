@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { ConsentModal, ConsentLink } from './consent.jsx';
 import '@fontsource-variable/plus-jakarta-sans';
 import './styles.css';
 import './theme.css';
@@ -100,7 +101,9 @@ function AppShell() {
   if (view === 'student' && profile) {
     // The E2 goal card must never stack on top of a mandatory survey pop-up —
     // same gate conditions the three SurveyModals use below.
-    const surveyBlocking = [
+    // The research-consent screen comes first; nothing else pops up until it is answered.
+    const consentDue = Boolean(config.consent?.enabled && profile.student?.consentNeeded);
+    const surveyBlocking = consentDue || [
       [config.survey, 'surveyCompleted'],
       [config.poll2, 'poll2Completed'],
       [config.poll3, 'poll3Completed']
@@ -109,6 +112,14 @@ function AppShell() {
       <>
         <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} surveyBlocking={surveyBlocking} />
         <GoalCardModal student={profile.student} surveyBlocking={surveyBlocking} />
+        {consentDue && (
+          <ConsentModal api={API} email={profile.student.email} changeUntil={config.consent.changeUntil}
+            onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, consentNeeded: false } }))} />
+        )}
+        {config.consent?.enabled && !consentDue && (
+          <ConsentLink api={API} email={profile.student.email} changeUntil={config.consent.changeUntil} />
+        )}
+        {!consentDue && <>
         <SurveyModal
           survey={config.survey}
           student={profile.student}
@@ -130,11 +141,26 @@ function AppShell() {
           completedKey="poll3Completed"
           onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll3Completed: true } }))}
         />
+        </>}
       </>
     );
   }
   if (view === 'excused' && excused) {
-    return <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />;
+    // Excused and earlier students get the same research-consent choice. In production the
+    // server takes identity from the Samagama session; lookupEmail only exists in local search mode.
+    const excusedEmail = excused.lookupEmail || '';
+    return (
+      <>
+        <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
+        {config.consent?.enabled && excused.consentNeeded && (
+          <ConsentModal api={API} email={excusedEmail} changeUntil={config.consent.changeUntil}
+            onDone={() => setExcused(prev => ({ ...prev, consentNeeded: false }))} />
+        )}
+        {config.consent?.enabled && !excused.consentNeeded && (
+          <ConsentLink api={API} email={excusedEmail} changeUntil={config.consent.changeUntil} />
+        )}
+      </>
+    );
   }
   if (view === 'admin-login') {
     return <AdminLogin onAdmin={(data, auth) => { setAdmin(data); setAdminAuth(auth); setView('admin'); }} onBack={() => setView('landing')} />;
