@@ -29,6 +29,7 @@ import { buildStandupState, placeStandup, settleStandupDemo } from './services/s
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 import { buildSpaState } from './services/spa.js';
 import { buildTrajectoryState } from './services/trajectory.js';
+import { streakFor } from './services/streak.js';
 import { wrapRouter } from './lib/asyncRoutes.js';
 import { errorHandler } from './lib/errorHandler.js';
 
@@ -295,6 +296,7 @@ async function studentPayload(student) {
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
+  const streak = await streakFor(attendance);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
@@ -350,6 +352,7 @@ async function studentPayload(student) {
     transactions,
     polls,
     attendance,
+    streak,
     cohort: {
       averageSp,
       top10Cutoff,

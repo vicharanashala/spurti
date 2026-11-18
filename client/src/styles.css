@@ -5,8 +5,8 @@
   --text: #172033;
   --muted: #64748b;
   --line: #d9e1ec;
-  --primary: #176b87;
-  --primary-dark: #0f4d62;
+  --primary: #0f766e;
+  --primary-dark: #115e59;
   --green: #12805c;
   --red: #b42318;
   --amber: #a15c07;
@@ -646,7 +646,7 @@ input {
   cursor: pointer;
   border: 1px solid transparent;
 }
-.survey-primary { background: #4f46e5; color: #fff; }
+.survey-primary { background: #0f766e; color: #fff; }
 .survey-primary:disabled { opacity: 0.6; cursor: default; }
 .survey-ghost { background: #fff; color: #475569; border-color: #cbd5e1; }
 .survey-note { margin: 0 24px 16px; font-size: 0.85rem; color: #b91c1c; }

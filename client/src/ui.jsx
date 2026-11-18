@@ -86,7 +86,7 @@ export function useCountUp(target, { from = 0, duration = 1000 } = {}) {
 }
 
 /* ── Progress ring ─────────────────────────────────────────────────────────── */
-export function Ring({ value = 0, size = 96, stroke = 10, from = '#2c4a8a', to = '#3b5b9d', children, label }) {
+export function Ring({ value = 0, size = 96, stroke = 10, from = '#0f766e', to = '#0d9488', children, label }) {
   const uid = useId().replace(/:/g, '');
   const reduce = usePrefersReducedMotion();
   const pct = Math.max(0, Math.min(100, Number(value) || 0));
@@ -132,7 +132,7 @@ function smoothPath(pts, top, bottom) {
 }
 
 // points: [{ v, label, sub, delta }]
-export function AreaChart({ points, height = 150, from = '#2c4a8a', to = '#3b5b9d', unit = 'SP' }) {
+export function AreaChart({ points, height = 150, from = '#0f766e', to = '#0d9488', unit = 'SP' }) {
   const uid = useId().replace(/:/g, '');
   const [hover, setHover] = useState(null);
   const n = points.length;
@@ -291,7 +291,7 @@ function confettiLayer() {
   return layer;
 }
 
-export const CONFETTI_COLORS = ['#2c4a8a', '#3b5b9d', '#c98a2b', '#e9b44c', '#8fa3c7', '#d6604d', '#5b8f7b'];
+export const CONFETTI_COLORS = ['#0f766e', '#0d9488', '#c98a2b', '#e9b44c', '#8fa3c7', '#d6604d', '#5b8f7b'];
 
 export function burst({ x, y, colors = CONFETTI_COLORS, count = 80, spread = 70, power = 1 } = {}) {
   if (typeof document === 'undefined' || reducedMotion()) return;
@@ -496,21 +496,13 @@ export function CountNum({ value }) {
 }
 
 
-/* ── Theme: light / dark ("dusk"). Follows the device until the student picks one. ── */
+/* ── Theme: light / dark ("dusk"). Light for everyone until the student picks dark with the toggle. ── */
 const THEME_KEY = 'spurti:theme:v1';
 const readTheme = () => { try { const v = localStorage.getItem(THEME_KEY); return v === 'dark' || v === 'light' ? v : null; } catch { return null; } };
-const systemDark = () => { try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch { return false; } };
 
 export function useTheme() {
-  const [pref, setPref] = useState(readTheme);      // null = follow the device
-  const [sys, setSys] = useState(systemDark);
-  useEffect(() => {
-    let mq; try { mq = window.matchMedia('(prefers-color-scheme: dark)'); } catch { return undefined; }
-    const on = (e) => setSys(e.matches);
-    mq.addEventListener?.('change', on);
-    return () => mq.removeEventListener?.('change', on);
-  }, []);
-  const theme = pref || (sys ? 'dark' : 'light');
+  const [pref, setPref] = useState(readTheme);      // null = never toggled -> light
+  const theme = pref || 'light';
   // The page background behind .ui-app (overscroll, safe areas) is the body's, so mirror the choice on <html>.
   useLayoutEffect(() => {
     document.documentElement.dataset.uiTheme = theme;

@@ -133,13 +133,13 @@ export function celebration(prev, cur) {
   return { kind: 'sp', ...base };
 }
 
-// Traffic-light colour for a completion percentage: under 10% red, 10% up to
+// Traffic-light colour for a completion percentage (amber #c2700a keeps 3:1 contrast on both the light and dark card): under 10% red, 10% up to
 // (not including) 50% amber, 50% and over -> null, meaning "use the normal colour".
 export function progressTone(pct) {
   const n = Number(pct);
   if (!Number.isFinite(n)) return null;
   if (n < 10) return '#ef4444';
-  if (n < 50) return '#f59e0b';
+  if (n < 50) return '#c2700a';
   return null;
 }
 

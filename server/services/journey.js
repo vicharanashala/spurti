@@ -18,6 +18,7 @@ import Student from '../models/Student.js';
 import SpaProgress from '../models/SpaProgress.js';
 import { ActPullRequest, ActPrReview } from '../models/ActMirrors.js';
 import { buildVibeState, isVibeEligible } from './vibe.js';
+import { streakFor } from './streak.js';
 
 // Count distinct GitHub PR links in the free-text submission field; a submission
 // with no parseable link still counts as 1 (the form requires real PR work).
@@ -52,6 +53,7 @@ export async function buildJourneyState(student) {
     spPolls: spByCat(['poll'])
   };
   standups.sp = standups.spAttendance + standups.spPolls;
+  standups.streak = await streakFor(att);
 
   // --- Phase 2: ViBe (3 courses) — summarise the commitment module ---
   const v = await buildVibeState(student);
