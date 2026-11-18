@@ -496,21 +496,13 @@ export function CountNum({ value }) {
 }
 
 
-/* ── Theme: light / dark ("dusk"). Follows the device until the student picks one. ── */
+/* ── Theme: light / dark ("dusk"). Light for everyone until the student picks dark with the toggle. ── */
 const THEME_KEY = 'spurti:theme:v1';
 const readTheme = () => { try { const v = localStorage.getItem(THEME_KEY); return v === 'dark' || v === 'light' ? v : null; } catch { return null; } };
-const systemDark = () => { try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch { return false; } };
 
 export function useTheme() {
-  const [pref, setPref] = useState(readTheme);      // null = follow the device
-  const [sys, setSys] = useState(systemDark);
-  useEffect(() => {
-    let mq; try { mq = window.matchMedia('(prefers-color-scheme: dark)'); } catch { return undefined; }
-    const on = (e) => setSys(e.matches);
-    mq.addEventListener?.('change', on);
-    return () => mq.removeEventListener?.('change', on);
-  }, []);
-  const theme = pref || (sys ? 'dark' : 'light');
+  const [pref, setPref] = useState(readTheme);      // null = never toggled -> light
+  const theme = pref || 'light';
   // The page background behind .ui-app (overscroll, safe areas) is the body's, so mirror the choice on <html>.
   useLayoutEffect(() => {
     document.documentElement.dataset.uiTheme = theme;
