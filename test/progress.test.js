@@ -177,8 +177,8 @@ describe('progressTone', () => {
     const { progressTone } = await import('../client/src/progress.js');
     assert.equal(progressTone(0), '#ef4444');
     assert.equal(progressTone(9.9), '#ef4444');
-    assert.equal(progressTone(10), '#f59e0b');
-    assert.equal(progressTone(49), '#f59e0b');
+    assert.equal(progressTone(10), '#c2700a');
+    assert.equal(progressTone(49), '#c2700a');
     assert.equal(progressTone(50), null);
     assert.equal(progressTone(100), null);
     assert.equal(progressTone(undefined), null);
@@ -203,7 +203,7 @@ describe('pace (progress vs where you should be today)', () => {
     assert.equal(Math.round(exp * 100) / 100, 5);
     assert.equal(paceTone(120 / 3600 * 100, exp), null);                  // 3.3% of 3600 = 67% of today's target
     assert.equal(paceTone(0, exp), '#ef4444');
-    assert.equal(paceTone(1, exp), '#f59e0b');                            // 1% vs 5% expected = 20%
+    assert.equal(paceTone(1, exp), '#c2700a');                            // 1% vs 5% expected = 20%
   });
 
   test('the same 4% is red on day 60 but fine on day 3', async () => {

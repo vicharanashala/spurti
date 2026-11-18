@@ -15,7 +15,8 @@ const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : ''
 const API = `${APP_BASE}/api`;
 
 // "I'm here" ping. Every open tab sends one, so at cohort scale its cost is the
-// number of tabs times how often they fire. About once a minute, spread with random
+// number of tabs times how often they fire. Every 25-35 s (the admin "Live now" list
+// counts a student as live for 60 s after a ping), spread with random
 // jitter so tens of thousands of tabs don't all fire on the same second, and only
 // while the tab is actually visible — a forgotten background tab sends nothing.
 // Coming back to the tab pings straight away (at most every 20s) so presence is fresh.
@@ -24,7 +25,7 @@ function startPresencePing(send) {
   let lastSent = 0;
   const fire = () => { lastSent = Date.now(); send(); };
   const schedule = () => {
-    timer = setTimeout(() => { if (!document.hidden) fire(); schedule(); }, 55000 + Math.random() * 10000);
+    timer = setTimeout(() => { if (!document.hidden) fire(); schedule(); }, 25000 + Math.random() * 10000);
   };
   const onVisible = () => { if (!document.hidden && Date.now() - lastSent > 20000) fire(); };
   fire();
@@ -317,20 +318,6 @@ function greetingFor(d = new Date()) {
   return 'Up late';
 }
 
-// One read of the existing journey endpoint, only so the hero can show the streak.
-function useJourneyStreak(email) {
-  const [streak, setStreak] = useState(null);
-  useEffect(() => {
-    let live = true;
-    fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`)
-      .then(r => r.json())
-      .then(j => { if (live) setStreak(j?.standups?.streak || null); })
-      .catch(() => {});
-    return () => { live = false; };
-  }, [email]);
-  return streak;
-}
-
 function StudentView({ profile, onBack, surveyBlocking = false }) {
   const [tab, setTab] = useState('bank');
   const [commitPhase, setCommitPhase] = useState('vibe');
@@ -343,7 +330,7 @@ function StudentView({ profile, onBack, surveyBlocking = false }) {
   // Opening the tab is what counts as seeing them, wherever it is opened from.
   const selectTab = key => { setTab(key); if (key === 'achievements') markAchievementsSeen(); };
   const { cel, dismiss, anchorRef } = useSpCelebration(student, { blocked: surveyBlocking });
-  const streak = useJourneyStreak(student.email);
+  const streak = profile.streak || null;   // sent by /me with the profile, no extra request
   const heroRef = useRef(null);
   const pinned = useScrolledPast(heroRef);
   const { theme, toggle: toggleTheme } = useTheme();
