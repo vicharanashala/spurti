@@ -35,6 +35,10 @@ const studentSchema = new mongoose.Schema({
   // E2 goal-card experiment (pre-reg 2026-09-07). Assigned once, server-side, by
   // pipeline/assign-arms-e2.mjs at launch; '' = not in the experiment.
   // A = control (no card) · B = card · C = card + one-time +10 SP on setting.
+  // Which research-consent text the student last answered ('' = never). The choice itself
+  // lives in ResearchConsent so it is not visible wherever student records are shown.
+  consentVersion: { type: String, default: '' },
+  consentDecidedAt: { type: Date, default: null },
   e2Arm: { type: String, enum: ['', 'A', 'B', 'C'], default: '', index: true }
 }, { timestamps: true });
 

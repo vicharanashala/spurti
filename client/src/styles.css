@@ -931,3 +931,18 @@ tr.step-alert td { border-color: #f3c9c5; }
 .e2-card .jr-goal-hint { display: block; margin-top: 4px; opacity: .75; font-size: .85em; }
 .e2-card .e2-progress { margin: 12px 0 2px; display: block; }
 .e2-card .e2-progress .jr-goal-meta { display: block; margin-bottom: 6px; }
+
+/* Research consent */
+.survey-modal.consent-modal { max-width: 640px; display: flex; flex-direction: column; max-height: calc(100vh - 32px); }
+.consent-body { overflow-y: auto; padding: 4px 24px 12px; color: #334155; font-size: 0.92rem; line-height: 1.55; }
+.consent-body h3 { margin: 14px 0 6px; font-size: 0.98rem; color: #0f172a; }
+.consent-body ul { margin: 0 0 6px; padding-left: 20px; }
+.consent-body li { margin: 3px 0; }
+.consent-small { font-size: 0.85rem; color: #64748b; margin: 6px 0; }
+.consent-choices { display: grid; gap: 8px; margin: 6px 0 10px; }
+.consent-choice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 10px; background: #f8fafc; cursor: pointer; }
+.consent-choice input { margin-top: 3px; width: 18px; height: 18px; accent-color: #0f766e; flex: none; }
+.consent-read { background: #f0fdfa; border-color: #99f6e4; }
+.consent-link { position: fixed; left: 12px; bottom: 10px; z-index: 40; font-size: 0.8rem; color: #64748b; }
+.consent-link button { border: 0; background: transparent; color: #0f766e; text-decoration: underline; cursor: pointer; font: inherit; padding: 4px; }
+@media (max-width: 560px) { .survey-actions { flex-wrap: wrap; } .survey-actions button { flex: 1 1 100%; } }

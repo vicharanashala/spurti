@@ -5,7 +5,8 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
-import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
+import { ALLOW_STUDENT_SEARCH, CONSENT, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
+import ResearchConsent from './models/ResearchConsent.js';
 import Student from './models/Student.js';
 import Session from './models/Session.js';
 import AttendanceRecord from './models/AttendanceRecord.js';
@@ -344,6 +345,8 @@ async function studentPayload(student) {
       leaderboardGroup: myGroup,
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
+      // Only whether the consent screen is still due, never the choice itself.
+      consentNeeded: consentNeeded(student),
       poll2Completed: Boolean(student.poll2Completed),
       poll3Completed: Boolean(student.poll3Completed),
       eligibleForVibeGoals: isVibeEligible(student),
@@ -396,8 +399,60 @@ api.get('/config', (_req, res) => res.json({
   allowStudentSearch: ALLOW_STUDENT_SEARCH,
   survey: surveyPublic(SURVEY),
   poll2: surveyPublic(POLL2),
-  poll3: surveyPublic(POLL3)
+  poll3: surveyPublic(POLL3),
+  consent: { enabled: CONSENT.enabled, version: CONSENT.version, changeOpen: consentChangeOpen(), changeUntil: CONSENT.changeUntil }
 }));
+
+// ---- Research consent --------------------------------------------------------
+// Shown once per consent version: new students on their first visit, existing
+// students on their next visit after it is switched on. Points, rank and
+// everything else work the same whatever the student chooses.
+function consentNeeded(student) {
+  return CONSENT.enabled && (student?.consentVersion || '') !== CONSENT.version;
+}
+function consentChangeOpen(now = new Date()) {
+  if (!CONSENT.changeUntil) return true;
+  const until = new Date(CONSENT.changeUntil);
+  return Number.isNaN(until.getTime()) ? true : now <= until;
+}
+
+api.get('/consent', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(401).json({ error: 'Please log in from Samagama.' });
+  const last = await ResearchConsent.findOne({ studentId: student._id }).sort({ decidedAt: -1 }).lean();
+  res.json({
+    enabled: CONSENT.enabled,
+    version: CONSENT.version,
+    needed: consentNeeded(student),
+    changeOpen: consentChangeOpen(),
+    current: last ? { records: last.records, surveys: last.surveys, quotations: last.quotations, optedOut: last.optedOut, decidedAt: last.decidedAt, version: last.version } : null
+  });
+});
+
+api.post('/consent', async (req, res) => {
+  if (!CONSENT.enabled) return res.status(403).json({ error: 'Research consent is not open.' });
+  const student = await vibeStudent(req);
+  if (!student) return res.status(401).json({ error: 'Please log in from Samagama.' });
+  const body = req.body || {};
+  if (body.readTerms !== true) return res.status(400).json({ error: 'Please confirm that you have read the terms.' });
+  const optOut = body.optOut === true;
+  const pick = key => (optOut ? false : body[key] === true);
+  if (!optOut && ['records', 'surveys', 'quotations'].some(k => typeof body[k] !== 'boolean')) {
+    return res.status(400).json({ error: 'Choices must be true or false.' });
+  }
+  // A first answer is always accepted; changing an answer is allowed only while the change window is open.
+  if (!consentNeeded(student) && !consentChangeOpen()) {
+    return res.status(403).json({ error: 'The period for changing your research choice has ended.' });
+  }
+  const choice = { records: pick('records'), surveys: pick('surveys'), quotations: pick('quotations') };
+  const decidedAt = new Date();
+  await ResearchConsent.create({
+    studentId: student._id, email: student.email, version: CONSENT.version,
+    ...choice, optedOut: !choice.records && !choice.surveys && !choice.quotations, decidedAt
+  });
+  await Student.updateOne({ _id: student._id }, { $set: { consentVersion: CONSENT.version, consentDecidedAt: decidedAt } });
+  res.json({ ok: true, ...choice, optedOut: !choice.records && !choice.surveys && !choice.quotations, decidedAt });
+});
 
 api.get('/me', async (req, res) => {
   const email = await studentEmailFromRequest(req);
