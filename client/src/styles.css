@@ -259,7 +259,7 @@ input {
 @media (max-width: 720px) { .level-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .pulse-grid {
   display: grid;
-  grid-template-columns: 1fr 2fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   gap: 12px;
   margin-bottom: 18px;
 }
@@ -346,6 +346,8 @@ input {
   border-radius: 8px;
   padding: 8px;
   background: #fbfdff;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .sparkline i {
   flex: 1;
@@ -586,7 +588,7 @@ input {
   h1 { font-size: 36px; }
   .info-grid { grid-template-columns: 1fr; }
   .metric-grid, .metric-grid.small, .analytics-grid { grid-template-columns: 1fr; }
-  .pulse-grid { grid-template-columns: 1fr; }
+  .pulse-grid { grid-template-columns: minmax(0, 1fr); }
   .wide-pulse { grid-column: span 1; }
   .topbar { align-items: flex-start; flex-direction: column; }
   .score-card { text-align: left; width: 100%; }

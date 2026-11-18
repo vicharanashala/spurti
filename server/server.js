@@ -29,6 +29,8 @@ import { buildStandupState, placeStandup, settleStandupDemo } from './services/s
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 import { buildSpaState } from './services/spa.js';
 import { buildTrajectoryState } from './services/trajectory.js';
+import { wrapRouter } from './lib/asyncRoutes.js';
+import { errorHandler } from './lib/errorHandler.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -162,6 +164,9 @@ const app = express();
 // behaviour — it cannot make things worse.
 app.set('trust proxy', 1);
 const api = express.Router();
+// Express 4 does not catch a rejected promise from an async handler, so a failed
+// query would leave the request hanging. This routes it to errorHandler instead.
+wrapRouter(api);
 const liveViewers = new Map();
 
 app.use(cors());
@@ -1382,6 +1387,8 @@ if (fs.existsSync(clientDist)) {
 } else {
   app.get('*', (_req, res) => res.status(404).send('Build the client first with npm run build.'));
 }
+
+app.use(errorHandler);
 
 mongoose.connect(MONGO_URI).then(() => {
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));

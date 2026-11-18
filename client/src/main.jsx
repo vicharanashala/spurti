@@ -545,16 +545,36 @@ function TrendCard({ student, transactions }) {
 // This tab just reads the rubric's `spaprogresses` summary. Universal across cohorts.
 function SpaModule({ student }) {
   const email = student.email;
-  const [data, setData] = useState(null);
+  const [attempt, setAttempt] = useState(0);
+  const [request, setRequest] = useState({ email, attempt: 0, loading: true, data: null, error: false });
 
   useEffect(() => {
+    let live = true;
+    setRequest({ email, attempt, loading: true, data: null, error: false });
     (async () => {
-      const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
-      setData(await r.json());
+      try {
+        const r = await fetch(`${API}/spa/state?email=${encodeURIComponent(email)}`);
+        if (!r.ok) throw new Error('SPA request failed');
+        const data = await r.json();
+        if (live) setRequest({ email, attempt, loading: false, data, error: false });
+      } catch {
+        if (live) setRequest({ email, attempt, loading: false, data: null, error: true });
+      }
     })();
-  }, [email]);
+    return () => { live = false; };
+  }, [email, attempt]);
 
-  if (!data) return <section className="panel">Loading your SPA points…</section>;
+  const currentRequest = request.email === email && request.attempt === attempt
+    ? request
+    : { loading: true, data: null, error: false };
+  const data = currentRequest.data;
+  if (currentRequest.loading) return <section className="panel">Loading your SPA points…</section>;
+  if (currentRequest.error) return (
+    <section className="panel">
+      <p className="error" role="alert">Could not load your SPA points. Please try again.</p>
+      <button className="secondary" onClick={() => setAttempt(value => value + 1)}>Retry</button>
+    </section>
+  );
   if (!data.hasActivity) return (
     <section className="panel empty">
       <h2>SPA — Peer Teaching Points</h2>
@@ -1032,17 +1052,29 @@ function LeaderboardPanel({ student }) {
   // Switching to a board that has no such window (e.g. Today -> Overall) falls back to This Week.
   const win = board.windows.includes(wantWin) ? wantWin : (board.windows.includes('week') ? 'week' : board.windows[0]);
   const preset = LB_PRESETS.find(p => boardOf(p) === board.key && p.window === win) || LB_PRESETS[0];
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const presetKey = preset.key;
+  const [attempt, setAttempt] = useState(0);
+  const [request, setRequest] = useState({
+    presetKey, email: student.email, attempt: 0,
+    loading: true, data: null, error: false
+  });
   useEffect(() => {
     let live = true;
-    setLoading(true);
+    const email = student.email;
+    setRequest({ presetKey, email, attempt, loading: true, data: null, error: false });
     fetch(`${API}/leaderboard/board?window=${preset.window}&category=${preset.category}&scope=${preset.scope}&email=${encodeURIComponent(student.email)}`)
-      .then(r => r.json())
-      .then(d => { if (live) { setData(d); setLoading(false); } })
-      .catch(() => { if (live) setLoading(false); });
+      .then(r => {
+        if (!r.ok) throw new Error('Leaderboard request failed');
+        return r.json();
+      })
+      .then(data => { if (live) setRequest({ presetKey, email, attempt, loading: false, data, error: false }); })
+      .catch(() => { if (live) setRequest({ presetKey, email, attempt, loading: false, data: null, error: true }); });
     return () => { live = false; };
-  }, [preset.key, student.email]);
+  }, [presetKey, student.email, attempt]);
+  const currentRequest = request.presetKey === presetKey && request.email === student.email && request.attempt === attempt
+    ? request
+    : { loading: true, data: null, error: false };
+  const data = currentRequest.data;
   const rows = data?.rows || [];
   const me = data?.me || null;
   const meOutside = me && !rows.some(r => r.isMe);
@@ -1065,8 +1097,13 @@ function LeaderboardPanel({ student }) {
       </div>
       {preset.window === 'week' && data?.weekLabel && <p className="ui-muted ui-lb-week">Week of {data.weekLabel} · resets Monday</p>}
       {preset.window === 'day' && <p className="ui-muted ui-lb-week">Today’s points only · resets at midnight IST</p>}
-      {loading ? (
+      {currentRequest.loading ? (
         <div className="ui-stack"><SkeletonCard rows={3} title={false} /><SkeletonCard rows={4} title={false} /></div>
+      ) : currentRequest.error ? (
+        <EmptyState icon="trophy" title="Couldn’t load the leaderboard">
+          <p role="alert">Something went wrong while loading this board. Please try again.</p>
+          <button type="button" className="ui-btn sm" onClick={() => setAttempt(value => value + 1)}>Retry</button>
+        </EmptyState>
       ) : scored.length === 0 ? (
         <EmptyState icon="trophy" title="No entries yet">Nobody has earned points on this board yet — it fills up as points are recorded.</EmptyState>
       ) : (
