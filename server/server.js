@@ -401,7 +401,7 @@ api.get('/config', (_req, res) => res.json({
   survey: surveyPublic(SURVEY),
   poll2: surveyPublic(POLL2),
   poll3: surveyPublic(POLL3),
-  consent: { enabled: CONSENT.enabled, version: CONSENT.version, changeOpen: consentChangeOpen(), changeUntil: CONSENT.changeUntil }
+  consent: { enabled: CONSENT.enabled, version: CONSENT.version, changeOpen: consentChangeOpen(), changeUntil: CONSENT.changeUntil, optOutButton: CONSENT.optOutButton }
 }));
 
 // ---- Research consent --------------------------------------------------------

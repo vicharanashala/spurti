@@ -113,7 +113,7 @@ function AppShell() {
         <StudentView profile={profile} onBack={config.allowStudentSearch ? () => setView('landing') : null} surveyBlocking={surveyBlocking} />
         <GoalCardModal student={profile.student} surveyBlocking={surveyBlocking} />
         {consentDue && (
-          <ConsentModal api={API} email={profile.student.email} changeUntil={config.consent.changeUntil}
+          <ConsentModal api={API} email={profile.student.email} optOutButton={config.consent.optOutButton}
             onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, consentNeeded: false } }))} />
         )}
         {config.consent?.enabled && !consentDue && (
@@ -153,7 +153,7 @@ function AppShell() {
       <>
         <ExcusedView data={excused} onBack={config.allowStudentSearch ? () => setView('landing') : null} />
         {config.consent?.enabled && excused.consentNeeded && (
-          <ConsentModal api={API} email={excusedEmail} changeUntil={config.consent.changeUntil}
+          <ConsentModal api={API} email={excusedEmail} optOutButton={config.consent.optOutButton}
             onDone={() => setExcused(prev => ({ ...prev, consentNeeded: false }))} />
         )}
         {config.consent?.enabled && !excused.consentNeeded && (
