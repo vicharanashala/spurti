@@ -9,7 +9,10 @@ export const ALLOW_STUDENT_SEARCH = process.env.ALLOW_STUDENT_SEARCH !== 'false'
 export const CONSENT = {
   enabled: process.env.CONSENT_ENABLED === '1',
   version: process.env.CONSENT_VERSION || '2026-11-v1',
-  changeUntil: process.env.CONSENT_CHANGE_UNTIL || ''
+  changeUntil: process.env.CONSENT_CHANGE_UNTIL || '',
+  // 1 = the first-visit notice has its own "Opt out of research" button; otherwise
+  // it has only OK and points to the "Research consent" link for opting out.
+  optOutButton: process.env.CONSENT_OPTOUT_BUTTON === '1'
 };
 // Samagama validates the student's chatengine_token cookie. Spurti reads that
 // cookie and confirms the session against this internal endpoint (same host).
